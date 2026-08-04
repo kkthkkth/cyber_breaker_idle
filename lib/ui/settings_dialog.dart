@@ -1,0 +1,179 @@
+import 'package:flutter/material.dart';
+
+import '../managers/dungeon_manager.dart';
+import '../managers/equipment_manager.dart';
+import '../managers/game_manager.dart';
+
+void showSettingsDialog(BuildContext context) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => _SettingsDialog(rootContext: context),
+  );
+}
+
+class _SettingsDialog extends StatelessWidget {
+  const _SettingsDialog({required this.rootContext});
+
+  /// The context of the screen that opened the dialog — used for SnackBars
+  /// so they still work correctly after this dialog has been popped.
+  final BuildContext rootContext;
+
+  void _notify(String message) {
+    ScaffoldMessenger.of(rootContext).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _closeAndNotify(BuildContext context, String message) {
+    Navigator.of(context).pop();
+    _notify(message);
+  }
+
+  void _openCouponDialog(BuildContext context) {
+    Navigator.of(context).pop();
+    final TextEditingController controller = TextEditingController();
+
+    showDialog<void>(
+      context: rootContext,
+      builder: (couponContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B1B26),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '쿠폰 입력',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: '쿠폰 코드를 입력하세요',
+              hintStyle: TextStyle(color: Colors.white38),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF3A3A4A)),
+              ),
+              focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF6C4FCE)),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(couponContext).pop(),
+              child: const Text('취소'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(couponContext).pop();
+                _notify('준비 중인 기능입니다');
+              },
+              child: const Text('확인'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _saveGame(BuildContext context) async {
+    await GameManager.instance.saveGame();
+    await EquipmentManager.instance.saveEquipment();
+    await DungeonManager.instance.saveDungeonData();
+    if (context.mounted) {
+      Navigator.of(context).pop();
+    }
+    _notify('게임 정보가 저장되었습니다!');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1B1B26),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Row(
+                children: [
+                  Icon(Icons.settings, color: Colors.white70),
+                  SizedBox(width: 8),
+                  Text(
+                    '설정',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Color(0xFF34344A), height: 20),
+            _SettingsTile(
+              icon: Icons.account_circle,
+              label: '구글 계정 연동',
+              onTap: () => _closeAndNotify(context, '준비 중입니다'),
+            ),
+            _SettingsTile(
+              icon: Icons.campaign,
+              label: '공지사항',
+              onTap: () => _closeAndNotify(context, '준비 중입니다'),
+            ),
+            _SettingsTile(
+              icon: Icons.public,
+              label: '공식 카페/사이트 가기',
+              onTap: () => _closeAndNotify(context, '준비 중입니다'),
+            ),
+            _SettingsTile(
+              icon: Icons.card_giftcard,
+              label: '쿠폰 입력',
+              onTap: () => _openCouponDialog(context),
+            ),
+            _SettingsTile(
+              icon: Icons.privacy_tip,
+              label: '개인정보 처리방침',
+              onTap: () => _closeAndNotify(context, '준비 중입니다'),
+            ),
+            _SettingsTile(
+              icon: Icons.save,
+              label: '게임 저장하기',
+              onTap: () => _saveGame(context),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white70),
+      title: Text(label, style: const TextStyle(color: Colors.white)),
+      trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+      onTap: onTap,
+    );
+  }
+}
