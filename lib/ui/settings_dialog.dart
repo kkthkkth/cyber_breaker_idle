@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../managers/dungeon_manager.dart';
 import '../managers/equipment_manager.dart';
+import '../managers/gacha_manager.dart';
 import '../managers/game_manager.dart';
 
 void showSettingsDialog(BuildContext context) {
@@ -19,15 +20,25 @@ class _SettingsDialog extends StatelessWidget {
   final BuildContext rootContext;
 
   void _notify(String message) {
-    ScaffoldMessenger.of(rootContext).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(rootContext)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _closeAndNotify(BuildContext context, String message) {
     Navigator.of(context).pop();
     _notify(message);
   }
+
+  /// 대소문자 구분 없이 코드를 매칭한다 — 지금은 테스트용 재화 쿠폰
+  /// "test1" 하나뿐이지만, 새 쿠폰이 늘어나도 이 맵에 한 줄만 추가하면
+  /// 된다.
+  static final Map<String, VoidCallback> _couponRewards = {
+    'test1': () {
+      GameManager.instance.addGold(100000000);
+      GameManager.instance.addGems(100000000);
+    },
+  };
 
   void _openCouponDialog(BuildContext context) {
     Navigator.of(context).pop();
@@ -65,8 +76,16 @@ class _SettingsDialog extends StatelessWidget {
             ),
             TextButton(
               onPressed: () {
+                final String code = controller.text.trim().toLowerCase();
                 Navigator.of(couponContext).pop();
-                _notify('준비 중인 기능입니다');
+
+                final VoidCallback? grantReward = _couponRewards[code];
+                if (grantReward == null) {
+                  _notify('유효하지 않은 쿠폰입니다.');
+                  return;
+                }
+                grantReward();
+                _notify('테스트 재화(코인 1억, 보석 1억)가 지급되었습니다!');
               },
               child: const Text('확인'),
             ),
@@ -80,6 +99,7 @@ class _SettingsDialog extends StatelessWidget {
     await GameManager.instance.saveGame();
     await EquipmentManager.instance.saveEquipment();
     await DungeonManager.instance.saveDungeonData();
+    await GachaManager.instance.saveGachaInventory();
     if (context.mounted) {
       Navigator.of(context).pop();
     }

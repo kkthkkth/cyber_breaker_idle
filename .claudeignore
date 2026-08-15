@@ -1,0 +1,26 @@
+# 빌드 및 자동 생성 폴더 (토큰 낭비 주범!)
+.dart_tool/
+.idea/
+build/
+android/
+ios/
+web/
+windows/
+macOS/
+linux/
+
+# 패키지 및 락 파일
+.packages
+pubspec.lock
+
+# 기타 임시 파일 및 로그
+*.log
+*.tmp
+*.svg
+*.png
+*.jpg
+*.jpeg
+
+# 깃 관련
+.git/
+.gitignore

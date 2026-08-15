@@ -1,0 +1,283 @@
+import 'dart:async';
+
+import 'package:flame/game.dart';
+import 'package:flutter/material.dart';
+
+import '../game/idle_game.dart';
+import '../managers/skill_manager.dart';
+import '../managers/world_boss_manager.dart';
+import '../utils/number_formatter.dart';
+import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
+import 'top_bar.dart';
+import 'world_boss_ranking_dialog.dart';
+
+/// 월드보스("용의 동굴") 전용 전투 화면 — 일반 스테이지/던전 전투 화면과
+/// 완전히 같은 [IdleGame] + [GameWidget] 구조를 그대로 재사용한다
+/// (dungeon_screen.dart의 `_DungeonBattleScreen`과 동일한 뼈대). 왼쪽엔 내
+/// 캐릭터가, 오른쪽 몬스터 자리엔 용 이모지가 서서 서로 때리고, 배경도
+/// 인게임과 같은 배경을 그대로 쓴다 — [IdleGame]이 GameMode.worldBoss일
+/// 때 몬스터를 어떻게 스폰하는지는 idle_game.dart의 `_activateDungeon`을
+/// 참고. [WorldBossEntryDialog]가 입장 티켓을 먼저 소비한 뒤에만 이
+/// 화면으로 진입시킨다(티켓 소비는 이 화면의 책임이 아니다).
+class WorldBossBattleScreen extends StatefulWidget {
+  const WorldBossBattleScreen({super.key});
+
+  @override
+  State<WorldBossBattleScreen> createState() => _WorldBossBattleScreenState();
+}
+
+class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
+  late final IdleGame _game;
+  late final Timer _ticker;
+  bool _resultShown = false;
+
+  // 이 화면 진입 전 스킬 데미지가 향하던 곳(보통 홈 화면의 IdleGame) —
+  // dispose에서 복원해야 용의 동굴을 나간 뒤에도 스킬이 이미 사라진
+  // 던전용 IdleGame을 계속 가리키는 일이 없다.
+  void Function(double damage)? _previousDamageHandler;
+
+  @override
+  void initState() {
+    super.initState();
+    _game = IdleGame();
+    _game.onDungeonComplete = _handleDungeonComplete;
+    _game.startDungeon(GameMode.worldBoss);
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+
+    _previousDamageHandler = SkillManager.instance.damageHandler;
+    SkillManager.instance.damageHandler = _game.applySkillDamage;
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    if (identical(
+      SkillManager.instance.damageHandler,
+      _game.applySkillDamage,
+    )) {
+      SkillManager.instance.damageHandler = _previousDamageHandler;
+    }
+    // 이 화면 전용 IdleGame 인스턴스는 매번 새로 만들고 여기서 버린다 —
+    // EquipmentManager 리스너를 해제하지 않으면 용의 동굴에 들어갔다
+    // 나올 때마다 계속 쌓인다.
+    _game.detachListeners();
+    super.dispose();
+  }
+
+  /// 던전 공용 콜백([IdleGame.onDungeonComplete])을 통해 60초 타임아웃
+  /// 시점에 호출된다 — 골드/장비 보상 대신 이번 전투 누적 데미지
+  /// ([IdleGame.worldBossDamageDealt])를 [WorldBossManager]에 반영하고
+  /// 결과 팝업을 띄운다. 결과 팝업 자체는 이전 커스텀 화면과 같은 디자인을
+  /// 그대로 유지한다(사용자가 바꿔달라고 한 건 전투 레이아웃이지 결과
+  /// 팝업이 아니다).
+  Future<void> _handleDungeonComplete({
+    required bool success,
+    required int goldReward,
+    int gemReward = 0,
+    dynamic itemReward,
+    int pawprintReward = 0,
+    int guildCoinReward = 0,
+    dynamic consumableItemReward,
+  }) async {
+    if (_resultShown || !mounted) {
+      return;
+    }
+    _resultShown = true;
+
+    final double damageDealt = _game.worldBossDamageDealt;
+    // 결과 팝업이 "이번 세션 누적 데미지"(WorldBossManager.totalDamageDealt)를
+    // 곧바로 보여줘야 하므로, 로컬 반영이 끝날 때까지 기다린 뒤 팝업을
+        // 띄운다(서버 동기화 자체는 recordBattleDamage 내부에서 여전히
+    // fire-and-forget이라 오래 걸리지 않는다).
+    await WorldBossManager.instance.recordBattleDamage(damageDealt);
+    if (!mounted) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showResultDialog(damageDealt));
+  }
+
+  void _showResultDialog(double damageDealt) {
+    if (!mounted) {
+      return;
+    }
+    final int sessionTotal = WorldBossManager.instance.totalDamageDealt;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B1B26),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '도전 종료',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('용의 동굴에서 물러났습니다.', style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 4),
+              Text(
+                '이번 전투 데미지: ${NumberFormatter.format(damageDealt)}',
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                '이번 회차 내 총 누적 데미지',
+                style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                NumberFormatter.format(sessionTotal.toDouble()),
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => showWorldBossRankingDialog(dialogContext),
+              child: const Text('랭킹 보기'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
+              },
+              child: const Text('확인'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
+
+    return PopScope(
+      canPop: _resultShown,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0F0F17),
+        body: SafeArea(
+          child: Column(
+            children: [
+              const TopBar(),
+              SizedBox(
+                height: 56,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Align(
+                      alignment: Alignment.center,
+                      child: Text(
+                        '월드보스: 용의 동굴',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 22,
+                        ),
+                      ),
+                    ),
+                    // 전투 결과가 나오기 전에는 뒤로가기로 이탈할 수 없도록 비활성화.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        icon: Icon(
+                          Icons.arrow_back,
+                          color: _resultShown ? Colors.white : Colors.white24,
+                        ),
+                        onPressed: _resultShown
+                            ? () => Navigator.pop(context)
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: GameWidget(game: _game)),
+                    const Positioned.fill(child: SkillEffectOverlay()),
+                    Positioned(
+                      top: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+                            style: const TextStyle(
+                              color: Colors.orangeAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Positioned(
+                      bottom: 90,
+                      left: 0,
+                      right: 0,
+                      child: SkillTreeQuickBar(),
+                    ),
+                    Positioned(
+                      bottom: 16,
+                      left: 16,
+                      right: 16,
+                      child: Column(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: LinearProgressIndicator(
+                              value: hpRatio,
+                              minHeight: 14,
+                              backgroundColor: Colors.white24,
+                              valueColor: const AlwaysStoppedAnimation(
+                                Colors.redAccent,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${NumberFormatter.format(_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp))} / '
+                            '${NumberFormatter.format(_game.dungeonMonsterMaxHp)}',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

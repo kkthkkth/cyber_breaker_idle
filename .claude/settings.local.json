@@ -4,7 +4,15 @@
       "Bash(xargs -I{} sh -c 'echo ==={}===; cat {}')",
       "Bash(flutter run *)",
       "Bash(break)",
-      "Bash(flutter analyze *)"
+      "Bash(flutter analyze *)",
+      "Bash(flutter --version)",
+      "Bash(where flutter *)",
+      "Bash(grep -n \"onPopInvoked\\\\b\\\\|onPopInvokedWithResult\\\\|class PopScope\" \"/c/flutter/packages/flutter/lib/src/widgets/navigator.dart\" 2>/dev/null | head -20)",
+      "Read(//c/flutter/packages/flutter/lib/src/widgets/**)",
+      "Bash(grep -rn \"class PopScope\" \"/c/flutter/packages/flutter/lib/src/\" 2>/dev/null)",
+      "Read(//c/flutter/packages/flutter/lib/src//**)",
+      "Bash(flutter pub *)",
+      "Bash(dart format *)"
     ]
   }
 }
