@@ -215,12 +215,17 @@ class DispatchManager extends ChangeNotifier {
       return;
     }
 
-    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
-    for (int i = 0; i < decoded.length && i < maxSlots; i++) {
-      final dynamic entry = decoded[i];
-      if (entry != null) {
-        _missions[i] = DispatchMission.fromJson(entry as Map<String, dynamic>);
+    try {
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      for (int i = 0; i < decoded.length && i < maxSlots; i++) {
+        final dynamic entry = decoded[i];
+        if (entry != null) {
+          _missions[i] = DispatchMission.fromJson(entry as Map<String, dynamic>);
+        }
       }
+    } catch (error) {
+      debugPrint('[DispatchManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+      return;
     }
 
     _updateTicking();

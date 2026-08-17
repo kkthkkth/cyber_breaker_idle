@@ -55,7 +55,11 @@ class CharacterManifestManager {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String? cached = prefs.getString(_saveKey);
     if (cached != null) {
-      _subIdsByGrade = parseManifest(cached);
+      try {
+        _subIdsByGrade = parseManifest(cached);
+      } catch (error) {
+        debugPrint('[CharacterManifestManager] 로컬 캐시 데이터가 손상되어 건너뜁니다: $error');
+      }
     }
 
     try {

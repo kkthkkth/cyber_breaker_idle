@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -8,8 +9,12 @@ import 'package:uuid/uuid.dart';
 import '../constants/item_pool_config.dart';
 import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
+import 'achievement_manager.dart';
 import 'consumable_manager.dart';
 import 'game_manager.dart';
+import 'pet_stat_metadata_manager.dart';
+import 'pity_manager.dart';
+import 'supabase_manager.dart';
 
 class EquipmentManager extends ChangeNotifier {
   EquipmentManager._internal() {
@@ -27,6 +32,34 @@ class EquipmentManager extends ChangeNotifier {
     for (final EquipType type in EquipType.values) type: null,
   };
 
+  /// 현재 장착 중인 펫(`EquipType.pet`) — [GameManager]/[SkillManager]가
+  /// 펫 특수 보너스([Equipment.specialStats])를 읽는 유일한 진입점이다.
+  /// 예전엔 이 데이터가 완전히 별개의(그리고 아무도 채우지 않는) 죽은
+  /// PetManager에서 왔다 — 이제 실제로 가챠/장착이 이뤄지는 이
+  /// [EquipmentManager] 하나로 소스가 통합됐다.
+  Equipment? get equippedPet => equippedItems[EquipType.pet];
+
+  /// 지금 장착 중인 장비를 [Equipment.setId]별로 몇 부위 장착했는지 센
+  /// 맵(setId가 없는 장비는 집계에서 빠진다) — [EquipmentSetManager]가
+  /// 이 맵 하나로 2부위/4부위 세트 효과 발동 여부를 판정한다.
+  Map<String, int> get equippedSetCounts {
+    final Map<String, int> counts = {};
+    for (final Equipment? item in equippedItems.values) {
+      final String? setId = item?.setId;
+      if (setId == null) {
+        continue;
+      }
+      counts[setId] = (counts[setId] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// [주의: 저장 누락 방지] 예전엔 여기서 notifyListeners()만 부르고
+  /// [saveEquipment]를 호출하지 않았다 — 장착 상태가 로컬에도 즉시
+  /// 저장되지 않고, 앱이 백그라운드로 밀려날 때(main.dart의
+  /// AppLifecycleState 저장)까지 지연됐다. 그 사이 앱이 강제 종료되면
+  /// 장착 변경이 그냥 사라졌다(펫 DB 연동 점검 중 발견 — 요구사항
+  /// "즉시 DB에 업데이트하는 훅이 누락되어 있다면 추가").
   void equipItem(Equipment item) {
     final Equipment? current = equippedItems[item.type];
     if (current != null) {
@@ -36,6 +69,7 @@ class EquipmentManager extends ChangeNotifier {
     item.isEquipped = true;
     equippedItems[item.type] = item;
     notifyListeners();
+    saveEquipment();
   }
 
   void unequipItem(EquipType type) {
@@ -47,6 +81,7 @@ class EquipmentManager extends ChangeNotifier {
     current.isEquipped = false;
     equippedItems[type] = null;
     notifyListeners();
+    saveEquipment();
   }
 
   /// [item]의 타입(장비/펫/캐릭터 무엇이든 [item.type] 하나로 판별)에 맞는
@@ -120,6 +155,11 @@ class EquipmentManager extends ChangeNotifier {
 
   static const String _inventoryKey = 'equipment_inventory';
 
+  /// 로컬(SharedPreferences)에 전체 인벤토리를 저장한 뒤, 보유 펫(`EquipType
+  /// .pet`)만 골라 Supabase에도 백업한다([_syncPetsToRemote] 참고) — 펫이
+  /// 아닌 장비만 바뀐 호출이어도 매번 함께 동기화한다. 개별 변경마다
+  /// "이번에 펫이 바뀌었는지"를 따로 추적하는 것보다 훨씬 단순하고, 펫
+  /// 개수가 많지 않아(수십 마리 수준) 매번 통째로 보내도 부담이 적다.
   Future<void> saveEquipment() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String inventoryJson = jsonEncode(
@@ -127,6 +167,19 @@ class EquipmentManager extends ChangeNotifier {
     );
     await prefs.setString(_inventoryKey, inventoryJson);
     debugPrint('Equipment saved: ${inventory.length} items');
+    unawaited(_syncPetsToRemote());
+  }
+
+  /// 현재 보유 펫 전체와 장착 중인 펫 id를 Supabase에 백업한다 — 다른
+  /// 백그라운드 동기화 메서드들과 같은 fire-and-forget 관례(실패해도
+  /// 로컬 저장은 이미 끝났으므로 게임 진행을 막지 않는다).
+  Future<void> _syncPetsToRemote() async {
+    final List<Map<String, dynamic>> pets = inventory
+        .where((item) => item.type == EquipType.pet)
+        .map((item) => item.toJson())
+        .toList();
+    await SupabaseManager.instance.syncUserPets(pets);
+    await SupabaseManager.instance.updateEquippedPetId(equippedItems[EquipType.pet]?.id);
   }
 
   // equippedItems isn't persisted separately — it's fully derivable from
@@ -137,29 +190,94 @@ class EquipmentManager extends ChangeNotifier {
     final String? inventoryJson = prefs.getString(_inventoryKey);
     if (inventoryJson == null) {
       debugPrint('Equipment loaded: no saved data found under "$_inventoryKey"');
+      // 이 기기에 저장된 적이 전혀 없다 — 재설치/새 기기일 수 있으니
+      // Supabase에 예전에 백업해 둔 펫이 있는지 확인해 복구를 시도한다
+      // (생성자의 _generateTestInventory가 이미 채워 둔 임시 테스트
+      // 아이템은 건드리지 않고 그 위에 그대로 더한다).
+      await _restorePetsFromRemote();
       return;
     }
 
-    final List<dynamic> decoded = jsonDecode(inventoryJson) as List<dynamic>;
-    final List<Equipment> loadedItems = decoded
-        .map((entry) => Equipment.fromJson(entry as Map<String, dynamic>))
-        .toList();
+    try {
+      final List<dynamic> decoded = jsonDecode(inventoryJson) as List<dynamic>;
+      final List<Equipment> loadedItems = decoded
+          .map((entry) => Equipment.fromJson(entry as Map<String, dynamic>))
+          .toList();
 
-    inventory
-      ..clear()
-      ..addAll(loadedItems);
+      inventory
+        ..clear()
+        ..addAll(loadedItems);
 
-    for (final EquipType type in EquipType.values) {
-      equippedItems[type] = null;
-    }
-    for (final Equipment item in loadedItems) {
-      if (item.isEquipped) {
-        equippedItems[item.type] = item;
+      for (final EquipType type in EquipType.values) {
+        equippedItems[type] = null;
       }
+      for (final Equipment item in loadedItems) {
+        if (item.isEquipped) {
+          equippedItems[item.type] = item;
+        }
+      }
+    } catch (error) {
+      debugPrint('[EquipmentManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+      return;
     }
 
     notifyListeners();
     debugPrint('Equipment loaded: ${inventory.length} items');
+  }
+
+  /// [loadEquipment]가 이 기기에 저장된 적이 전혀 없을 때만(신규 설치/
+  /// 재설치) 호출 — Supabase `user_pets`/`profiles.equipped_pet_id`에
+  /// 예전에 백업해 둔 펫이 있으면 [inventory]에 복구한다. 이미 로컬 저장
+  /// 이력이 있는 정상적인 재실행에서는 절대 호출되지 않으므로, 원격
+  /// 데이터가 뒤처져 있어도 방금 로컬에서 불러온 최신 상태를 덮어쓸
+  /// 위험이 없다.
+  Future<void> _restorePetsFromRemote() async {
+    final List<Map<String, dynamic>> rows = await SupabaseManager.instance.fetchUserPets();
+    if (rows.isEmpty) {
+      return;
+    }
+
+    final List<Equipment> restoredPets = [];
+    for (final Map<String, dynamic> row in rows) {
+      try {
+        final Map<String, dynamic>? data = row['data'] as Map<String, dynamic>?;
+        if (data == null) {
+          continue;
+        }
+        restoredPets.add(Equipment.fromJson(data));
+      } catch (error) {
+        debugPrint('[EquipmentManager] 원격 펫 복구 실패(id=${row['id']}): $error');
+      }
+    }
+    if (restoredPets.isEmpty) {
+      return;
+    }
+
+    final String? remoteEquippedId = await SupabaseManager.instance.fetchEquippedPetId();
+    // [버그 방어] 원격이 가리키는 장착 펫 id가 방금 복구한 목록 중 어디에도
+    // 없으면(예: 그 펫만 유실/불일치) 예외를 던지거나 잘못된 펫을 장착
+    // 처리하지 않고, 조용히 미장착 상태로 남긴다.
+    Equipment? equippedPet;
+    if (remoteEquippedId != null) {
+      for (final Equipment pet in restoredPets) {
+        if (pet.id == remoteEquippedId) {
+          equippedPet = pet;
+          break;
+        }
+      }
+    }
+    for (final Equipment pet in restoredPets) {
+      pet.isEquipped = identical(pet, equippedPet);
+    }
+
+    inventory.addAll(restoredPets);
+    equippedItems[EquipType.pet] = equippedPet;
+
+    notifyListeners();
+    debugPrint('Equipment loaded: ${restoredPets.length} pets restored from Supabase');
+    // 복구된 펫을 로컬에도 즉시 반영해 둔다 — 다음 실행부터는 이
+    // 복구 경로를 다시 타지 않고 로컬 저장분을 바로 불러온다.
+    await saveEquipment();
   }
 
   /// [서약(Oath) 스탯 보너스 연결 지점 — 아직 미연결, 스켈레톤 설명]
@@ -279,9 +397,57 @@ class EquipmentManager extends ChangeNotifier {
 
   /// Draws [count] random items (e.g. the coin gacha's "11회 연속 뽑기") and
   /// returns every item drawn, so the UI can show the full result list
-  /// instead of only the best one.
+  /// instead of only the best one. 이 메서드는 상점 장비 가챠 버튼
+  /// (`shop_screen.dart`)의 유일한 호출부라 — 매 개별 뽑기마다
+  /// [PityManager]의 장비 천장 카운터를 소비하고, 천장에 걸리면
+  /// [_generatePityEquipmentLoot]로 확정 최고 등급을 지급한다.
+  /// [generateRandomLoot]/[generateGuaranteedLoot] 자체는 던전 보스 드랍/
+  /// 필드 드랍 등 가챠가 아닌 다른 경로도 함께 쓰므로 건드리지 않는다
+  /// ([PityManager] 클래스 문서 참고).
   List<Equipment> drawMultipleGacha(int count) {
-    return List.generate(count, (_) => generateRandomLoot());
+    return List.generate(count, (_) {
+      AchievementManager.instance.recordGachaPull();
+      final bool hitPity = PityManager.instance.rollAndConsumePity(GachaPityCategory.equipment);
+      return hitPity ? _generatePityEquipmentLoot() : generateRandomLoot();
+    });
+  }
+
+  /// 장비 가챠 천장(확정) 지급 — [_gearTypes] 중 실제로 최고 등급 컨텐츠가
+  /// 있는 타입만 후보로 놓고 그 최고 등급을 확정 생성한다. 일반
+  /// [generateGuaranteedLoot]처럼 타입을 먼저 무작위로 고른 뒤 등급을
+  /// 맞추면, 하필 그 타입에 최고 등급 컨텐츠가 없을 때
+  /// [_pickAvailableGrade]의 폴백이 낮은 등급으로 조용히 떨어뜨려 천장
+  /// 보장이 깨질 수 있어 — 타입과 등급을 함께, 이 함수 안에서만 직접
+  /// 계산한다.
+  Equipment _generatePityEquipmentLoot() {
+    ItemGrade topGrade = ItemGrade.n;
+    for (final ItemGrade grade in ItemGrade.values) {
+      final bool anyTypeHasContent =
+          _gearTypes.any((type) => ItemPoolConfig.maxCount(type, grade) > 0);
+      if (anyTypeHasContent) {
+        // ItemGrade.values는 낮은→높은 등급 순이라, 끝까지 훑으면 실제
+        // 컨텐츠가 있는 가장 높은 등급이 남는다.
+        topGrade = grade;
+      }
+    }
+    final List<EquipType> eligibleTypes =
+        _gearTypes.where((type) => ItemPoolConfig.maxCount(type, topGrade) > 0).toList();
+    final EquipType type = eligibleTypes.isNotEmpty
+        ? eligibleTypes[_random.nextInt(eligibleTypes.length)]
+        : _gearTypes[_random.nextInt(_gearTypes.length)];
+
+    final Equipment loot = EquipmentFactory.generate(
+      type: type,
+      grade: topGrade,
+      id: _uuid.v4(),
+      name: '${topGrade.displayName} ${type.displayName}',
+      subId: _rollSubId(type, topGrade, _random),
+      statMultiplier: _rollStatMultiplier(topGrade),
+    );
+
+    inventory.add(loot);
+    notifyListeners();
+    return loot;
   }
 
   /// Rolls loot whose grade is restricted to [allowedGrades] — used by
@@ -312,12 +478,35 @@ class EquipmentManager extends ChangeNotifier {
   }
 
   /// Rolls loot restricted to a single [type] (e.g. `EquipType.pet` for the
-  /// shop's pet gacha) — grade is still random within [allowedGrades].
+  /// shop's pet gacha) — grade is still random within [allowedGrades],
+  /// unless a pity category applies for [type] (character/pet) and this
+  /// roll hits the threshold ([PityManager]), in which case the highest
+  /// grade actually available for [type] is force-granted instead. Every
+  /// current caller of this method is a real shop gacha button
+  /// (`shop_screen.dart`) — no other code path uses it — so it's safe to
+  /// always consult [PityManager] here without an opt-in flag.
   Equipment generateLootOfType(
     EquipType type, {
     List<ItemGrade> allowedGrades = ItemGrade.values,
   }) {
-    final ItemGrade grade = _pickAvailableGrade(type, allowedGrades, _random);
+    AchievementManager.instance.recordGachaPull();
+    final GachaPityCategory? pityCategory = switch (type) {
+      EquipType.character => GachaPityCategory.character,
+      EquipType.pet => GachaPityCategory.pet,
+      _ => null,
+    };
+    final bool hitPity =
+        pityCategory != null && PityManager.instance.rollAndConsumePity(pityCategory);
+    final ItemGrade grade = hitPity
+        ? _topAvailableGrade(type, allowedGrades)
+        : _pickAvailableGrade(type, allowedGrades, _random);
+
+    // 펫 전용 특수 스탯(골드 획득/드랍률/보스 데미지 등) — DB
+    // (pet_stat_metadata) 기반 등급별 값 범위에서 굴린다. 펫이 아닌
+    // 타입은 항상 빈 맵.
+    final Map<String, double> specialStats = type == EquipType.pet
+        ? PetStatMetadataManager.instance.rollSpecialStats(grade)
+        : const {};
 
     final Equipment loot = EquipmentFactory.generate(
       type: type,
@@ -326,6 +515,7 @@ class EquipmentManager extends ChangeNotifier {
       name: '${grade.displayName} ${type.displayName}',
       subId: _rollSubId(type, grade, _random),
       statMultiplier: _rollStatMultiplier(grade),
+      specialStats: specialStats,
     );
 
     inventory.add(loot);
@@ -634,6 +824,24 @@ class EquipmentManager extends ChangeNotifier {
       return anyValid.first;
     }
     return ItemGrade.n;
+  }
+
+  /// [_pickAvailableGrade]와 같은 후보 계산(=[allowedGrades] 중 [type]에
+  /// 실제 콘텐츠가 있는 등급들, 없으면 [type]에 콘텐츠가 있는 아무 등급)을
+  /// 쓰되, 무작위 대신 그중 "가장 높은" 등급을 돌려준다 — 가챠 천장
+  /// ([PityManager])이 걸렸을 때 이 타입에서 실제로 뽑을 수 있는 최고
+  /// 등급을 확정 지급하는 용도. `ItemGrade.values`가 낮은→높은 순으로
+  /// 선언돼 있어, 필터링된 리스트의 마지막 원소가 항상 최고 등급이다.
+  ItemGrade _topAvailableGrade(EquipType type, List<ItemGrade> allowedGrades) {
+    final List<ItemGrade> valid =
+        allowedGrades.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+    if (valid.isNotEmpty) {
+      return valid.last;
+    }
+
+    final List<ItemGrade> anyValid =
+        ItemGrade.values.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+    return anyValid.isNotEmpty ? anyValid.last : ItemGrade.n;
   }
 
   /// [type] + [grade] 조합에 실제로 존재하는 개수([ItemPoolConfig.maxCount])

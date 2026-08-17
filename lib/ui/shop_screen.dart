@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../managers/ad_manager.dart';
+import '../managers/artifact_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/gacha_manager.dart';
 import '../managers/game_manager.dart';
+import '../managers/pity_manager.dart';
 import '../managers/potion_manager.dart';
+import '../managers/tutorial_manager.dart';
+import '../models/artifact_model.dart';
 import '../models/equipment.dart';
 import '../models/item_model.dart';
 import '../models/shop_consumable_model.dart';
@@ -47,10 +52,38 @@ class ShopScreen extends StatefulWidget {
   State<ShopScreen> createState() => _ShopScreenState();
 }
 
-class _ShopScreenState extends State<ShopScreen> {
+class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateMixin {
   final GameManager _gameManager = GameManager.instance;
   final EquipmentManager _equipmentManager = EquipmentManager.instance;
   final GachaManager _gachaManager = GachaManager.instance;
+
+  /// [DefaultTabController] 대신 직접 들고 있는 이유: 온보딩 튜토리얼
+  /// 3단계가 시작되면 "캐릭터" 탭(가챠 버튼이 있는 곳)으로 프로그램적으로
+  /// 강제 전환해야 하는데([_onTutorialChanged]), DefaultTabController는
+  /// 이 위젯의 build() 안에서 만들어져 State의 context로는 접근할 수 없다.
+  late final TabController _tabController = TabController(length: 6, vsync: this);
+
+  @override
+  void initState() {
+    super.initState();
+    TutorialManager.instance.addListener(_onTutorialChanged);
+  }
+
+  @override
+  void dispose() {
+    TutorialManager.instance.removeListener(_onTutorialChanged);
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  /// 튜토리얼이 3단계(가챠 버튼 강조)에 들어서면 "캐릭터" 탭(index 1)으로
+  /// 자동 전환한다 — 상점 화면은 IndexedStack에 항상 마운트돼 있어, 유저가
+  /// 아직 이 화면을 보고 있지 않은 순간에도 이 리스너는 계속 살아있다.
+  void _onTutorialChanged() {
+    if (TutorialManager.instance.currentStep == 2 && _tabController.index != 1) {
+      _tabController.animateTo(1);
+    }
+  }
 
   // TODO(server): replace with a real fetch of shop offers once they move
   // to a DB — the Row builders below only ever read through these.
@@ -236,6 +269,13 @@ class _ShopScreenState extends State<ShopScreen> {
       context,
       onFinished: () => _showResultDialog(results, title: '캐릭터 뽑기 결과'),
     );
+
+    // 튜토리얼 3단계("무료 가챠를 뽑아보세요!")가 이 버튼을 강조하고 있던
+    // 중이면, 실제로 뽑기에 성공한 지금 튜토리얼을 마지막 단계까지
+    // 진행시킨다.
+    if (TutorialManager.instance.currentStep == 2) {
+      TutorialManager.instance.advance();
+    }
   }
 
   Future<void> _characterDrawPremium(int times) async {
@@ -319,80 +359,85 @@ class _ShopScreenState extends State<ShopScreen> {
     return AnimatedBuilder(
       animation: Listenable.merge([_gameManager, _gachaManager, PotionManager.instance]),
       builder: (context, _) {
-        return DefaultTabController(
-          length: 5,
-          child: Scaffold(
-            backgroundColor: const Color(0xFF14141C),
-            appBar: AppBar(
-              backgroundColor: const Color(0xFF1B1B26),
-              elevation: 0,
-              // 뒤로 가기 버튼처럼 별도 색을 안 준 아이콘이 어두운 배경에
-              // 묻히지 않도록 명시한다.
-              foregroundColor: Colors.white,
-              title: const Text(
-                '상점',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              centerTitle: true,
-              bottom: const TabBar(
-                isScrollable: true,
-                indicatorColor: Color(0xFF6C4FCE),
-                labelColor: Colors.white,
-                unselectedLabelColor: Colors.white54,
-                tabs: [
-                  Tab(text: '패키지'),
-                  Tab(text: '캐릭터'),
-                  Tab(text: '장비'),
-                  Tab(text: '펫'),
-                  Tab(text: '소모품'),
-                ],
+        return Scaffold(
+          backgroundColor: const Color(0xFF14141C),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF1B1B26),
+            elevation: 0,
+            // 뒤로 가기 버튼처럼 별도 색을 안 준 아이콘이 어두운 배경에
+            // 묻히지 않도록 명시한다.
+            foregroundColor: Colors.white,
+            title: const Text(
+              '상점',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
               ),
             ),
-            body: TabBarView(
-              children: [
-                const _ComingSoonTab(),
-                _GachaOffersTab(
-                  coinSectionTitle: '코인 캐릭터 가챠',
-                  coinOffers: _characterCoinGachaOffers,
-                  onCoinPull: _characterPull,
-                  premiumSectionTitle: '프리미엄 캐릭터 소환',
-                  premiumOffers: _characterPremiumGachaOffers,
-                  gems: _gameManager.gems,
-                  onPremiumPull: _characterDrawPremium,
-                ),
-                _GachaOffersTab(
-                  coinSectionTitle: '코인 가챠',
-                  coinOffers: _coinGachaOffers,
-                  onCoinPull: _pull,
-                  premiumSectionTitle: '프리미엄 장비 소환',
-                  premiumOffers: _premiumGachaOffers,
-                  gems: _gameManager.gems,
-                  onPremiumPull: _drawPremium,
-                ),
-                _GachaOffersTab(
-                  coinSectionTitle: '코인 펫 가챠',
-                  coinOffers: _petCoinGachaOffers,
-                  onCoinPull: _petPull,
-                  premiumSectionTitle: '프리미엄 펫 소환',
-                  premiumOffers: _petPremiumGachaOffers,
-                  gems: _gameManager.gems,
-                  onPremiumPull: _petDrawPremium,
-                ),
-                // 일부러 const를 안 붙였다 — const로 만들면 Dart가 항상
-                // 똑같은(canonicalized) 인스턴스를 재사용해서, 바깥
-                // AnimatedBuilder가 PotionManager.notifyListeners()로
-                // 다시 그려져도 Flutter의 Element.updateChild가
-                // "이전 위젯과 새 위젯이 identical하다"고 보고 이 위젯의
-                // build()를 아예 다시 안 불렀다(그래서 구매 직후 '보유
-                // N개'가 탭을 나갔다 들어와야만 갱신됐다 — 탭 전환은
-                // 위젯 트리를 통째로 새로 만들어서 우연히 값이 맞았을
-                // 뿐이다).
-                _ConsumablesShopTab(),
+            centerTitle: true,
+            bottom: TabBar(
+              controller: _tabController,
+              isScrollable: true,
+              indicatorColor: const Color(0xFF6C4FCE),
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white54,
+              tabs: const [
+                Tab(text: '무료 보상'),
+                Tab(text: '캐릭터'),
+                Tab(text: '장비'),
+                Tab(text: '펫'),
+                Tab(text: '소모품'),
+                Tab(text: '유물'),
               ],
             ),
+          ),
+          body: TabBarView(
+            controller: _tabController,
+            children: [
+              const _FreeRewardsTab(),
+              _GachaOffersTab(
+                coinSectionTitle: '코인 캐릭터 가챠',
+                coinOffers: _characterCoinGachaOffers,
+                onCoinPull: _characterPull,
+                premiumSectionTitle: '프리미엄 캐릭터 소환',
+                premiumOffers: _characterPremiumGachaOffers,
+                gems: _gameManager.gems,
+                onPremiumPull: _characterDrawPremium,
+                pityCategory: GachaPityCategory.character,
+                highlightFirstCoinButton: true,
+              ),
+              _GachaOffersTab(
+                coinSectionTitle: '코인 가챠',
+                coinOffers: _coinGachaOffers,
+                onCoinPull: _pull,
+                premiumSectionTitle: '프리미엄 장비 소환',
+                premiumOffers: _premiumGachaOffers,
+                gems: _gameManager.gems,
+                onPremiumPull: _drawPremium,
+                pityCategory: GachaPityCategory.equipment,
+              ),
+              _GachaOffersTab(
+                coinSectionTitle: '코인 펫 가챠',
+                coinOffers: _petCoinGachaOffers,
+                onCoinPull: _petPull,
+                premiumSectionTitle: '프리미엄 펫 소환',
+                premiumOffers: _petPremiumGachaOffers,
+                gems: _gameManager.gems,
+                onPremiumPull: _petDrawPremium,
+                pityCategory: GachaPityCategory.pet,
+              ),
+              // 일부러 const를 안 붙였다 — const로 만들면 Dart가 항상
+              // 똑같은(canonicalized) 인스턴스를 재사용해서, 바깥
+              // AnimatedBuilder가 PotionManager.notifyListeners()로
+              // 다시 그려져도 Flutter의 Element.updateChild가
+              // "이전 위젯과 새 위젯이 identical하다"고 보고 이 위젯의
+              // build()를 아예 다시 안 불렀다(그래서 구매 직후 '보유
+              // N개'가 탭을 나갔다 들어와야만 갱신됐다 — 탭 전환은
+              // 위젯 트리를 통째로 새로 만들어서 우연히 값이 맞았을
+              // 뿐이다).
+              _ConsumablesShopTab(),
+              const _ArtifactTab(),
+            ],
           ),
         );
       },
@@ -400,13 +445,247 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 }
 
-class _ComingSoonTab extends StatelessWidget {
-  const _ComingSoonTab();
+
+/// 상점 첫 탭 — DB 주도형 보상형 광고(AdManager) 4곳: 코인/일반 상자(펫)/
+/// 일반 상자(장비)/일반 상자(캐릭터). 4곳 전부 `daily_ad_views`(일일 5회)/
+/// `last_ad_viewed_at`(1시간 쿨타임) 카운터 하나를 공유한다 — 어느 버튼으로
+/// 봐도 같이 줄어들고, 같이 쿨타임에 걸린다([AdManager] 문서 참고).
+class _FreeRewardsTab extends StatefulWidget {
+  const _FreeRewardsTab();
+
+  @override
+  State<_FreeRewardsTab> createState() => _FreeRewardsTabState();
+}
+
+class _FreeRewardsTabState extends State<_FreeRewardsTab> {
+  bool _isWatching = false;
+
+  /// 광고를 보여주고, 끝까지 시청했을 때만 [grantReward]로 실제 게임
+  /// 보상을 지급한다 — [AdManager.showRewardedAd]는 "시청했는지"만
+  /// 책임지고, 무엇을 줄지는 항상 호출부가 결정한다.
+  Future<void> _watchAd({
+    required String rewardLabel,
+    required VoidCallback grantReward,
+  }) async {
+    if (_isWatching) {
+      return;
+    }
+    setState(() => _isWatching = true);
+    final bool watched = await AdManager.instance.showRewardedAd();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _isWatching = false);
+    if (watched) {
+      grantReward();
+      showCenterToast(context, '$rewardLabel 획득!');
+    } else {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('광고를 끝까지 시청하지 못했어요.')));
+    }
+  }
+
+  void _watchForGold() {
+    _watchAd(
+      rewardLabel: '골드 500',
+      grantReward: () => GameManager.instance.addGold(500),
+    );
+  }
+
+  /// [type]이 null이면 "장비" 박스 — 무기/방어구 등 여러 슬롯 중 무작위
+  /// 하나를 뽑는 기존 "코인 가챠" 버튼과 같은 경로([EquipmentManager
+  /// .generateRandomLoot]). null이 아니면(펫/캐릭터) 해당 타입 전용 경로
+  /// ([EquipmentManager.generateLootOfType]) — 기존 상점의 펫/캐릭터 코인
+  /// 가챠 버튼과 동일하게, 그 타입의 천장 카운터도 함께 소비한다.
+  void _watchForBox(EquipType? type, String label) {
+    _watchAd(
+      rewardLabel: label,
+      grantReward: () {
+        final Equipment result = type == null
+            ? EquipmentManager.instance.generateRandomLoot()
+            : EquipmentManager.instance.generateLootOfType(type);
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (context) => GachaRevealScreen(title: '$label 결과', results: [result]),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Text('준비 중입니다.', style: TextStyle(color: Colors.white54)),
+    return AnimatedBuilder(
+      animation: AdManager.instance,
+      builder: (context, _) {
+        final AdManager ads = AdManager.instance;
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (!ads.isSupportedPlatform)
+              Container(
+                margin: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF20202C),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF3A3A4A)),
+                ),
+                child: const Text(
+                  '이 플랫폼에서는 광고 시청을 지원하지 않아요.',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const _SectionTitle(title: '무료 보상', color: Colors.amberAccent),
+                Text(
+                  '오늘 ${ads.dailyAdViews}/${AdManager.maxDailyViews}회 시청',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              '광고를 시청하고 무료 보상을 받아보세요. 시청 후 1시간 동안은\n다시 볼 수 없어요.',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+            const SizedBox(height: 16),
+            _AdRewardCard(
+              icon: Icons.monetization_on,
+              iconColor: Colors.amber,
+              title: '코인',
+              subtitle: '골드 500 획득',
+              busy: _isWatching,
+              onWatch: _watchForGold,
+            ),
+            const SizedBox(height: 12),
+            _AdRewardCard(
+              icon: Icons.pets,
+              iconColor: Colors.orangeAccent,
+              title: '일반 상자 (펫)',
+              subtitle: '펫 1마리 획득',
+              busy: _isWatching,
+              onWatch: () => _watchForBox(EquipType.pet, '일반 상자 (펫)'),
+            ),
+            const SizedBox(height: 12),
+            _AdRewardCard(
+              icon: Icons.shield,
+              iconColor: Colors.cyanAccent,
+              title: '일반 상자 (장비)',
+              subtitle: '장비 1개 획득',
+              busy: _isWatching,
+              onWatch: () => _watchForBox(null, '일반 상자 (장비)'),
+            ),
+            const SizedBox(height: 12),
+            _AdRewardCard(
+              icon: Icons.person,
+              iconColor: Colors.purpleAccent,
+              title: '일반 상자 (캐릭터)',
+              subtitle: '캐릭터 1명 획득',
+              busy: _isWatching,
+              onWatch: () => _watchForBox(EquipType.character, '일반 상자 (캐릭터)'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 광고 시청 카드 하나 — 쿨타임 중이면 "남은 시간 (mm:ss)"이 매초
+/// 줄어들고(AdManager가 1초 주기로 notifyListeners를 쏘므로 이 위젯도 그
+/// 주기로 다시 그려진다), 오늘 시청 횟수를 다 썼으면 그 문구로 바뀐다.
+class _AdRewardCard extends StatelessWidget {
+  const _AdRewardCard({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.busy,
+    required this.onWatch,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final bool busy;
+  final VoidCallback onWatch;
+
+  static String _formatRemaining(Duration remaining) {
+    final int minutes = remaining.inMinutes;
+    final int seconds = remaining.inSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final AdManager ads = AdManager.instance;
+    final bool canWatch = ads.canWatchAd && !busy;
+
+    final String buttonLabel = !ads.isSupportedPlatform
+        ? '지원 안 됨'
+        : !ads.hasDailyViewsLeft
+        ? '오늘 시청 완료'
+        : ads.isOnCooldown
+        ? '남은 시간 (${_formatRemaining(ads.cooldownRemaining)})'
+        : '광고 보고 받기';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1B26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: iconColor.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: iconColor),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: iconColor, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: canWatch ? onWatch : null,
+            icon: busy
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.play_circle_fill, size: 16),
+            label: Text(buttonLabel, style: const TextStyle(fontSize: 11)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: iconColor,
+              foregroundColor: Colors.black,
+              disabledBackgroundColor: const Color(0xFF3A3A4A),
+              disabledForegroundColor: Colors.white38,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -524,9 +803,10 @@ class _SectionHeader extends StatelessWidget {
 /// 준비되기 전까지는 [CustomSafeImage]가 404를 조용히 회색 placeholder로
 /// 대체한다.
 class _ShopItemIcon extends StatelessWidget {
-  const _ShopItemIcon({required this.iconPath, required this.accent});
+  const _ShopItemIcon({required this.iconPath, this.fallbackPath, required this.accent});
 
   final String iconPath;
+  final String? fallbackPath;
   final Color accent;
 
   @override
@@ -542,7 +822,13 @@ class _ShopItemIcon extends StatelessWidget {
       alignment: Alignment.center,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: CustomSafeImage(path: iconPath, width: 32, height: 32, fit: BoxFit.contain),
+        child: CustomSafeImage(
+          path: iconPath,
+          fallbackPath: fallbackPath,
+          width: 32,
+          height: 32,
+          fit: BoxFit.contain,
+        ),
       ),
     );
   }
@@ -579,7 +865,11 @@ class _PotionShopTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _ShopItemIcon(iconPath: entry.iconPath, accent: gradeColor),
+          _ShopItemIcon(
+            iconPath: entry.iconPath,
+            fallbackPath: entry.iconFallbackPath,
+            accent: gradeColor,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -664,7 +954,11 @@ class _AffectionGiftTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _ShopItemIcon(iconPath: entry.iconPath, accent: accent),
+          _ShopItemIcon(
+            iconPath: entry.iconPath,
+            fallbackPath: entry.iconFallbackPath,
+            accent: accent,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -719,7 +1013,11 @@ class _TicketShopTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _ShopItemIcon(iconPath: entry.iconPath, accent: accent),
+          _ShopItemIcon(
+            iconPath: entry.iconPath,
+            fallbackPath: entry.iconFallbackPath,
+            accent: accent,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -867,7 +1165,13 @@ class _PurchaseQuantityDialogState extends State<_PurchaseQuantityDialog> {
               alignment: Alignment.center,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: CustomSafeImage(path: entry.iconPath, width: 44, height: 44, fit: BoxFit.contain),
+                child: CustomSafeImage(
+                  path: entry.iconPath,
+                  fallbackPath: entry.iconFallbackPath,
+                  width: 44,
+                  height: 44,
+                  fit: BoxFit.contain,
+                ),
               ),
             ),
             const SizedBox(height: 10),
@@ -1010,6 +1314,8 @@ class _GachaOffersTab extends StatelessWidget {
     required this.premiumOffers,
     required this.gems,
     required this.onPremiumPull,
+    required this.pityCategory,
+    this.highlightFirstCoinButton = false,
   });
 
   final String coinSectionTitle;
@@ -1020,12 +1326,23 @@ class _GachaOffersTab extends StatelessWidget {
   final int gems;
   final void Function(int times) onPremiumPull;
 
+  /// 온보딩 튜토리얼 3단계("무료 가챠를 뽑아보세요!")가 이 탭의 첫 코인
+  /// 뽑기 버튼을 스포트라이트로 강조하게 한다 — 캐릭터 탭에서만 true.
+  final bool highlightFirstCoinButton;
+
+  /// 코인/프리미엄 뽑기가 공유하는 천장 카운터 — 같은 탭(캐릭터/장비/펫)
+  /// 안에서는 어느 쪽으로 뽑든 같은 카운터가 오른다([PityManager] 문서
+  /// 참고).
+  final GachaPityCategory pityCategory;
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
+          _PityProgressBar(category: pityCategory),
+          const SizedBox(height: 16),
           _SectionTitle(title: coinSectionTitle, color: Colors.amberAccent),
           const SizedBox(height: 12),
           Row(
@@ -1033,12 +1350,17 @@ class _GachaOffersTab extends StatelessWidget {
               for (int i = 0; i < coinOffers.length; i++) ...[
                 if (i > 0) const SizedBox(width: 16),
                 Expanded(
-                  child: _GachaButton(
-                    title: coinOffers[i].title,
-                    subtitle: coinOffers[i].subtitle,
-                    icon: coinOffers[i].icon,
-                    onTap: () =>
-                        onCoinPull(coinOffers[i].pullCount, coinOffers[i].cost),
+                  child: KeyedSubtree(
+                    key: (highlightFirstCoinButton && i == 0)
+                        ? TutorialManager.freeGachaButtonKey
+                        : null,
+                    child: _GachaButton(
+                      title: coinOffers[i].title,
+                      subtitle: coinOffers[i].subtitle,
+                      icon: coinOffers[i].icon,
+                      onTap: () =>
+                          onCoinPull(coinOffers[i].pullCount, coinOffers[i].cost),
+                    ),
                   ),
                 ),
               ],
@@ -1066,6 +1388,80 @@ class _GachaOffersTab extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// "천장까지 N회 남음" 게이지 — [PityManager]가 관리하는 [category] 전용
+/// 카운터를 그대로 보여준다. 코인/프리미엄 뽑기 모두 이 카운터 하나를
+/// 공유하므로 탭 상단에 한 번만 놓는다. 유저가 "조금만 더 뽑으면 확정"임을
+/// 한눈에 보고 계속 뽑고 싶어지도록, 남은 횟수를 숫자와 채워지는 바
+/// 둘 다로 강조한다.
+class _PityProgressBar extends StatelessWidget {
+  const _PityProgressBar({required this.category});
+
+  final GachaPityCategory category;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: PityManager.instance,
+      builder: (context, _) {
+        final PityManager pity = PityManager.instance;
+        final int remaining = pity.remainingFor(category);
+        final double progress = pity.progressFor(category);
+
+        return Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF20202C),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.amberAccent.withValues(alpha: 0.6)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        '최고 등급 확정 천장',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    '$remaining회 남음',
+                    style: const TextStyle(
+                      color: Colors.amberAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 8,
+                  backgroundColor: Colors.white12,
+                  valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1201,6 +1597,222 @@ class _PremiumGachaButton extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 보석을 소모해 유물 조각을 뽑고, 모은 조각으로 레벨업하는 탭 —
+/// [ArtifactManager]가 카탈로그+진행도를 합쳐 들고 있는 [Artifact] 목록을
+/// 그대로 그린다("장착" 개념이 없어 캐릭터/장비/펫 탭과 달리 보유한 모든
+/// 유물이 항상 동시에 패시브를 제공한다).
+class _ArtifactTab extends StatelessWidget {
+  const _ArtifactTab();
+
+  void _showSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _pull(BuildContext context, int times) {
+    final List<Artifact> results = ArtifactManager.instance.drawMultiple(times);
+    if (results.isEmpty) {
+      _showSnackBar(context, '보석이 부족합니다');
+      return;
+    }
+    final String summary = results.map((artifact) => '${artifact.name} 조각').join(', ');
+    _showSnackBar(
+      context,
+      results.length < times
+          ? '보석이 부족해 ${results.length}회만 뽑았어요: $summary'
+          : '유물 조각 획득: $summary',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([ArtifactManager.instance, GameManager.instance]),
+      builder: (context, _) {
+        final ArtifactManager manager = ArtifactManager.instance;
+        final int gems = GameManager.instance.gems;
+        final bool canPullOnce = gems >= ArtifactManager.pullCost;
+        final bool canPullTen = gems >= ArtifactManager.pullCost * 10;
+
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle(title: '유물 조각 뽑기', color: Colors.cyanAccent),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _PremiumGachaButton(
+                      title: '1회 뽑기',
+                      cost: ArtifactManager.pullCost,
+                      enabled: canPullOnce,
+                      onTap: () => _pull(context, 1),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _PremiumGachaButton(
+                      title: '10회 뽑기',
+                      cost: ArtifactManager.pullCost * 10,
+                      enabled: canPullTen,
+                      onTap: () => _pull(context, 10),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 28),
+              const Divider(color: Color(0xFF2A2A38)),
+              const SizedBox(height: 16),
+              const _SectionTitle(title: '보유 유물', color: Colors.amberAccent),
+              const SizedBox(height: 12),
+              if (manager.artifacts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Text(
+                    '유물 정보를 불러오는 중입니다...',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                )
+              else
+                for (final Artifact artifact in manager.artifacts) ...[
+                  _ArtifactCard(
+                    artifact: artifact,
+                    onLevelUp: () {
+                      final bool success = manager.levelUp(artifact.id);
+                      if (!success) {
+                        _showSnackBar(context, '조각이 부족합니다');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ArtifactCard extends StatelessWidget {
+  const _ArtifactCard({required this.artifact, required this.onLevelUp});
+
+  final Artifact artifact;
+  final VoidCallback onLevelUp;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool canLevelUp = artifact.canLevelUp;
+    final double ratio = artifact.isMaxLevel
+        ? 1.0
+        : (artifact.nextLevelFragmentCost <= 0
+            ? 0.0
+            : (artifact.fragmentCount / artifact.nextLevelFragmentCost).clamp(0.0, 1.0));
+
+    return Container(
+      decoration: canLevelUp
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.amberAccent.withValues(alpha: 0.4),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ],
+            )
+          : null,
+      child: Card(
+        color: const Color(0xFF20202C),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(
+            color: canLevelUp ? Colors.amberAccent : const Color(0xFF3A3A4A),
+            width: canLevelUp ? 1.5 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            artifact.name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          artifact.isMaxLevel ? 'MAX' : 'Lv.${artifact.level}/${artifact.maxLevel}',
+                          style: const TextStyle(
+                            color: Colors.amberAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${ArtifactStat.displayName(artifact.statKey)} '
+                      '+${(artifact.passiveValue * 100).toStringAsFixed(1)}%',
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: ratio,
+                        minHeight: 8,
+                        backgroundColor: Colors.white24,
+                        valueColor: AlwaysStoppedAnimation(
+                          canLevelUp ? Colors.greenAccent : const Color(0xFF6C4FCE),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      artifact.isMaxLevel
+                          ? '최대 레벨 달성'
+                          : '조각 ${artifact.fragmentCount}/${artifact.nextLevelFragmentCost}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: canLevelUp ? onLevelUp : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: canLevelUp ? Colors.amberAccent : const Color(0xFF6C4FCE),
+                  foregroundColor: canLevelUp ? Colors.black : Colors.white,
+                  disabledBackgroundColor: const Color(0xFF3A3A4A),
+                  disabledForegroundColor: Colors.white54,
+                  elevation: canLevelUp ? 6 : 0,
+                ),
+                child: const Text('레벨업'),
+              ),
+            ],
+          ),
         ),
       ),
     );

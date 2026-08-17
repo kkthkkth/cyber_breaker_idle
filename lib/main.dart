@@ -1,37 +1,55 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'constants/supabase_config.dart';
+import 'managers/achievement_manager.dart';
+import 'managers/ad_manager.dart';
+import 'managers/artifact_manager.dart';
 import 'managers/affection_manager.dart';
 import 'managers/arena_manager.dart';
 import 'managers/attendance_manager.dart';
 import 'managers/battle_pass_manager.dart';
 import 'managers/character_manifest_manager.dart';
+import 'managers/character_meta_manager.dart';
 import 'managers/collection_manager.dart';
 import 'managers/dungeon_manager.dart';
 import 'managers/encyclopedia_manager.dart';
 import 'managers/equipment_manager.dart';
+import 'managers/equipment_set_manager.dart';
 import 'managers/gacha_manager.dart';
 import 'managers/game_manager.dart';
 import 'managers/guild_manager.dart';
+import 'managers/guild_raid_manager.dart';
 import 'managers/mailbox_manager.dart';
 import 'managers/main_story_manager.dart';
 import 'managers/midnight_reset_manager.dart';
 import 'managers/mission_manager.dart';
 import 'managers/monster_drop_manager.dart';
 import 'managers/monthly_attendance_manager.dart';
+import 'managers/notification_manager.dart';
 import 'managers/offline_reward_manager.dart';
-import 'managers/pet_manager.dart';
+import 'managers/pet_stat_metadata_manager.dart';
+import 'managers/pity_manager.dart';
 import 'managers/potion_manager.dart';
+import 'managers/prestige_manager.dart';
 import 'managers/quest_manager.dart';
+import 'managers/rookie_attendance_manager.dart';
+import 'managers/rune_manager.dart';
 import 'managers/skill_manager.dart';
+import 'managers/sound_manager.dart';
 import 'managers/speed_manager.dart';
 import 'managers/story_manager.dart';
+import 'managers/supabase_manager.dart';
 import 'managers/tower_floor_manager.dart';
+import 'managers/tutorial_manager.dart';
+import 'managers/weekday_dungeon_manager.dart';
 import 'managers/world_boss_manager.dart';
 import 'models/consumable_item_model.dart';
 import 'models/equipment.dart';
 import 'models/story_model.dart';
+import 'widgets/tutorial_overlay.dart';
 import 'ui/character_illustration_dialog.dart';
 import 'ui/character_screen.dart';
 import 'ui/dungeon_screen.dart';
@@ -45,15 +63,40 @@ import 'ui/settings_dialog.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_screen.dart';
 import 'ui/top_bar.dart';
+import 'utils/number_formatter.dart';
 import 'widgets/center_toast.dart';
 import 'widgets/story_dialog_widget.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Supabase.initialize(url: SupabaseConfig.url, publishableKey: SupabaseConfig.anonKey);
+  // 로컬 알림 권한 요청 — 다른 매니저들의 await 체인과 독립적이라(알림
+  // 예약은 나중에 특정 이벤트 시점에만 실제로 쓰인다) 가장 먼저 끝내
+  // 둔다. 지원하지 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
+  await NotificationManager.instance.init();
+  // 길드원 목록의 접속중(🟢) 표시가 참조하는 profiles.last_seen 하트비트 —
+  // 아직 로그인 전이면(게스트 로그인을 아직 안 거쳤으면) 매번 조용히
+  // no-op하다가, 로그인 후 다음 주기(SupabaseManager.lastSeenInterval)부터
+  // 실제로 갱신되기 시작한다.
+  SupabaseManager.instance.startLastSeenHeartbeat();
+  // SFX 프리로드 — 실패해도(assets/audio/ 파일 없음 등) 조용히 넘어가므로
+  // 다른 매니저들의 await 체인을 막지 않는다.
+  unawaited(SoundManager.instance.init());
   await EquipmentManager.instance.loadEquipment();
+  // 상점 가챠 버튼(EquipmentManager.generateLootOfType/drawMultipleGacha)이
+  // 곧바로 PityManager를 읽으므로, 상점 화면이 열리기 전에 끝나 있어야
+  // 한다.
+  await PityManager.instance.loadData();
+  // GameManager._onMonsterDefeated/EquipmentManager의 가챠 진입점이 매
+  // 처치/뽑기마다 AchievementManager.recordMonsterKill/recordGachaPull을
+  // 호출하므로, 전투/상점이 열리기 전에 끝나 있어야 한다.
+  await AchievementManager.instance.loadData();
   await AffectionManager.instance.loadData();
   await GameManager.instance.loadGame();
+  // GameManager.attackPower/_onMonsterDefeated가 곧바로
+  // PrestigeManager.attackBonus/goldBonus를 읽어가므로, 전투가 시작되기
+  // 전(runApp 이전)에 반드시 끝나 있어야 한다.
+  await PrestigeManager.instance.loadData();
   await CollectionManager.instance.loadData();
   // EncyclopediaManager.instance는 최초 접근 시 생성자에서 즉시 도감 항목을
   // 만든다(캐릭터는 CharacterManifestManager.subIdsFor를 그 자리에서
@@ -68,13 +111,32 @@ Future<void> main() async {
   await GachaManager.instance.loadGachaInventory();
   await MissionManager.instance.loadData();
   await AttendanceManager.instance.checkDailyLogin();
+  await RookieAttendanceManager.instance.loadData();
   await SkillManager.instance.loadData();
   await MonthlyAttendanceManager.instance.loadData();
-  await PetManager.instance.loadGame();
+  // 상점 펫 가챠(EquipmentManager.generateLootOfType)가 곧바로
+  // PetStatMetadataManager.rollSpecialStats를 읽으므로, 상점 화면이
+  // 열리기 전에 끝나 있어야 한다.
+  await PetStatMetadataManager.instance.loadData();
   await PotionManager.instance.loadData();
+  // GameManager.maxHp/attackPower/defensePower/goldReward가 곧바로
+  // ArtifactManager.totalBonus를 읽으므로, 전투가 시작되기 전(runApp 이전)에
+  // 끝나 있어야 한다.
+  await ArtifactManager.instance.loadData();
+  // GameManager.attackPower/defensePower/effectiveCriticalRate/maxHp가
+  // 곧바로 EquipmentSetManager.totalBonus를 읽으므로, 전투가 시작되기
+  // 전(runApp 이전)에 끝나 있어야 한다.
+  await EquipmentSetManager.instance.loadData();
+  // GameManager/SkillManager가 곧바로 RuneManager.totalBonus를 읽으므로,
+  // 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
+  await RuneManager.instance.loadData();
+  await WeekdayDungeonManager.instance.loadData();
   // 온라인 사냥(GameManager._onMonsterDefeated)이 곧바로 드랍 테이블을
   // 읽으므로, 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
   await MonsterDropTableManager.instance.loadData();
+  // IdleGame._fireProjectile이 공격마다 근접/원거리를 판정할 때 곧바로
+  // 읽으므로, 마찬가지로 전투가 시작되기 전에 끝나 있어야 한다.
+  await CharacterMetaManager.instance.loadData();
   await SpeedManager.instance.loadBoost();
   await StoryManager.instance.loadData();
   await MainStoryManager.instance.loadData();
@@ -84,12 +146,19 @@ Future<void> main() async {
   // 곧바로 읽어가므로, 전투가 시작되기 전(runApp 이전)에 반드시 끝나 있어야
   // 한다.
   await GuildManager.instance.loadData();
+  await GuildRaidManager.instance.loadData();
   await ArenaManager.instance.loadData();
+  // 상점 '무료 보상' 탭이 곧바로 AdManager.instance.canWatchAd/dailyAdViews를
+  // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다. 지원하지
+  // 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
+  await AdManager.instance.loadData();
   // QuestManager.claimQuest가 BattlePassManager.addBpExp를 부르므로, 배틀패스
   // 보상 트랙(레벨/exp)이 먼저 로드돼 있어야 한다.
   await BattlePassManager.instance.loadData();
   await QuestManager.instance.loadData();
   MidnightResetManager.instance.start();
+  await TutorialManager.instance.loadData();
+  unawaited(SoundManager.instance.playLobbyBgm());
   runApp(const MyApp());
 }
 
@@ -115,6 +184,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(WorldBossManager.instance);
     WidgetsBinding.instance.addObserver(ArenaManager.instance);
     WidgetsBinding.instance.addObserver(QuestManager.instance);
+    WidgetsBinding.instance.addObserver(WeekdayDungeonManager.instance);
   }
 
   @override
@@ -127,6 +197,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(WorldBossManager.instance);
     WidgetsBinding.instance.removeObserver(ArenaManager.instance);
     WidgetsBinding.instance.removeObserver(QuestManager.instance);
+    WidgetsBinding.instance.removeObserver(WeekdayDungeonManager.instance);
     MidnightResetManager.instance.dispose();
     super.dispose();
   }
@@ -139,6 +210,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       EquipmentManager.instance.saveEquipment();
       DungeonManager.instance.saveDungeonData();
       GachaManager.instance.saveGachaInventory();
+      // 디바운스된(최대 2초) 퀘스트 진행도 동기화가 그 시간을 못 채우고
+      // 앱이 죽는 것을 막는다 — QuestManager.flushPendingSync 문서 참고.
+      unawaited(QuestManager.instance.flushPendingSync());
+      // 요구사항: "게임 종료 후 8시간 뒤 ➡️ 영웅들이 지쳤습니다!..." — 앱을
+      // 내릴 때마다 예약하고(다시 내릴 때마다 이전 예약을 덮어쓴다),
+      // 포그라운드로 돌아오면([resumed]) 곧바로 취소한다.
+      NotificationManager.instance.scheduleOfflineReminder();
+    } else if (state == AppLifecycleState.resumed) {
+      // 백그라운드에 있던 동안엔 startLastSeenHeartbeat()의 주기 타이머가
+      // 계속 돌긴 하지만(모바일 OS가 지연시킬 수 있다), 포그라운드로
+      // 돌아온 순간 즉시 한 번 더 갱신해 "접속중" 표시가 최대한 빨리
+      // 정확해지게 한다.
+      SupabaseManager.instance.updateLastSeen();
+      NotificationManager.instance.cancelOfflineReminder();
     }
   }
 
@@ -298,6 +383,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     ).then((_) {
       OfflineRewardManager.instance.claimReward(
         rewardGold: rewardGold,
+        offlineSeconds: offlineSeconds,
         equipmentCount: equipmentCount,
         consumableDrops: consumableDrops,
       );
@@ -425,6 +511,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     setState(() {
       _selectedIndex = index;
     });
+    // 튜토리얼 2단계("하단 메뉴에서 상점으로 이동해 보세요")가 진행 중일
+    // 때, 실제로 샵 탭을 탭하면 3단계(가챠 버튼 강조)로 넘어간다.
+    if (TutorialManager.instance.currentStep == 1 && _navTabs[index].label == '샵') {
+      TutorialManager.instance.advance();
+    }
   }
 
   void _showCharacterIllustration() {
@@ -453,6 +544,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(child: _buildScaffold(context)),
+        // 최초 실행 온보딩 튜토리얼 — TutorialManager가 완료 상태면
+        // SizedBox.shrink()만 그리므로 평소엔 아무 비용도 들지 않는다.
+        AnimatedBuilder(
+          animation: TutorialManager.instance,
+          builder: (context, _) => const TutorialOverlay(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF1B1B26),
@@ -487,43 +592,61 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           const DailyQuestHudButton(),
           const MailboxHudButton(),
           const SpeedButton(),
-          AnimatedBuilder(
-            animation: GameManager.instance,
-            builder: (context, _) {
-              return Container(
-                margin: const EdgeInsets.only(right: 12),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF20202C),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF3A3A4A)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.monetization_on, color: Colors.amber, size: 18),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${GameManager.instance.gold}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+          // Flexible로 감싸는 이유: 예전엔 이 통화 표시 Container가
+          // AppBar.actions의 다른 자식들처럼 자기 콘텐츠 크기만큼 무한정
+          // 늘어날 수 있었다 — 숫자가 커지면(수억~수조 단위) 좌측의
+          // DailyQuestHudButton/MailboxHudButton/SpeedButton을 화면 밖으로
+          // 밀어내거나 AppBar 자체가 오버플로우될 수 있었다. Flexible이
+          // AppBar 내부 Row가 실제로 줄 수 있는 만큼만 차지하도록 제한하고,
+          // 그 안의 Text들도 ellipsis로 방어한다 — 다만 NumberFormatter의
+          // K/M/B/T 축약 덕분에 실제로 이 한계에 걸릴 일은 거의 없다.
+          Flexible(
+            child: AnimatedBuilder(
+              animation: GameManager.instance,
+              builder: (context, _) {
+                return Container(
+                  margin: const EdgeInsets.only(right: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF20202C),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF3A3A4A)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.monetization_on, color: Colors.amber, size: 18),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          NumberFormatter.format(GameManager.instance.gold.toDouble()),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Icon(Icons.diamond, color: Colors.cyanAccent, size: 16),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${GameManager.instance.gems}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+                      const SizedBox(width: 10),
+                      const Icon(Icons.diamond, color: Colors.cyanAccent, size: 16),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          NumberFormatter.format(GameManager.instance.gems.toDouble()),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -550,11 +673,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             items: [
               for (final _NavTab tab in _navTabs)
                 BottomNavigationBarItem(
-                  icon: Badge(
-                    isLabelVisible: tab.screen is CharacterScreen && showCollectionDot,
-                    backgroundColor: Colors.redAccent,
-                    smallSize: 10,
-                    child: Icon(tab.icon),
+                  icon: KeyedSubtree(
+                    key: tab.label == '샵' ? TutorialManager.shopNavKey : null,
+                    child: Badge(
+                      isLabelVisible: tab.screen is CharacterScreen && showCollectionDot,
+                      backgroundColor: Colors.redAccent,
+                      smallSize: 10,
+                      child: Icon(tab.icon),
+                    ),
                   ),
                   label: tab.label,
                 ),

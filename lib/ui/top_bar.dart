@@ -4,6 +4,7 @@ import '../managers/consumable_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/speed_manager.dart';
 import '../models/consumable_item_model.dart';
+import '../utils/number_formatter.dart';
 import 'dispatch_screen.dart';
 import 'settings_dialog.dart';
 
@@ -53,53 +54,71 @@ class TopBar extends StatelessWidget {
           ),
           const Spacer(),
           const SpeedButton(),
-          AnimatedBuilder(
-            animation: GameManager.instance,
-            builder: (context, _) {
-              return Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF20202C),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF3A3A4A)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.monetization_on,
-                      color: Colors.amber,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${GameManager.instance.gold}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+          // Flexible로 감싸는 이유: 예전엔 이 통화 표시 Container가 콘텐츠
+          // 크기만큼 무한정 늘어날 수 있었다 — 숫자가 커지면(수억~수조
+          // 단위) 왼쪽 아이콘(설정/파견 등)을 밀어내거나 Row 자체가
+          // 오버플로우될 수 있었다(main.dart의 AppBar actions와 동일한
+          // 문제이자 동일한 해법 — 이 위젯 자체가 그 AppBar와
+          // "pixel-identical"하게 유지하려는 목적이라 함께 고쳤다).
+          // NumberFormatter의 K/M/B/T 축약 덕분에 실제로 이 한계에 걸릴
+          // 일은 거의 없지만, Text의 ellipsis까지 이중으로 방어해 둔다.
+          Flexible(
+            child: AnimatedBuilder(
+              animation: GameManager.instance,
+              builder: (context, _) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF20202C),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF3A3A4A)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.monetization_on,
+                        color: Colors.amber,
+                        size: 18,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Icon(
-                      Icons.diamond,
-                      color: Colors.cyanAccent,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${GameManager.instance.gems}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          NumberFormatter.format(GameManager.instance.gold.toDouble()),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
+                      const SizedBox(width: 10),
+                      const Icon(
+                        Icons.diamond,
+                        color: Colors.cyanAccent,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          NumberFormatter.format(GameManager.instance.gems.toDouble()),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
         ],
       ),

@@ -155,21 +155,25 @@ class MonthlyAttendanceManager extends ChangeNotifier {
     final String? raw = prefs.getString(_saveKey);
 
     if (raw != null) {
-      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-      _currentMonthKey = data['currentMonthKey'] as String?;
+      try {
+        final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+        _currentMonthKey = data['currentMonthKey'] as String?;
 
-      final List<dynamic>? days = data['claimedDays'] as List<dynamic>?;
-      if (days != null) {
-        claimedDays
-          ..clear()
-          ..addAll(days.map((e) => e as int));
-      }
+        final List<dynamic>? days = data['claimedDays'] as List<dynamic>?;
+        if (days != null) {
+          claimedDays
+            ..clear()
+            ..addAll(days.map((e) => e as int));
+        }
 
-      final List<dynamic>? boxes = data['claimedBoxMilestones'] as List<dynamic>?;
-      if (boxes != null) {
-        claimedBoxMilestones
-          ..clear()
-          ..addAll(boxes.map((e) => e as int));
+        final List<dynamic>? boxes = data['claimedBoxMilestones'] as List<dynamic>?;
+        if (boxes != null) {
+          claimedBoxMilestones
+            ..clear()
+            ..addAll(boxes.map((e) => e as int));
+        }
+      } catch (error) {
+        debugPrint('[MonthlyAttendanceManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
       }
     }
 

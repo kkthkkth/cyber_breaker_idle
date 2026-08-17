@@ -195,36 +195,40 @@ class DungeonManager extends ChangeNotifier with WidgetsBindingObserver {
     final String? raw = prefs.getString(_saveKey);
 
     if (raw != null) {
-      final Map<String, dynamic> data =
-          jsonDecode(raw) as Map<String, dynamic>;
+      try {
+        final Map<String, dynamic> data =
+            jsonDecode(raw) as Map<String, dynamic>;
 
-      goldDungeonTickets =
-          data['goldDungeonTickets'] as int? ?? goldDungeonTickets;
-      equipmentDungeonTickets =
-          data['equipmentDungeonTickets'] as int? ?? equipmentDungeonTickets;
-      petDungeonTickets = data['petDungeonTickets'] as int? ?? petDungeonTickets;
-      // 예전 저장 파일은 "지금 도전 중인 층"(1부터 시작하는 currentFloor)을
-      // 저장했다 — 그 값이 남아있으면 새 의미(최고 클리어 층수, 0부터
-      // 시작)로 변환해서 기존 유저의 진행도가 1층으로 리셋되지 않게 한다.
-      if (data.containsKey('highestClearedFloor')) {
-        highestClearedFloor =
-            data['highestClearedFloor'] as int? ?? highestClearedFloor;
-      } else if (data['currentFloor'] is int) {
-        highestClearedFloor = ((data['currentFloor'] as int) - 1).clamp(0, 1 << 30);
-      }
-      dailyTowerSweepCount =
-          data['dailyTowerSweepCount'] as int? ?? dailyTowerSweepCount;
-      // lastResetDate used to be saved as a millisecondsSinceEpoch int;
-      // migrate old saves instead of crashing on the type cast.
-      final dynamic savedResetDate = data['lastResetDate'];
-      if (savedResetDate is String) {
-        _lastResetDate = savedResetDate;
-      } else if (savedResetDate is int) {
-        _lastResetDate = _formatDate(
-          DateTime.fromMillisecondsSinceEpoch(savedResetDate),
-        );
-      } else {
-        _lastResetDate = null;
+        goldDungeonTickets =
+            data['goldDungeonTickets'] as int? ?? goldDungeonTickets;
+        equipmentDungeonTickets =
+            data['equipmentDungeonTickets'] as int? ?? equipmentDungeonTickets;
+        petDungeonTickets = data['petDungeonTickets'] as int? ?? petDungeonTickets;
+        // 예전 저장 파일은 "지금 도전 중인 층"(1부터 시작하는 currentFloor)을
+        // 저장했다 — 그 값이 남아있으면 새 의미(최고 클리어 층수, 0부터
+        // 시작)로 변환해서 기존 유저의 진행도가 1층으로 리셋되지 않게 한다.
+        if (data.containsKey('highestClearedFloor')) {
+          highestClearedFloor =
+              data['highestClearedFloor'] as int? ?? highestClearedFloor;
+        } else if (data['currentFloor'] is int) {
+          highestClearedFloor = ((data['currentFloor'] as int) - 1).clamp(0, 1 << 30);
+        }
+        dailyTowerSweepCount =
+            data['dailyTowerSweepCount'] as int? ?? dailyTowerSweepCount;
+        // lastResetDate used to be saved as a millisecondsSinceEpoch int;
+        // migrate old saves instead of crashing on the type cast.
+        final dynamic savedResetDate = data['lastResetDate'];
+        if (savedResetDate is String) {
+          _lastResetDate = savedResetDate;
+        } else if (savedResetDate is int) {
+          _lastResetDate = _formatDate(
+            DateTime.fromMillisecondsSinceEpoch(savedResetDate),
+          );
+        } else {
+          _lastResetDate = null;
+        }
+      } catch (error) {
+        debugPrint('[DungeonManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
       }
     }
 

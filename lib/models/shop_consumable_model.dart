@@ -91,6 +91,19 @@ class ShopConsumableEntry {
     return AppImages.affectionGiftIcon(isGemTier: baseCurrency == ShopCurrency.gem);
   }
 
+  /// [iconPath] 로드가 실패했을 때(예: `items/affection/gem.png` 404) 대신
+  /// 보여줄 안전한 대체 아이콘 — 호감도 아이템은 이미 상단 재화 UI에서
+  /// 항상 정상적으로 뜨는 걸로 검증된 [AppImages.iconGem]/[AppImages.iconGold]
+  /// 로 대체한다. 물약/충전권은 등급/전용 아이콘이라 마땅한 범용 대체가
+  /// 없어 null(기존과 동일하게 [CustomSafeImage]의 회색 placeholder로
+  /// 남는다).
+  String? get iconFallbackPath {
+    if (isAffectionGift) {
+      return baseCurrency == ShopCurrency.gem ? AppImages.iconGem : AppImages.iconGold;
+    }
+    return null;
+  }
+
   /// `grade` 컬럼 값을 [ItemGrade]로 변환한다 — `ItemGrade.values.byName`은
   /// 대소문자가 정확히 일치하지 않거나(`'SSR'` vs `ssr`) 값이 빈 문자열
   /// (NULL이 아니라 `''`인 컬럼도 흔하다)이거나 아예 알려지지 않은 값이면

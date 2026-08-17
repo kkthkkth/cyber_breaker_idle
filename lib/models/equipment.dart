@@ -273,6 +273,8 @@ class Equipment {
     this.mainStat,
     this.subStats = const [],
     this.classType,
+    this.specialStats = const {},
+    this.setId,
   });
 
   final String id;
@@ -305,6 +307,22 @@ class Equipment {
   /// 뽑을 때 [mainStat]과 같은 타입을 제외한 나머지 7종 풀에서 중복 없이
   /// 골라 채운다.
   final List<EquipmentOption> subStats;
+
+  /// 펫([EquipType.pet]) 전용 특수 보너스 — [PetSpecialStat]의 6개 키(골드
+  /// 획득량/드랍률/보스 데미지/최종 공격력 증폭/스킬 쿨감/크리티컬
+  /// 데미지) 중 실제로 이 펫이 굴린 것만 담긴다. 값은 전부 비율(0.05 ==
+  /// +5%)로 해석된다. 펫이 아닌 부위는 항상 빈 맵 — [attack]/[defense]류
+  /// [EquipmentStatType]과 겹치지 않는 별도 네임스페이스라 [subStats]와
+  /// 섞이지 않는다([PetStatMetadataManager]가 등급별 값 범위를 관리하고,
+  /// [EquipmentManager.generateLootOfType]이 가챠 시점에 굴려 채운다).
+  final Map<String, double> specialStats;
+
+  /// 세트 장비 소속 id(예: 'set_fire_knight') — 이 값이 같은 장비를 여러
+  /// 부위 동시 장착하면 [EquipmentSetManager]가 세트 효과를 발동시킨다.
+  /// 세트에 속하지 않는(대부분의) 장비는 null. [EquipType.pet]/
+  /// [EquipType.character]에도 이론적으로 붙을 수 있지만, 실제 세트
+  /// 카탈로그는 장비 부위(무기/방어구류) 중심으로 구성하는 것을 권장한다.
+  final String? setId;
 
   /// UI에서 옵션 텍스트를 렌더링할 때 쓰는 표시 순서 — 메인 스탯이 항상
   /// 최상단에 오고, 그 아래로 서브 옵션이 이어진다.
@@ -397,6 +415,8 @@ class Equipment {
       'mainStat': mainStat?.toJson(),
       'subStats': subStats.map((option) => option.toJson()).toList(),
       'classType': classType?.name,
+      'specialStats': specialStats,
+      'setId': setId,
     };
   }
 
@@ -425,6 +445,14 @@ class Equipment {
       classType: json['classType'] != null
           ? CharacterClass.values.byName(json['classType'] as String)
           : null,
+      // 이 필드가 생기기 전에 저장된 기존 데이터(펫 포함)는 이 키 자체가
+      // 없다 — 그런 경우 빈 맵으로 안전하게 대체한다(신규 필드 추가 시
+      // 항상 지키는 JSON 호환성 관례).
+      specialStats: (json['specialStats'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, (value as num).toDouble()),
+          ) ??
+          const {},
+      setId: json['setId'] as String?,
     );
   }
 
@@ -498,6 +526,10 @@ class EquipmentFactory {
   /// EquipmentManager의 레벨업/자동장착 비교 로직이 여전히 이 필드를 쓰므로
   /// 호출부(가챠 등급 굴림)에서 넘겨줄 수 있게 열어두고, 안 넘기면 1.0.
   /// [star]도 마찬가지로 합성(별 진화) 결과물에 곧바로 반영할 수 있게 노출.
+  /// [specialStats]는 펫([EquipType.pet]) 전용 — DB(`pet_stat_metadata`)
+  /// 기반 값 범위에서 굴리는 로직이라 이 순수 팩토리 밖(호출부인
+  /// [EquipmentManager.generateLootOfType])에서 미리 계산해 넘긴다. 다른
+  /// 타입은 항상 기본값(빈 맵)을 그대로 쓴다.
   static Equipment generate({
     required EquipType type,
     required ItemGrade grade,
@@ -507,6 +539,8 @@ class EquipmentFactory {
     double statMultiplier = 1.0,
     int star = 0,
     CharacterClass? classType,
+    Map<String, double> specialStats = const {},
+    String? setId,
   }) {
     final EquipmentStatType mainStatType = _defensiveTypes.contains(type)
         ? EquipmentStatType.defense
@@ -537,6 +571,8 @@ class EquipmentFactory {
       classType: type == EquipType.character
           ? (classType ?? _deriveClassType(subId))
           : null,
+      specialStats: specialStats,
+      setId: setId,
     );
   }
 

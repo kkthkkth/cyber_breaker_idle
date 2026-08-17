@@ -185,7 +185,12 @@ class _ChargeTicketDialog extends StatelessWidget {
                           contentPadding: EdgeInsets.zero,
                           leading: ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: CustomSafeImage(path: entry.iconPath, width: 36, height: 36),
+                            child: CustomSafeImage(
+                              path: entry.iconPath,
+                              fallbackPath: entry.iconFallbackPath,
+                              width: 36,
+                              height: 36,
+                            ),
                           ),
                           title: Text(entry.name, style: const TextStyle(color: Colors.white)),
                           subtitle: Text(

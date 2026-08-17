@@ -95,7 +95,7 @@ String guildRoleLabel(GuildRole role) => switch (role) {
   GuildRole.member => '길드원',
 };
 
-/// `guild_members` + `profiles(nickname)` 임베드 조회 결과 한 행 —
+/// `guild_members` + `profiles(nickname, last_seen)` 임베드 조회 결과 한 행 —
 /// [GuildMainScreen]의 "길드원 목록" 탭 리스트 아이템.
 class GuildMember {
   const GuildMember({
@@ -103,6 +103,7 @@ class GuildMember {
     required this.nickname,
     required this.role,
     required this.contribution,
+    this.lastSeen,
   });
 
   final String userId;
@@ -110,14 +111,81 @@ class GuildMember {
   final GuildRole role;
   final int contribution;
 
+  /// `profiles.last_seen` — [SupabaseManager.updateLastSeen]이 앱 실행
+  /// 시/주기적으로 갱신하는 접속 heartbeat. 컬럼이 아직 없거나(마이그레이션
+  /// 전) 한 번도 접속한 적 없는 계정이면 null.
+  final DateTime? lastSeen;
+
+  /// 접속중(🟢) 판정 기준 — 최근 이 시간 안에 [lastSeen]이 갱신됐으면
+  /// 접속중으로 간주한다. [SupabaseManager.lastSeenInterval](하트비트
+  /// 주기)보다 충분히 여유 있게 잡아, 하트비트 사이 잠깐의 텀만으로
+  /// 오프라인으로 잘못 표시되지 않게 한다.
+  static const Duration onlineThreshold = Duration(minutes: 5);
+
+  bool get isOnline {
+    final DateTime? seen = lastSeen;
+    if (seen == null) {
+      return false;
+    }
+    return DateTime.now().difference(seen) <= onlineThreshold;
+  }
+
   factory GuildMember.fromJson(Map<String, dynamic> json) {
     final Map<String, dynamic>? profile = json['profiles'] as Map<String, dynamic>?;
     final String? nickname = profile?['nickname'] as String?;
+    final String? lastSeenRaw = profile?['last_seen'] as String?;
     return GuildMember(
       userId: json['user_id'] as String,
       nickname: (nickname == null || nickname.trim().isEmpty) ? '익명의 모험가' : nickname,
       role: guildRoleFromString(json['role'] as String?),
       contribution: (json['contribution'] as num?)?.toInt() ?? 0,
+      lastSeen: lastSeenRaw == null ? null : DateTime.tryParse(lastSeenRaw)?.toLocal(),
+    );
+  }
+}
+
+/// `guild_messages` + `profiles(nickname)` 임베드 조회(초기 히스토리) 또는
+/// Realtime `postgres_changes` INSERT 페이로드(신규 메시지, profiles 임베드
+/// 없음) 한 건 — [GuildChatManager]/길드 채팅 탭 리스트 아이템.
+class GuildMessage {
+  const GuildMessage({
+    required this.id,
+    required this.guildId,
+    required this.userId,
+    required this.nickname,
+    required this.message,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String guildId;
+  final String userId;
+  final String nickname;
+  final String message;
+  final DateTime createdAt;
+
+  /// [json]에 `profiles(nickname)` 임베드가 있으면(초기 히스토리 조회) 그
+  /// 값을 쓰고, 없으면(Realtime INSERT 페이로드는 임베드를 지원하지 않는다)
+  /// [resolveNickname](보통 이미 로드된 [GuildManager.members] 로스터에서
+  /// 찾는 콜백)로 대신 채운다 — 두 경로(초기 로드/실시간 수신)가 같은
+  /// factory 하나를 공유한다.
+  factory GuildMessage.fromJson(
+    Map<String, dynamic> json, {
+    required String Function(String userId) resolveNickname,
+  }) {
+    final String userId = json['user_id'] as String;
+    final Map<String, dynamic>? profile = json['profiles'] as Map<String, dynamic>?;
+    final String? embeddedNickname = profile?['nickname'] as String?;
+    final String nickname = (embeddedNickname != null && embeddedNickname.trim().isNotEmpty)
+        ? embeddedNickname
+        : resolveNickname(userId);
+    return GuildMessage(
+      id: json['id'].toString(),
+      guildId: json['guild_id'].toString(),
+      userId: userId,
+      nickname: nickname,
+      message: json['message'] as String,
+      createdAt: DateTime.parse(json['created_at'] as String).toLocal(),
     );
   }
 }

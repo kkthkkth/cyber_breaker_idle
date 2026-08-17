@@ -92,9 +92,13 @@ class GuildShopManager extends ChangeNotifier {
     if (raw == null) {
       return;
     }
-    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
-    _catalog = decoded
-        .map((entry) => GuildShopItem.fromJson(entry as Map<String, dynamic>))
-        .toList();
+    try {
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      _catalog = decoded
+          .map((entry) => GuildShopItem.fromJson(entry as Map<String, dynamic>))
+          .toList();
+    } catch (error) {
+      debugPrint('[GuildShopManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+    }
   }
 }

@@ -92,18 +92,22 @@ class AttendanceManager extends ChangeNotifier {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    attendanceDays = data['attendanceDays'] as int? ?? 0;
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      attendanceDays = data['attendanceDays'] as int? ?? 0;
 
-    final int? lastMillis = data['lastLoginDate'] as int?;
-    lastLoginDate =
-        lastMillis != null ? DateTime.fromMillisecondsSinceEpoch(lastMillis) : null;
+      final int? lastMillis = data['lastLoginDate'] as int?;
+      lastLoginDate =
+          lastMillis != null ? DateTime.fromMillisecondsSinceEpoch(lastMillis) : null;
 
-    final List<dynamic>? claimed = data['claimedDays'] as List<dynamic>?;
-    if (claimed != null) {
-      claimedDays
-        ..clear()
-        ..addAll(claimed.map((e) => e as int));
+      final List<dynamic>? claimed = data['claimedDays'] as List<dynamic>?;
+      if (claimed != null) {
+        claimedDays
+          ..clear()
+          ..addAll(claimed.map((e) => e as int));
+      }
+    } catch (error) {
+      debugPrint('[AttendanceManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
   }
 }

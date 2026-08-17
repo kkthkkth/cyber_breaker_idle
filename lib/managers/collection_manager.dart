@@ -106,12 +106,16 @@ class CollectionManager extends ChangeNotifier {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    final List<dynamic> completedIds = data['completedIds'] as List<dynamic>? ?? [];
-    for (final CollectionModel collection in collections) {
-      if (completedIds.contains(collection.id)) {
-        collection.isCompleted = true;
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final List<dynamic> completedIds = data['completedIds'] as List<dynamic>? ?? [];
+      for (final CollectionModel collection in collections) {
+        if (completedIds.contains(collection.id)) {
+          collection.isCompleted = true;
+        }
       }
+    } catch (error) {
+      debugPrint('[CollectionManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
     notifyListeners();
   }

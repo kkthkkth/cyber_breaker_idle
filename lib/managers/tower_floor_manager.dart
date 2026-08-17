@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -58,15 +59,61 @@ class TowerFloorManager {
     await _saveLocal();
   }
 
-  /// [floor]에 해당하는 층 데이터 — 테이블에 없으면 null(호출부가 안내
-  /// 문구를 보여주거나, 아직 등록 안 된 층이라 도전을 막는 등 처리한다).
+  /// [floor]에 해당하는 층 데이터 — DB에 그 층이 직접 등록돼 있으면 그
+  /// 값을 그대로 쓰고, 시딩된 최고 층보다 더 높은 층이면(예: 101층인데
+  /// 100층까지만 등록됨) 그 최고 층을 기준으로 [_syntheticFloorData]가
+  /// 지수 스케일링 공식으로 즉석에서 만들어 준다 — "무한"의 탑이 실제로
+  /// DB 시딩 범위를 넘어서도 끝없이 이어지게 한다(요구사항: "층수가
+  /// 올라감에 따라... 지수/지속 스케일링 공식으로 커지도록"). 카탈로그
+  /// 자체가 아직 한 번도 로드되지 않았으면(완전히 비어 있으면) null —
+  /// 이 경우만 호출부가 "아직 불러오는 중" 안내를 보여준다.
   TowerFloor? floorData(int floor) {
+    if (_floors.isEmpty) {
+      return null;
+    }
     for (final TowerFloor data in _floors) {
       if (data.floor == floor) {
         return data;
       }
     }
+    final TowerFloor highestSeeded = _floors.last;
+    if (floor > highestSeeded.floor) {
+      return _syntheticFloorData(floor, anchor: highestSeeded);
+    }
+    // 시딩된 범위 안인데 특정 층 하나만 빠진 경우(운영 실수로 생긴 구멍) —
+    // 존재하지 않는 층으로 잘못 클리어 처리되는 사고를 막기 위해
+    // 예전처럼 null을 돌려준다(합성 대상은 "최고 시딩 층 이후"로만
+    // 한정한다).
     return null;
+  }
+
+  /// [anchor](DB에 마지막으로 등록된 층)를 기준으로, 그보다 [floor]가
+  /// 얼마나 더 높은지에 비례해 몬스터 HP/공격력/보상을 지수적으로
+  /// 키운다. 매 층 5% 안팎으로 계속 불어나는 "지속 스케일링" 곡선이라,
+  /// 층이 아무리 높아져도 멈추지 않는다. 밸런스 수치는 정확한 기획 데이터
+  /// 없이 임의로 정한 값이니, 실제 수치가 정해지면 이 두 상수만 바꾸면
+  /// 된다.
+  static const double _hpGrowthPerFloor = 1.05;
+  static const double _attackGrowthPerFloor = 1.04;
+  static const double _goldGrowthPerFloor = 1.03;
+
+  TowerFloor _syntheticFloorData(int floor, {required TowerFloor anchor}) {
+    final int stepsBeyondAnchor = floor - anchor.floor;
+    // anchor 자체의 HP/ATK가 0으로 시딩돼 있으면(운영 데이터 미비) 최소
+    // 바닥값을 깔아 스케일링이 0에서 영원히 0으로만 남는 사고를 막는다.
+    final double baseHp = anchor.monsterHp > 0 ? anchor.monsterHp : 60;
+    final double baseAttack = anchor.monsterAttack > 0 ? anchor.monsterAttack : 10;
+    final int baseGold = anchor.rewardGold > 0 ? anchor.rewardGold : floor * 30;
+
+    return TowerFloor(
+      floor: floor,
+      monsterHp: baseHp * pow(_hpGrowthPerFloor, stepsBeyondAnchor),
+      monsterAttack: baseAttack * pow(_attackGrowthPerFloor, stepsBeyondAnchor),
+      // 보석은 완만하게(5층마다 +1) — 골드/HP처럼 매 층 복리로 불리면
+      // 너무 빨리 인플레이션이 난다.
+      rewardGem: anchor.rewardGem + (stepsBeyondAnchor ~/ 5),
+      rewardGold: (baseGold * pow(_goldGrowthPerFloor, stepsBeyondAnchor)).round(),
+    );
   }
 
   static const String _saveKey = 'tower_floor_manager_save';
@@ -85,9 +132,13 @@ class TowerFloorManager {
     if (raw == null) {
       return;
     }
-    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
-    _floors = decoded
-        .map((entry) => TowerFloor.fromJson(entry as Map<String, dynamic>))
-        .toList();
+    try {
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      _floors = decoded
+          .map((entry) => TowerFloor.fromJson(entry as Map<String, dynamic>))
+          .toList();
+    } catch (error) {
+      debugPrint('[TowerFloorManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+    }
   }
 }

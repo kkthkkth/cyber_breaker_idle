@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../constants/app_images.dart';
 import '../constants/character_class_config.dart';
+import '../managers/character_meta_manager.dart';
 import '../managers/consumable_manager.dart';
 import '../managers/dungeon_manager.dart';
 import '../managers/equipment_manager.dart';
@@ -15,9 +16,14 @@ import '../managers/game_manager.dart';
 import '../managers/guild_manager.dart';
 import '../managers/mission_manager.dart';
 import '../managers/potion_manager.dart';
+import '../managers/skill_manager.dart';
+import '../managers/sound_manager.dart';
 import '../managers/speed_manager.dart';
 import '../managers/tower_floor_manager.dart';
+import '../managers/weekday_dungeon_manager.dart';
 import '../managers/world_boss_manager.dart';
+import '../models/active_skill_model.dart';
+import '../models/character_model.dart';
 import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
 import '../models/mission_model.dart';
@@ -33,6 +39,8 @@ enum GameMode {
   petDungeon,
   worldBoss,
   guildDungeon,
+  weekdayDungeon,
+  guildRaid,
 }
 
 /// 메인 스테이지 전용 조우 상태 — [GameMode.mainStage]일 때만 의미가
@@ -134,9 +142,15 @@ class IdleGame extends FlameGame {
 
   /// [_monster]/[_player]의 실제 시각적 중심(피격 이펙트/투사체 시작·착탄점/
   /// 데미지 텍스트 기준점) — 둘 다 [Anchor.bottomCenter]라 `position`이
-  /// 발밑(바닥 길)을 가리키므로, 몸통 중앙은 그보다 half-height만큼 위다.
+  /// 발밑(바닥 길)을 가리킨다. [_monster]는 순수 사각형(RectangleComponent,
+  /// 여백 없음)이라 half-height가 곧 실제 중심이지만, [_player]는 스프라이트
+  /// 캔버스 안에 여백이 있으므로 half-height가 아니라
+  /// [PlayerAnimationComponent.bodyCenterHeightRatio]를 쓴다 — 512px
+  /// 캔버스 전체 절반이 아니라 실제 캐릭터 몸통 위치를 가리키도록 하기
+  /// 위함이다([PlayerAnimationComponent.bodyCenterHeightRatio] 문서 참고).
   Vector2 get _monsterCenter => _monster.position - Vector2(0, _monster.size.y / 2);
-  Vector2 get _playerCenter => _player.position - Vector2(0, _player.size.y / 2);
+  Vector2 get _playerCenter => _player.position -
+      Vector2(0, _player.size.y * PlayerAnimationComponent.bodyCenterHeightRatio);
 
   /// 몬스터 처치 연출(스케일/페이드 아웃) 재생 중 — 이 동안은 공격/피격
   /// 타이머를 전부 멈춰서 죽어가는 몬스터를 계속 때리거나 죽는 몬스터가
@@ -206,9 +220,16 @@ class IdleGame extends FlameGame {
   /// 이 몬스터를 보면 바로 "길드 콘텐츠"로 인지되게 한다.
   static const Color _guildDungeonMonsterColor = Color(0xFF6C4FCE);
 
+  /// 길드 레이드 전용 — 일반 길드 던전(보라색)과 한눈에 구분되도록 위협적인
+  /// 진홍색을 쓴다.
+  static const Color _guildRaidMonsterColor = Color(0xFFD32F2F);
+
   static const double _goldDungeonDuration = 60.0;
   static const double _equipDungeonDuration = 60.0;
   static const double _petDungeonDuration = 60.0;
+
+  /// 무한의 탑 전용 타임어택 제한 시간(초) — 요구사항 예시(45초) 그대로.
+  static const double _towerDungeonDuration = 45.0;
 
   /// 월드보스 도전 1회의 제한 시간(초) — 일반 던전과 같은 "던전형 전투"
   /// 타이머 패턴을 그대로 재사용한다.
@@ -219,6 +240,14 @@ class IdleGame extends FlameGame {
   /// "타임아웃=성공"이 아니다 — 요구사항의 "던전 클리어 시 보상 지급"은
   /// 처치가 목표라는 뜻이다).
   static const double _guildDungeonDuration = 60.0;
+
+  /// 길드 레이드 전투 1회의 제한 시간(초) — 요구사항 예시(30초) 그대로.
+  /// 월드보스와 같은 "처치가 아니라 누적 데미지가 목표" 구조라, 이 시간
+  /// 안에 로컬 표시 체력이 0이 돼도 [_damageDungeonMonster]가 같은 체력으로
+  /// 다시 채워서 계속 때릴 수 있게 한다 — 실제 서버 보스 체력 차감은
+  /// [GuildRaidManager.submitDamage]가 이 30초가 끝난 뒤 누적 데미지를 한
+  /// 번에 제출해 처리한다.
+  static const double _guildRaidDuration = 30.0;
 
   /// '펫 산책로' 보스를 잡으면 한 번에 지급되는 발바닥 수량.
   static const int _petDungeonPawprintReward = 300;
@@ -239,12 +268,33 @@ class IdleGame extends FlameGame {
   static const int _guildDungeonGemReward = 20;
   static const int _guildDungeonCoinReward = 30;
 
+  /// 요일 던전(월~일 매일 다른 보상, [WeekdayDungeonManager]) 전용 —
+  /// 골드 던전/월드보스처럼 "제한 시간 안에 몬스터를 몇 마리나 잡는지"가
+  /// 목표인 파도(Wave) 형이라, 처치할 때마다 다음 파도를 곧바로 다시
+  /// 스폰한다([_damageDungeonMonster]의 weekdayDungeon 분기 참고).
+  static const Color _weekdayDungeonMonsterColor = Color(0xFF2ECC71);
+  static const double _weekdayDungeonDuration = 60.0;
+
   /// 이번 월드보스 도전에서 누적으로 가한 데미지 — [WorldBossBattleScreen]
   /// 이 도전이 끝난 뒤 이 값을 읽어 [WorldBossManager.recordBattleDamage]
   /// 에 반영한다. 골드 던전의 [_dungeonGoldEarned]와 같은 성격의 "실시간
   /// 누적" 필드다.
   double _worldBossDamageDealt = 0;
   double get worldBossDamageDealt => _worldBossDamageDealt;
+
+  /// 이번 길드 레이드 도전에서 누적으로 가한 데미지 —
+  /// [GuildRaidScreen]이 도전이 끝난 뒤 이 값을 읽어
+  /// [GuildRaidManager.submitDamage]에 한 번에 제출한다
+  /// ([worldBossDamageDealt]와 같은 성격의 "실시간 누적" 필드다).
+  double _guildRaidDamageDealt = 0;
+  double get guildRaidDamageDealt => _guildRaidDamageDealt;
+
+  /// [GuildRaidScreen]이 [startDungeon]을 호출하기 직전에 서버에서 받아온
+  /// 공유 보스의 현재 체력으로 채워 둔다 — 로컬 전투 화면의 체력 바가
+  /// "지금 실제 보스 체력"에서 시작하도록 하기 위함(다른 길드원이 이미
+  /// 깎아 둔 상태를 그대로 반영). [_activateDungeon]이 이 값을 초기 몬스터
+  /// 체력으로 그대로 스폰한다.
+  double guildRaidBossHp = 0;
 
   GameMode mode = GameMode.mainStage;
   double dungeonMonsterHp = 0;
@@ -256,6 +306,11 @@ class IdleGame extends FlameGame {
   bool _isSweepMode = false;
   bool _dungeonEnding = false;
   int _dungeonGoldEarned = 0;
+
+  /// 요일 던전에서 지금까지 처치한 파도(몬스터) 수 — 제한 시간이 끝나면
+  /// [WeekdayDungeonManager.grantWaveReward]에 그대로 넘겨 보상을
+  /// 산정한다. 한 마리도 못 잡았으면(0) 실패로 취급한다.
+  int _weekdayDungeonWaveCleared = 0;
 
   /// Fired once when a dungeon run ends (win, loss, or timeout).
   void Function({
@@ -318,7 +373,7 @@ class IdleGame extends FlameGame {
     add(_monster);
     _monster.add(_monsterEmoji);
 
-    manager.onSkillUsed = _castSkill;
+    SkillManager.instance.onActiveSkillCast = castActiveSkill;
 
     // 장착 캐릭터/펫이 바뀔 때(가챠/장착 화면)마다 새 캐릭터의 프레임을
     // 다시 불러오고 펫 표시 여부를 갱신한다 — dungeon_screen.dart처럼 이
@@ -351,8 +406,10 @@ class IdleGame extends FlameGame {
       EquipmentManager.instance.equippedItems[EquipType.character]?.gradeBadgeLabel ?? 'N1';
 
   /// 장착된 캐릭터의 직업 — 미장착(초기 상태 등)이면 전사로 취급한다.
-  /// [_battleStopX](사거리)와 [_fireProjectile](공격 방식 분기) 둘 다 이
-  /// getter 하나로 결정된다.
+  /// [_battleStopX](사거리)와 [_fireProjectile](원거리일 때의 투사체
+  /// 비주얼)이 이 getter를 쓴다 — 근접/원거리 자체의 분기는 더 이상
+  /// 여기서 오지 않고 [CharacterMetaManager.attackTypeFor]([_fireProjectile]
+  /// 문서 참고)가 결정한다.
   CharacterClass get _equippedCharacterClass =>
       EquipmentManager.instance.equippedItems[EquipType.character]?.classType ??
       CharacterClass.warrior;
@@ -613,6 +670,7 @@ class IdleGame extends FlameGame {
     _dungeonEnding = false;
     _dungeonGoldEarned = 0;
     _worldBossDamageDealt = 0;
+    _guildRaidDamageDealt = 0;
     // 던전은 걸어 들어가는 연출 없이 곧장 전투 상태다.
     _player.setDesiredState(PlayerState.attacking);
 
@@ -624,7 +682,11 @@ class IdleGame extends FlameGame {
         dungeonTimeRemaining = _equipDungeonDuration;
         _spawnDungeonMonster(hp: 1200, color: _equipDungeonMonsterColor);
       case GameMode.towerOfInfinity:
-        dungeonTimeRemaining = -1;
+        // 무한의 탑 전용 타임어택 — 예전엔 -1(무제한)이라 시간에 쫓기지
+        // 않고 계속 때릴 수 있었다. 요구사항대로 45초 제한을 걸어서, 이
+        // 시간 안에 못 잡으면(update()의 공용 타임아웃 분기가 그대로
+        // cleared=false로 처리) 실패로 끝난다.
+        dungeonTimeRemaining = _towerDungeonDuration;
         final int baseFloor = DungeonManager.instance.currentFloor;
         final int floor = isSweepMode ? (baseFloor - 1).clamp(1, baseFloor) : baseFloor;
         // 예전엔 이 자리에서 `60 * 1.25^(floor-1)` 같은 하드코딩 수식으로
@@ -651,9 +713,31 @@ class IdleGame extends FlameGame {
       case GameMode.guildDungeon:
         dungeonTimeRemaining = _guildDungeonDuration;
         _spawnDungeonMonster(hp: _guildDungeonMonsterHp, color: _guildDungeonMonsterColor);
+      case GameMode.weekdayDungeon:
+        dungeonTimeRemaining = _weekdayDungeonDuration;
+        _weekdayDungeonWaveCleared = 0;
+        _spawnDungeonMonster(hp: _weekdayWaveHp(1), color: _weekdayDungeonMonsterColor);
+      case GameMode.guildRaid:
+        dungeonTimeRemaining = _guildRaidDuration;
+        _spawnDungeonMonster(
+          hp: guildRaidBossHp > 0 ? guildRaidBossHp : 1,
+          color: _guildRaidMonsterColor,
+          emoji: '👹',
+        );
       case GameMode.mainStage:
         break;
     }
+  }
+
+  /// 요일 던전 [wave]번째(1부터 시작) 몬스터 체력 — 파도가 진행될수록
+  /// [WeekdayDungeonManager.waveHpMultiplier]만큼 불어나고, 매
+  /// [WeekdayDungeonManager.bossWaveInterval]번째마다 "보스 파도"로
+  /// [WeekdayDungeonManager.bossWaveMultiplier]배 더 강해진다.
+  double _weekdayWaveHp(int wave) {
+    final double scaled = WeekdayDungeonManager.baseWaveMonsterHp *
+        (1 + WeekdayDungeonManager.waveHpMultiplier * (wave - 1));
+    final bool isBossWave = wave % WeekdayDungeonManager.bossWaveInterval == 0;
+    return isBossWave ? scaled * WeekdayDungeonManager.bossWaveMultiplier : scaled;
   }
 
   void _spawnDungeonMonster({required double hp, required Color color, String emoji = ''}) {
@@ -759,17 +843,33 @@ class IdleGame extends FlameGame {
       dungeonTimeRemaining -= combatDt;
       if (dungeonTimeRemaining <= 0) {
         dungeonTimeRemaining = 0;
-        final bool isGoldDungeon = mode == GameMode.goldDungeon;
         // 월드보스는 처치가 아니라 "60초 생존 + 누적 데미지"가 목표라
         // 타임아웃 자체가 곧 성공이다 — 다만 골드 보상은 골드 던전
         // 전용이라 여기선 지급하지 않는다(보상은
         // [WorldBossBattleScreen]이 [worldBossDamageDealt]를 읽어
         // [WorldBossManager.recordBattleDamage]로 별도 처리한다).
-        final bool cleared = isGoldDungeon || mode == GameMode.worldBoss;
-        _endDungeon(
-          success: cleared,
-          goldReward: isGoldDungeon ? _dungeonGoldEarned : 0,
-        );
+        if (mode == GameMode.weekdayDungeon) {
+          // 요일 던전은 처치 수(파도)만큼 보상이 붙는 구조라, 골드 던전
+          // 처럼 단순 bool이 아니라 실제 파도 수를
+          // [WeekdayDungeonManager.grantWaveReward]에 넘겨 그 자리에서
+          // 재화를 지급한다 — 한 마리도 못 잡았으면 실패로 끝난다.
+          final ({String label, int amount})? reward =
+              WeekdayDungeonManager.instance.grantWaveReward(_weekdayDungeonWaveCleared);
+          _endDungeon(
+            success: _weekdayDungeonWaveCleared > 0,
+            goldReward: 0,
+            consumableItemReward:
+                reward != null ? '${reward.label} +${reward.amount}' : null,
+          );
+        } else {
+          final bool isGoldDungeon = mode == GameMode.goldDungeon;
+          final bool cleared =
+              isGoldDungeon || mode == GameMode.worldBoss || mode == GameMode.guildRaid;
+          _endDungeon(
+            success: cleared,
+            goldReward: isGoldDungeon ? _dungeonGoldEarned : 0,
+          );
+        }
       }
     }
 
@@ -824,18 +924,24 @@ class IdleGame extends FlameGame {
     return (fireCount: fireCount, remainingTimer: timer);
   }
 
-  /// 전사(warrior)는 화면에 보이지 않는 히트 딜레이용 [Projectile]로 즉발
-  /// 근접 공격을, 궁수/마법사(archer/mage)는 실제로 눈에 보이며 목표를
-  /// 추적하는 [ProjectileComponent]로 원거리 공격을 수행한다 — 어느 쪽이든
-  /// 도착 지점에서 [_resolveHit]을 부르므로 데미지 판정/데미지 텍스트 튕김
-  /// 연출/골드·아이템 드롭 로직은 완전히 동일하게 재사용된다(공격 방식만
-  /// 다르고 "맞았을 때 벌어지는 일"은 하나로 통일돼 있다).
+  /// 근접(melee)은 화면에 보이지 않는 히트 딜레이용 [Projectile]로 즉발
+  /// 공격을, 원거리(ranged)는 실제로 눈에 보이며 목표를 추적하는
+  /// [ProjectileComponent]로 공격을 수행한다 — 어느 쪽이든 도착 지점에서
+  /// [_resolveHit]을 부르므로 데미지 판정/데미지 텍스트 튕김 연출/골드·
+  /// 아이템 드롭 로직은 완전히 동일하게 재사용된다(공격 방식만 다르고
+  /// "맞았을 때 벌어지는 일"은 하나로 통일돼 있다).
+  ///
+  /// 근접/원거리 여부는 더 이상 [CharacterClass](직업)로 암묵적으로
+  /// 추론하지 않고 [CharacterMetaManager.attackTypeFor](DB `characters
+  /// .attack_type`)가 명시적으로 결정한다 — [classType]은 이제 원거리일 때
+  /// 투사체 비주얼([visualFor])을 고르는 용도로만 남는다.
   void _fireProjectile() {
     final ({double damage, bool isCritical}) result = manager.rollAttack();
     final CharacterClass classType = _equippedCharacterClass;
+    final AttackType attackType = CharacterMetaManager.instance.attackTypeFor(_equippedCharacterId);
 
-    switch (classType) {
-      case CharacterClass.warrior:
+    switch (attackType) {
+      case AttackType.melee:
         add(
           Projectile(
             startPosition: _playerCenter,
@@ -843,8 +949,7 @@ class IdleGame extends FlameGame {
             onHit: () => _resolveHit(result.damage, result.isCritical),
           ),
         );
-      case CharacterClass.archer:
-      case CharacterClass.mage:
+      case AttackType.ranged:
         add(
           ProjectileComponent(
             startPosition: _playerCenter,
@@ -873,6 +978,14 @@ class IdleGame extends FlameGame {
 
     _playHitEffect();
     _spawnMonsterDamageText(damage, isCritical);
+    if (isCritical) {
+      // 크리티컬 타격에도 광역 액티브 스킬([castActiveSkill])과 같은
+      // 화면 흔들림을 줘서 타격감을 더한다.
+      _shakeScreen();
+      unawaited(SoundManager.instance.playCritical());
+    } else {
+      unawaited(SoundManager.instance.playHit());
+    }
 
     if (mode == GameMode.mainStage) {
       final ({Equipment? droppedItem, int goldReward}) hitResult =
@@ -952,6 +1065,13 @@ class IdleGame extends FlameGame {
     // 다만 쌓는 건 골드가 아니라 [worldBossDamageDealt](랭킹 제출용).
     if (mode == GameMode.worldBoss) {
       _worldBossDamageDealt += damage;
+    }
+
+    // 길드 레이드도 월드보스와 같은 "처치가 아니라 누적 데미지" 구조 —
+    // 실제 서버 보스 체력 차감은 30초가 끝난 뒤 [GuildRaidManager
+    // .submitDamage]가 이 누적치를 한 번에 제출해 처리한다.
+    if (mode == GameMode.guildRaid) {
+      _guildRaidDamageDealt += damage;
     }
 
     dungeonMonsterHp -= damage;
@@ -1059,6 +1179,25 @@ class IdleGame extends FlameGame {
           gemReward: _guildDungeonGemReward,
           guildCoinReward: _guildDungeonCoinReward,
         );
+      case GameMode.weekdayDungeon:
+        // 골드 던전/월드보스와 같은 "파도" 구조 — 처치할 때마다 즉시
+        // 클리어 종료하지 않고, 다음(조금 더 강한) 몬스터를 곧바로
+        // 다시 세운다. 실제 보상 지급은 60초가 다 됐을 때(update()의
+        // 타임아웃 분기)와 [_weekdayDungeonWaveCleared] 누적치로 한
+        // 번에 계산한다.
+        _weekdayDungeonWaveCleared++;
+        _spawnDungeonMonster(
+          hp: _weekdayWaveHp(_weekdayDungeonWaveCleared + 1),
+          color: _weekdayDungeonMonsterColor,
+        );
+      case GameMode.guildRaid:
+        // 월드보스와 동일 — 로컬 표시 체력이 바닥나도 조기 종료하지 않고
+        // 같은 체력으로 다시 채워서 남은 시간 동안 계속 때릴 수 있게 한다.
+        _spawnDungeonMonster(
+          hp: dungeonMonsterMaxHp,
+          color: _guildRaidMonsterColor,
+          emoji: '👹',
+        );
       case GameMode.mainStage:
         break;
     }
@@ -1094,15 +1233,33 @@ class IdleGame extends FlameGame {
     _monster.paint = Paint()..color = _mainStageMonsterColor;
   }
 
-  void _castSkill(Skill skill) {
-    final double damage = manager.rollSkillDamage();
-
+  /// [SkillManager.onActiveSkillCast] 진입점 — 광역기(active_aoe) 발동 시
+  /// 낙하 이펙트를 재생하고 화면을 흔든 뒤, 착탄 시점에 실제 데미지를
+  /// 적용한다(_resolveSkillHit이 메인 스테이지/던전 모드를 모두 처리).
+  /// dungeon_screen.dart가 [applySkillDamage]와 같은 방식으로 이 인스턴스를
+  /// SkillManager.onActiveSkillCast에 등록/해제한다.
+  void castActiveSkill(ActiveSkill skill, double damage) {
+    _shakeScreen();
     add(
       Meteor(
         spawnPosition: Vector2(_monster.position.x, -60),
         targetPosition: _monsterCenter,
         onImpact: () => _resolveSkillHit(damage),
       ),
+    );
+  }
+
+  /// 화면을 짧게 좌우로 흔드는 간단한 카메라 흔들림 — 순 이동량이 0이라
+  /// 끝나면 정확히 원래 위치로 돌아온다.
+  void _shakeScreen() {
+    const double magnitude = 8;
+    camera.viewfinder.add(
+      SequenceEffect([
+        MoveByEffect(Vector2(-magnitude, 0), EffectController(duration: 0.04)),
+        MoveByEffect(Vector2(magnitude * 2, 0), EffectController(duration: 0.04)),
+        MoveByEffect(Vector2(-magnitude * 2, 0), EffectController(duration: 0.04)),
+        MoveByEffect(Vector2(magnitude, 0), EffectController(duration: 0.04)),
+      ]),
     );
   }
 
@@ -1228,6 +1385,8 @@ class IdleGame extends FlameGame {
   }
 
   void _spawnGoldDrops(int totalGold) {
+    unawaited(SoundManager.instance.playCoin());
+
     const int coinCount = 6;
     final int share = totalGold ~/ coinCount;
     final int remainder = totalGold % coinCount;
@@ -1397,9 +1556,23 @@ enum PlayerState { running, attacking, idle, defeat }
 class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState> {
   PlayerAnimationComponent({required Vector2 position})
       : super(
-          size: Vector2.all(56),
+          // 모든 프레임 캔버스가 이제 512x512로 통일됐고(대기/공격 모두
+          // 같은 캔버스 크기), 그 안에서 실제 캐릭터는 세로 기준 약
+          // 58.6%만 차지한다(발밑은 캔버스 하단에 정확히 붙어 있고,
+          // 위쪽으로 약 41.4% 여백 — player_n1_wait1.png 등 실측
+          // 결과, [bodyCenterHeightRatio] 참고). 예전 56px 상자를 그대로
+          // 썼다면 이 여백까지 통째로 56px 안에 눌러 담겨 실제 캐릭터가
+          // 깨알만큼 작아 보였다 — 그래서 상자 자체를 [boxSize]로 키워,
+          // 여백을 감안하고도 캐릭터가 눈에 띄게 큼직하게 보이도록 한다.
+          // [size] 자체는 절대 바뀌지 않으므로 [IdleGame._playerCenter]
+          // 같은 다른 코드가 이 값을 기준으로 하는 계산도 흔들리지 않는다.
+          size: Vector2.all(boxSize),
           // 발이 바닥 길(IdleGame.groundYRatio)에 정확히 붙도록
           // bottomCenter로 고정 — position은 항상 발밑 좌표를 가리킨다.
+          // [render]가 상자 안에서 프레임을 아래쪽 정렬(Alignment
+          // .bottomCenter와 같은 방식)하는 것과 합쳐져서, 프레임마다
+          // 원본 비율이 달라도(공격 프레임의 여백 등) 발 위치는 항상
+          // 이 anchor 기준점 그대로 고정된다.
           anchor: Anchor.bottomCenter,
           position: position,
           // SpriteAnimationGroupComponent는 렌더링할 때 이 paint로 개별
@@ -1408,6 +1581,31 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
           // 확대돼도 뭉개지지 않는다.
           paint: RemoteSpriteLoader.pixelArtPaint(),
         );
+
+  /// 컴포넌트 노출 상자의 한 변 — 512x512 캔버스 여백(약 41.4%)을 감안해
+  /// 실제 캐릭터가 화면에서 적절히 큼직하게(대략 세로 100px 안팎) 보이도록
+  /// 잡은 값이다. 기존 56은 여백 없는 옛날 캔버스 기준이라, 새 512x512
+  /// 캔버스에 그대로 쓰면 캐릭터가 실제보다 훨씬 작게 보였다([IdleGame
+  /// .groundYRatio] 등 다른 반응형 배치는 이 값과 무관하게 그대로 동작한다
+  /// — 화면 크기 비율이 아니라 고정 픽셀 상자이기 때문).
+  static const double boxSize = 180;
+
+  /// 512x512 캔버스 세로 길이 중 실제 캐릭터 콘텐츠(투명하지 않은 픽셀)가
+  /// 차지하는 비율 — player_n1_wait1.png/attack1.png/front.png 실측 결과
+  /// 셋 다 약 58.6%(하단 여백 0%, 상단 여백 약 41.4%)였다. [CharacterIdlePreview]
+  /// 가 이 값의 역수를 확대 배율로 써서 캐릭터 상세창 프리뷰에서도 여백을
+  /// 잘라내고 캐릭터 알맹이가 상자를 꽉 채우도록 한다. 다른 캐릭터도 같은
+  /// 512x512 내보내기 규칙(발밑 = 캔버스 하단)을 따른다는 전제이며, 특정
+  /// 캐릭터의 여백 비율이 크게 다르면 이 상수를 다시 실측해 조정해야 한다.
+  static const double contentHeightRatio = 0.586;
+
+  /// [size] 안에서 실제 캐릭터 몸통 중심이 발밑(캔버스 하단, 여백 0%)으로
+  /// 부터 얼마나 위에 있는지를 [size] 대비 비율로 나타낸 값 —
+  /// [IdleGame._playerCenter](투사체 시작 위치/데미지 텍스트 기준점)가
+  /// 상자 전체 절반(0.5, 즉 캔버스 정중앙)이 아니라 실제 몸통 위치를
+  /// 가리키도록 쓴다. 몸통 수직 중심은 발밑에서 [contentHeightRatio]의
+  /// 절반만큼 위다.
+  static const double bodyCenterHeightRatio = contentHeightRatio / 2;
 
   /// 프레임 존재 여부를 확인할 때 시도해 볼 상한 — 실제 프레임 수는
   /// 캐릭터/액션마다 다르고(N1 run=3장, attack=5장, 앞으로 추가될 다른
@@ -1419,15 +1617,6 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   static const int _maxProbeFrameCount = 10;
 
   static const double _frameStepTime = 0.1;
-
-  /// 공격 프레임 아트가 (칼을 크게 휘두르는 동작 탓에) run/idle 프레임보다
-  /// 훨씬 넓은 여백을 포함한 캔버스에 그려져 있어서, 고정 [size](56x56)
-  /// 박스에 맞춰 그대로 렌더링하면 캐릭터 자체가 상대적으로 작아 보이는
-  /// 문제가 있다 — [attacking] 상태일 때만 이 배율만큼 확대해 시각적
-  /// 크기를 run/idle과 비슷하게 보정한다. [Anchor.bottomCenter]라
-  /// 확대해도 발 위치(바닥 길)는 그대로 고정되고 위로만 커진다.
-  static const double _attackScale = 1.3;
-  static const double _normalScale = 1.0;
 
   /// 대기(wait) 모션은 달리기/공격보다 조금 더 느긋하게 재생한다 —
   /// player_{id}_wait1~5.png, stepTime 0.15초.
@@ -1486,6 +1675,13 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
 
   bool get _isLoaded => animations != null;
 
+  /// [loadCharacter]가 대기(wait) 모션의 첫 프레임 기준으로 한 번만
+  /// 계산해 두는 고정 배율 — [render]가 매 프레임 이 값을 그대로 쓴다.
+  /// 캐릭터가 로드되기 전(또는 완전히 실패했을 때)에는 1.0(원본 그대로)
+  /// 이지만, 그 창은 [_isReady]가 막아 주므로 실제로 렌더에 쓰이지는
+  /// 않는다.
+  double _renderScale = 1.0;
+
   @override
   void update(double dt) {
     if (!_isReady) {
@@ -1494,12 +1690,63 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
     super.update(dt);
   }
 
+  /// 기본 [SpriteAnimationGroupComponent.render]는 현재 스프라이트를
+  /// [size] 상자에 꽉 채워 그린다(원본 비율 무시 — Flutter로 치면
+  /// BoxFit.fill) — 그래서 예전엔 여백이 많은 공격 프레임이 상자를 가득
+  /// 채우며 옆으로 눌리듯 늘어났었다. 그 다음엔 프레임마다 매번
+  /// BoxFit.contain으로 다시 맞췄었는데, 이번엔 그것도 문제였다 — 공격
+  /// 캔버스가 검기 이펙트 때문에 대기 캔버스보다 훨씬 커서, "캔버스
+  /// 전체를 상자에 맞추는" contain 연산이 캔버스 안의 캐릭터 몸집까지
+  /// 함께 축소시켜 버렸다(포토샵에서 캐릭터 실제 픽셀 크기는 이미 맞춰
+  /// 뒀는데도).
+  ///
+  /// 그래서 여기서는 프레임마다 다시 맞추지 않고, [loadCharacter]가 로드
+  /// 시점에 딱 한 번 계산해 둔 고정 배율([_renderScale])을 현재 프레임의
+  /// 원본 픽셀 크기(srcSize)에 그대로 곱한다 — 캔버스가 커도(공격) 그
+  /// 배율은 바뀌지 않으므로 캐릭터 몸집은 항상 대기 모션과 같은
+  /// 크기로 유지되고, 커진 캔버스만큼 여백(검기 영역)이 상자 밖으로 더
+  /// 그려질 뿐이다. 상자 안에서는 여전히 가로 중앙·세로 하단
+  /// ([Alignment.bottomCenter]) 기준으로 배치해 발 위치가 흔들리지
+  /// 않는다. 부모(super.render)의 "상자에 꽉 채워 그리기" 동작을
+  /// 의도적으로 완전히 대신하는 것이라 super를 부르지 않는다(부르면
+  /// 늘려서 그린 버전 위에 이 버전이 또 겹쳐 그려진다).
   @override
+  // ignore: must_call_super
   void render(Canvas canvas) {
     if (!_isReady) {
       return;
     }
-    super.render(canvas);
+    final Sprite? activeSprite = animationTicker?.getSprite();
+    if (activeSprite == null) {
+      return;
+    }
+    final Vector2 srcSize = activeSprite.srcSize;
+    final Vector2 fittedSize = Vector2(srcSize.x * _renderScale, srcSize.y * _renderScale);
+    final Vector2 offset = Vector2(
+      (size.x - fittedSize.x) / 2,
+      size.y - fittedSize.y,
+    );
+    activeSprite.render(
+      canvas,
+      position: offset,
+      size: fittedSize,
+      overridePaint: paint,
+    );
+  }
+
+  /// [referenceSrcSize](기준 프레임의 원본 픽셀 크기, 보통 대기 모션 첫
+  /// 프레임)를 [maxSize] 상자 안에 원본 비율 그대로 최대한 맞추는 배율을
+  /// 계산한다 — Flutter의 BoxFit.contain과 같은 공식이지만, 매 프레임이
+  /// 아니라 [loadCharacter]에서 캐릭터당 한 번만 호출되고 그 결과
+  /// ([_renderScale])가 모든 프레임(대기/달리기/공격/패배)에 동일하게
+  /// 적용된다는 점이 다르다. 순수 함수라 네트워크/Flame 없이 단위
+  /// 테스트할 수 있다(단위 테스트를 위해 public).
+  @visibleForTesting
+  static double computeRenderScale(Vector2 referenceSrcSize, Vector2 maxSize) {
+    if (referenceSrcSize.x <= 0 || referenceSrcSize.y <= 0) {
+      return 1.0;
+    }
+    return min(maxSize.x / referenceSrcSize.x, maxSize.y / referenceSrcSize.y);
   }
 
   /// [current]를 안전하게 바꾼다 — [animations]가 아직 로드되지 않았으면
@@ -1511,7 +1758,6 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
     if (_isLoaded) {
       current = state;
     }
-    scale = Vector2.all(state == PlayerState.attacking ? _attackScale : _normalScale);
   }
 
   /// [IdleGame.update]가 매 프레임 [GameManager.effectiveAttackSpeed]를
@@ -1555,6 +1801,12 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
         _loadAction(characterId, 'wait', stepTime: _idleFrameStepTime),
         _loadDefeatPose(characterId),
       ]);
+      // 대기(wait) 모션 첫 프레임을 "이 캐릭터의 표준 몸집" 기준으로 삼아
+      // 배율을 한 번만 계산해 둔다 — 공격 프레임은 검기 이펙트 때문에
+      // 캔버스 자체가 훨씬 크지만, 이후 [render]가 프레임마다 다시
+      // 맞추지 않고 이 값을 그대로 재사용하므로 캐릭터 몸집이 그대로
+      // 유지된다([render] 문서 참고).
+      _renderScale = computeRenderScale(results[2].frames.first.sprite.srcSize, size);
       animations = {
         PlayerState.running: results[0],
         PlayerState.attacking: results[1],
@@ -1662,7 +1914,9 @@ class PetComponent extends PositionComponent {
   PetComponent({required this.getPlayerPosition})
       : super(size: Vector2.all(_size), anchor: Anchor.bottomCenter);
 
-  /// 플레이어 크기(56)의 약 0.65배 — "캐릭터보다 살짝 작은 귀여운 비율".
+  /// 아직 실제 펫 스프라이트가 없어(위 클래스 문서 참고) 플레이어 상자
+  /// 크기([PlayerAnimationComponent.boxSize])와 직접 연동하지 않고 고정값을
+  /// 쓴다 — "캐릭터보다 살짝 작은 귀여운 원형 배지" 정도로 고정.
   static const double _size = 36;
 
   /// 항상 플레이어의 왼쪽(뒤쪽) [_followOffsetX]만큼, 같은 Y(바닥 길)에

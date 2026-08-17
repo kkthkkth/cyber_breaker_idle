@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../constants/app_images.dart';
 import '../managers/equipment_manager.dart';
-import '../managers/pet_manager.dart';
+import '../managers/equipment_set_manager.dart';
 import '../models/equipment.dart';
-import '../models/pet_model.dart';
+import '../models/equipment_set_model.dart';
+import '../models/pet_stat_metadata_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/safe_image.dart';
@@ -15,26 +16,17 @@ import 'character_illustration_dialog.dart';
 import 'character_screen.dart' show InventoryArea, InventorySlot;
 import 'crafting_screen.dart';
 
-/// 장비/펫 인벤토리 아이템 공용 상세 팝업.
-///
-/// 기본 생성자는 기존 그대로 [Equipment]를 받고, [ItemDetailDialog.pet]로는
-/// 신규 [Pet] 모델을 받는다 — 두 모델 모두 mainStat(부위/카테고리별 고정
-/// 메인 스탯) + subStats(등급별 랜덤 서브 옵션) 구조를 공유하므로, 이
-/// 위젯은 어느 쪽이 들어와도 "아이콘 + 라벨 + 값" 한 줄짜리 [_StatLine]으로
-/// 정규화해서 그린다. [EquipmentFactory]로 생성되기 전의 레거시 장비는
-/// mainStat/subStats가 비어 있을 수 있는데, 그 경우 부위(방어형/공격형)와
-/// statMultiplier·defenseOption류 개별 필드로부터 같은 형태를 합성해 채운다
-/// — 그래서 방패를 눌러도 더 이상 무조건 "공격력"이 뜨지 않는다.
+/// 장비/펫/캐릭터 인벤토리 아이템 공용 상세 팝업 — 셋 다 [Equipment] 하나로
+/// 통일돼 있다(펫은 `EquipType.pet`). [EquipmentFactory]로 생성되기 전의
+/// 레거시 장비는 mainStat/subStats가 비어 있을 수 있는데, 그 경우 부위
+/// (방어형/공격형)와 statMultiplier·defenseOption류 개별 필드로부터 같은
+/// 형태를 합성해 채운다 — 그래서 방패를 눌러도 더 이상 무조건 "공격력"이
+/// 뜨지 않는다. 펫의 특수 스탯([Equipment.specialStats])은 [_equipmentSubStats]
+/// 가 일반 서브 옵션과 함께 자연스럽게 이어서 보여준다.
 class ItemDetailDialog extends StatefulWidget {
-  const ItemDetailDialog({super.key, required Equipment item})
-    : equipment = item,
-      pet = null;
+  const ItemDetailDialog({super.key, required Equipment item}) : equipment = item;
 
-  const ItemDetailDialog.pet({super.key, required Pet this.pet})
-    : equipment = null;
-
-  final Equipment? equipment;
-  final Pet? pet;
+  final Equipment equipment;
 
   @override
   State<ItemDetailDialog> createState() => _ItemDetailDialogState();
@@ -55,7 +47,6 @@ class _StatLine {
 
 class _ItemDetailDialogState extends State<ItemDetailDialog> {
   final EquipmentManager _equipmentManager = EquipmentManager.instance;
-  final PetManager _petManager = PetManager.instance;
 
   /// 연타 방지 — 하트/망치 버튼처럼 "이 팝업을 pop한 뒤 다른 화면을
   /// push"하는 동작이 두 번 겹쳐 실행되면 pop을 두 번 부르게 되어 이
@@ -71,35 +62,23 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
   };
 
   void _toggleEquip() {
-    final Pet? pet = widget.pet;
-    if (pet != null) {
-      if (pet.isEquipped) {
-        _petManager.unequipPet();
-      } else {
-        _petManager.equipPet(pet.id);
-      }
-    } else {
-      _equipmentManager.toggleEquip(widget.equipment!);
-    }
+    _equipmentManager.toggleEquip(widget.equipment);
     Navigator.of(context).pop();
   }
 
   /// 우측 상단 망치 버튼 — 이 팝업을 닫고 '제작/합성' 화면으로 이동하되,
   /// 지금 보고 있던 아이템의 카테고리에 맞는 1Depth 탭(장비=0, 펫=1,
   /// 캐릭터=2)이 처음부터 선택돼 있도록 [CraftingScreen.initialCategoryIndex]
-  /// 로 넘겨준다. 소모품(3번 탭)은 [Equipment]/[Pet] 어느 쪽도 아니라
-  /// 이 팝업에서 애초에 도달할 수 없다.
+  /// 로 넘겨준다.
   void _navigateToCrafting() {
     if (_isNavigatingAway) {
       return;
     }
     _isNavigatingAway = true;
 
-    final Equipment? item = widget.equipment;
+    final Equipment item = widget.equipment;
     final int tabIndex;
-    if (item == null) {
-      tabIndex = 1; // 펫
-    } else if (item.type == EquipType.character) {
+    if (item.type == EquipType.character) {
       tabIndex = 2;
     } else if (item.type == EquipType.pet) {
       tabIndex = 1;
@@ -127,7 +106,7 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
     }
     _isNavigatingAway = true;
 
-    final Equipment character = widget.equipment!;
+    final Equipment character = widget.equipment;
     final NavigatorState navigator = Navigator.of(context);
     navigator.pop();
     navigator.push(
@@ -136,7 +115,7 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
   }
 
   void _levelUp() {
-    final bool success = _equipmentManager.levelUpItem(widget.equipment!.id);
+    final bool success = _equipmentManager.levelUpItem(widget.equipment.id);
     if (!success) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
@@ -144,33 +123,6 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
       return;
     }
     setState(() {});
-  }
-
-  IconData _iconForType(EquipType type) {
-    switch (type) {
-      case EquipType.weapon:
-        return Icons.gavel;
-      case EquipType.helmet:
-        return Icons.sports_motorsports;
-      case EquipType.armor:
-        return Icons.shield_moon;
-      case EquipType.belt:
-        return Icons.horizontal_rule;
-      case EquipType.shield:
-        return Icons.security;
-      case EquipType.glove:
-        return Icons.back_hand;
-      case EquipType.boots:
-        return Icons.directions_walk;
-      case EquipType.ring:
-        return Icons.circle_outlined;
-      case EquipType.pet:
-        return Icons.pets;
-      case EquipType.character:
-        return Icons.person;
-      case EquipType.relic:
-        return Icons.token;
-    }
   }
 
   IconData _iconForEquipmentStat(EquipmentStatType type) {
@@ -194,20 +146,26 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
     }
   }
 
-  IconData _iconForPetStat(PetStatType type) {
-    switch (type) {
-      case PetStatType.dropRateBoost:
+  /// 펫 전용 특수 스탯([Equipment.specialStats])의 키별 아이콘 —
+  /// [PetSpecialStat.values]에 없는 알 수 없는 키가 들어와도(예: 예전
+  /// 메타데이터로 굴려진 뒤 서버 쪽 키 구성이 바뀐 경우) 크래시 대신
+  /// 무난한 기본 아이콘으로 대체한다.
+  IconData _iconForSpecialStat(String key) {
+    switch (key) {
+      case PetSpecialStat.dropRateBoost:
         return Icons.card_giftcard;
-      case PetStatType.goldGain:
+      case PetSpecialStat.goldGain:
         return Icons.monetization_on;
-      case PetStatType.bossDamage:
+      case PetSpecialStat.bossDamage:
         return Icons.whatshot;
-      case PetStatType.finalAttackBoost:
+      case PetSpecialStat.finalAttackBoost:
         return Icons.local_fire_department;
-      case PetStatType.skillCooldownReduction:
+      case PetSpecialStat.skillCooldownReduction:
         return Icons.timer;
-      case PetStatType.criticalDamageBoost:
+      case PetSpecialStat.criticalDamageBoost:
         return Icons.flash_on;
+      default:
+        return Icons.auto_awesome;
     }
   }
 
@@ -262,22 +220,37 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
 
   /// 장비 서브 옵션 목록 — 신규 [Equipment.subStats]가 채워져 있으면 그대로
   /// 쓰고, 비어 있으면 레거시 방어 옵션 4종(defenseOption 등) 중 값이 있는
-  /// 것만 모아 같은 형태로 보여준다.
+  /// 것만 모아 같은 형태로 보여준다. 펫([Equipment.specialStats])은 항상
+  /// 이 목록 맨 뒤에 이어 붙는다 — 일반 서브 옵션이 없는 펫이라도 특수
+  /// 스탯만으로 목록이 채워질 수 있도록 별도 섹션을 만들지 않는다.
   List<_StatLine> _equipmentSubStats(Equipment item) {
-    if (item.subStats.isNotEmpty) {
-      return item.subStats
-          .map(
-            (option) => _StatLine(
-              icon: _iconForEquipmentStat(option.type),
-              label: option.type.displayName,
-              valueText: option.type.isPercentage
-                  ? '+${(option.value * 100).toStringAsFixed(1)}%'
-                  : '+${option.value.toStringAsFixed(0)}',
-            ),
-          )
-          .toList();
-    }
+    final List<_StatLine> lines = item.subStats.isNotEmpty
+        ? item.subStats
+            .map(
+              (option) => _StatLine(
+                icon: _iconForEquipmentStat(option.type),
+                label: option.type.displayName,
+                valueText: option.type.isPercentage
+                    ? '+${(option.value * 100).toStringAsFixed(1)}%'
+                    : '+${option.value.toStringAsFixed(0)}',
+              ),
+            )
+            .toList()
+        : _legacyEquipmentSubStats(item);
 
+    for (final MapEntry<String, double> entry in item.specialStats.entries) {
+      lines.add(
+        _StatLine(
+          icon: _iconForSpecialStat(entry.key),
+          label: PetSpecialStat.displayName(entry.key),
+          valueText: '+${(entry.value * 100).toStringAsFixed(1)}%',
+        ),
+      );
+    }
+    return lines;
+  }
+
+  List<_StatLine> _legacyEquipmentSubStats(Equipment item) {
     final List<_StatLine> legacy = [];
     if (item.defenseOption > 0) {
       legacy.add(
@@ -319,57 +292,24 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
     return legacy;
   }
 
-  _StatLine _petMainStat(Pet pet) {
-    final PetOption mainStat = pet.mainStat;
-    return _StatLine(
-      icon: _iconForPetStat(mainStat.type),
-      label: mainStat.type.displayName,
-      valueText: '+${(mainStat.value * 100).toStringAsFixed(1)}%',
-    );
-  }
-
-  List<_StatLine> _petSubStats(Pet pet) {
-    return pet.subStats
-        .map(
-          (option) => _StatLine(
-            icon: _iconForPetStat(option.type),
-            label: option.type.displayName,
-            valueText: '+${(option.value * 100).toStringAsFixed(1)}%',
-          ),
-        )
-        .toList();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final Equipment? equipment = widget.equipment;
-    final Pet? pet = widget.pet;
+    final Equipment equipment = widget.equipment;
 
-    final ItemGrade grade = equipment?.grade ?? pet!.grade;
+    final ItemGrade grade = equipment.grade;
     final Color gradeColor = getGradeColor(grade);
-    final String name = equipment?.name ?? pet!.name;
-    final IconData headerIcon = equipment != null
-        ? _iconForType(equipment.type)
-        : Icons.pets;
-    final bool isEquipped = equipment?.isEquipped ?? pet!.isEquipped;
-    final String descriptionText = equipment != null
-        ? '${equipment.grade.displayName} 등급 ${equipment.type.displayName} 아이템입니다.'
-        : '${pet!.grade.displayName} 등급 ${pet.category.displayName}입니다.';
+    final String name = equipment.name;
+    final bool isEquipped = equipment.isEquipped;
+    final String descriptionText =
+        '${equipment.grade.displayName} 등급 ${equipment.type.displayName} 아이템입니다.';
 
-    final _StatLine mainStat = equipment != null
-        ? _equipmentMainStat(equipment)
-        : _petMainStat(pet!);
-    final List<_StatLine> subStats = equipment != null
-        ? _equipmentSubStats(equipment)
-        : _petSubStats(pet!);
+    final _StatLine mainStat = _equipmentMainStat(equipment);
+    final List<_StatLine> subStats = _equipmentSubStats(equipment);
 
     // 레벨업 시 실제로 자라는 건 statMultiplier뿐이라, 화면에 보이는 메인
     // 스탯이 statMultiplier 기반(=레거시 아이템)일 때만 "다음 레벨 증가치"를
     // 함께 보여준다 — mainStat이 따로 있는 신규 아이템은 레벨업과 무관하다.
-    final bool showLevelUpGain =
-        equipment != null &&
-        equipment.mainStat == null &&
-        !equipment.isMaxLevel;
+    final bool showLevelUpGain = equipment.mainStat == null && !equipment.isMaxLevel;
     final int statGain = showLevelUpGain
         ? ((equipment.nextLevelStatMultiplier * 100).round() -
               (equipment.statMultiplier * 100).round())
@@ -397,37 +337,21 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // ── 상단: 이미지, 이름, 등급, 레벨, 설명 ─────────────────────
-                    // 장비/캐릭터는 인벤토리 그리드가 쓰는 InventorySlot을 그대로
-                    // 재사용하고, 크기도 고정 픽셀(예: 72)이 아니라
-                    // InventoryArea.tileSizeFor로 그 순간 실제 인벤토리
-                    // 그리드 타일 크기를 그대로 가져온다 — 화면 폭에 따라
-                    // 그리드 타일 크기 자체가 달라지므로, 고정값을 쓰면
-                    // 기기에 따라 미묘하게 어긋나 보인다. 모서리 라운딩·
-                    // 등급색 테두리·좌측 상단 등급 배지(N1 등)/우측 상단
-                    // 레벨 배지/하단 성급(★) 배지까지 인벤토리와 100% 같은
-                    // 컴포넌트라 저절로 동일하게 보인다. 펫은 Equipment가
-                    // 아니라 InventorySlot을 못 쓰므로 기존 아이콘 헤더를
-                    // 그대로 유지한다.
-                    equipment != null
-                        ? SizedBox(
-                            width: InventoryArea.tileSizeFor(context),
-                            height: InventoryArea.tileSizeFor(context),
-                            child: InventorySlot(item: equipment),
-                          )
-                        : Container(
-                            width: 72,
-                            height: 72,
-                            decoration: BoxDecoration(
-                              color: gradeColor.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: gradeColor, width: 2),
-                            ),
-                            child: Icon(
-                              headerIcon,
-                              color: gradeColor,
-                              size: 36,
-                            ),
-                          ),
+                    // 장비/펫/캐릭터 전부 인벤토리 그리드가 쓰는
+                    // InventorySlot을 그대로 재사용하고, 크기도 고정 픽셀
+                    // (예: 72)이 아니라 InventoryArea.tileSizeFor로 그 순간
+                    // 실제 인벤토리 그리드 타일 크기를 그대로 가져온다 —
+                    // 화면 폭에 따라 그리드 타일 크기 자체가 달라지므로,
+                    // 고정값을 쓰면 기기에 따라 미묘하게 어긋나 보인다.
+                    // 모서리 라운딩·등급색 테두리·좌측 상단 등급 배지(N1
+                    // 등)/우측 상단 레벨 배지/하단 성급(★) 배지까지
+                    // 인벤토리와 100% 같은 컴포넌트라 저절로 동일하게
+                    // 보인다.
+                    SizedBox(
+                      width: InventoryArea.tileSizeFor(context),
+                      height: InventoryArea.tileSizeFor(context),
+                      child: InventorySlot(item: equipment),
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       name,
@@ -457,17 +381,15 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                         ),
                       ),
                     ),
-                    if (equipment != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Lv. ${equipment.level}/${Equipment.maxLevel}',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Lv. ${equipment.level}/${Equipment.maxLevel}',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
                       ),
-                    ],
+                    ),
                     const SizedBox(height: 8),
                     Text(
                       descriptionText,
@@ -477,6 +399,10 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                         fontSize: 12,
                       ),
                     ),
+                    if (equipment.setId != null) ...[
+                      const SizedBox(height: 12),
+                      _SetInfoCard(setId: equipment.setId!),
+                    ],
                     const SizedBox(height: 20),
 
                     // ── 중단: 메인 스탯(부위/카테고리에 맞게 동적으로) + 서브 옵션 ──
@@ -582,65 +508,56 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                             ),
                           ),
                         ),
-                        if (equipment != null) ...[
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: equipment.isMaxLevel ? null : _levelUp,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF2ECC71),
-                                foregroundColor: Colors.black,
-                                disabledBackgroundColor: const Color(
-                                  0xFF3A3A4A,
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 10,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    equipment.isMaxLevel ? 'MAX' : '레벨업',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  if (!equipment.isMaxLevel) ...[
-                                    const SizedBox(height: 2),
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(
-                                          Icons.monetization_on,
-                                          color: Colors.black87,
-                                          size: 14,
-                                        ),
-                                        const SizedBox(width: 2),
-                                        Text(
-                                          '${equipment.levelUpCost}',
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: equipment.isMaxLevel ? null : _levelUp,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2ECC71),
+                              foregroundColor: Colors.black,
+                              disabledBackgroundColor: const Color(0xFF3A3A4A),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  equipment.isMaxLevel ? 'MAX' : '레벨업',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                if (!equipment.isMaxLevel) ...[
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.monetization_on,
+                                        color: Colors.black87,
+                                        size: 14,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      Text(
+                                        '${equipment.levelUpCost}',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
-                        ],
+                        ),
                       ],
                     ),
 
                     // ── 최하단: 캐릭터 전용 성급(★0~5) 일러스트 갤러리 ───────────
-                    if (equipment != null &&
-                        equipment.type == EquipType.character) ...[
+                    if (equipment.type == EquipType.character) ...[
                       const SizedBox(height: 20),
                       const Align(
                         alignment: Alignment.centerLeft,
@@ -671,7 +588,7 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
           ),
           // 좌측에 나란히 놓이는 호감도(하트) 바로가기 — 캐릭터 상세에서만
           // 보인다([_navigateToAffection] 참고).
-          if (equipment != null && equipment.type == EquipType.character)
+          if (equipment.type == EquipType.character)
             Positioned(
               top: 8,
               right: 50,
@@ -934,6 +851,123 @@ class _StarIllustrationSlot extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 세트 장비([Equipment.setId] != null)일 때만 상세 팝업 상단에 뜨는
+/// 카드 — 세트 이름, 지금 장착 부위 수, 2부위/4부위 효과를 나열하고
+/// 실제로 발동 중인 줄만 강조색+체크 아이콘으로 표시한다.
+class _SetInfoCard extends StatelessWidget {
+  const _SetInfoCard({required this.setId});
+
+  final String setId;
+
+  EquipmentSetBonus? _bonus() {
+    for (final EquipmentSetBonus bonus in EquipmentSetManager.instance.catalog) {
+      if (bonus.setId == setId) {
+        return bonus;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final EquipmentSetBonus? bonus = _bonus();
+    final int equippedCount = EquipmentManager.instance.equippedSetCounts[setId] ?? 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF6C4FCE).withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF6C4FCE)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome, color: Color(0xFF8A6FE0), size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  bonus?.name ?? setId,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              Text(
+                '$equippedCount부위 장착 중',
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+            ],
+          ),
+          if (bonus != null) ...[
+            const SizedBox(height: 8),
+            _SetTierLine(
+              requiredCount: 2,
+              equippedCount: equippedCount,
+              stat: bonus.twoPieceStat,
+              value: bonus.twoPieceValue,
+            ),
+            if (bonus.fourPieceStat != null) ...[
+              const SizedBox(height: 4),
+              _SetTierLine(
+                requiredCount: 4,
+                equippedCount: equippedCount,
+                stat: bonus.fourPieceStat!,
+                value: bonus.fourPieceValue,
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SetTierLine extends StatelessWidget {
+  const _SetTierLine({
+    required this.requiredCount,
+    required this.equippedCount,
+    required this.stat,
+    required this.value,
+  });
+
+  final int requiredCount;
+  final int equippedCount;
+  final String stat;
+  final double value;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool active = equippedCount >= requiredCount;
+    return Row(
+      children: [
+        Icon(
+          active ? Icons.check_circle : Icons.radio_button_unchecked,
+          color: active ? Colors.greenAccent : Colors.white38,
+          size: 14,
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            '$requiredCount세트: ${EquipmentSetStat.displayName(stat)} '
+            '+${(value * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              color: active ? Colors.white : Colors.white54,
+              fontSize: 11,
+              fontWeight: active ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../managers/game_manager.dart';
 import '../managers/skill_manager.dart';
+import '../models/active_skill_model.dart';
 import '../models/skill_model.dart';
+import '../utils/number_formatter.dart';
 
 class SkillScreen extends StatefulWidget {
   const SkillScreen({super.key});
@@ -13,7 +16,8 @@ class SkillScreen extends StatefulWidget {
 class _SkillScreenState extends State<SkillScreen> {
   final SkillManager _manager = SkillManager.instance;
 
-  // 0: 캐릭터, 1: 펫
+  // 0: 캐릭터(원소 트리, SP로 학습), 1: 펫(펫 SP로 학습), 2: 액티브(DB 기반
+  // 쿨타임 스킬, 골드로 레벨업 + 장착/해제)
   int _selectedMainTab = 0;
 
   void _levelUpPetSkill(PetPassiveSkill skill) {
@@ -48,6 +52,32 @@ class _SkillScreenState extends State<SkillScreen> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _levelUpActiveSkill(ActiveSkill skill) {
+    if (_manager.levelUpActiveSkill(skill.id)) {
+      return;
+    }
+    final String message = skill.isMaxLevel ? '이미 최고 레벨입니다' : '골드가 부족합니다';
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _toggleEquipActiveSkill(ActiveSkill skill) {
+    final bool success = skill.isEquipped
+        ? _manager.unequipActiveSkill(skill.id)
+        : _manager.equipActiveSkill(skill.id);
+    if (success) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('최대 ${SkillManager.maxEquippedActiveSkills}개까지 장착할 수 있습니다'),
+        ),
+      );
   }
 
   void _showInfo(SkillNode node) {
@@ -115,10 +145,41 @@ class _SkillScreenState extends State<SkillScreen> {
     );
   }
 
+  Widget _buildActiveTab() {
+    if (_manager.activeSkills.isEmpty) {
+      return const Center(
+        child: Text('보유한 액티브 스킬이 없습니다', style: TextStyle(color: Colors.white54)),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final ActiveSkill skill in _manager.activeSkills)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _ActiveSkillTile(
+                  skill: skill,
+                  gold: GameManager.instance.gold,
+                  canEquipMore:
+                      _manager.equippedActiveSkills.length < SkillManager.maxEquippedActiveSkills,
+                  onLevelUp: () => _levelUpActiveSkill(skill),
+                  onToggleEquip: () => _toggleEquipActiveSkill(skill),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _manager,
+      animation: Listenable.merge([_manager, GameManager.instance]),
       builder: (context, _) {
         return Scaffold(
           backgroundColor: const Color(0xFF14141C),
@@ -139,9 +200,11 @@ class _SkillScreenState extends State<SkillScreen> {
                 padding: const EdgeInsets.only(right: 16),
                 child: Center(
                   child: Text(
-                    _selectedMainTab == 0
-                        ? 'SP ${_manager.skillPoints}'
-                        : '펫 SP ${_manager.petSkillPoints}',
+                    switch (_selectedMainTab) {
+                      0 => 'SP ${_manager.skillPoints}',
+                      1 => '펫 SP ${_manager.petSkillPoints}',
+                      _ => 'G ${NumberFormatter.format(GameManager.instance.gold.toDouble())}',
+                    },
                     style: const TextStyle(
                       color: Colors.amberAccent,
                       fontSize: 14,
@@ -172,11 +235,22 @@ class _SkillScreenState extends State<SkillScreen> {
                         onTap: () => setState(() => _selectedMainTab = 1),
                       ),
                     ),
+                    Expanded(
+                      child: _MainTabButton(
+                        label: '액티브',
+                        selected: _selectedMainTab == 2,
+                        onTap: () => setState(() => _selectedMainTab = 2),
+                      ),
+                    ),
                   ],
                 ),
               ),
               Expanded(
-                child: _selectedMainTab == 0 ? _buildCharacterTab() : _buildPetTab(),
+                child: switch (_selectedMainTab) {
+                  0 => _buildCharacterTab(),
+                  1 => _buildPetTab(),
+                  _ => _buildActiveTab(),
+                },
               ),
             ],
           ),
@@ -304,6 +378,149 @@ class _PetSkillTile extends StatelessWidget {
               maxed ? 'MAX' : '레벨업',
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// DB 기반 액티브 스킬(광역기/버프기) 한 장 — 레벨업(골드)과 장착/해제를
+/// 한 카드에서 처리한다. [_PetSkillTile]/[_SkillNodeTile]과 같은 시각
+/// 언어(장착 시 강조 테두리+배경)를 쓴다.
+class _ActiveSkillTile extends StatelessWidget {
+  const _ActiveSkillTile({
+    required this.skill,
+    required this.gold,
+    required this.canEquipMore,
+    required this.onLevelUp,
+    required this.onToggleEquip,
+  });
+
+  final ActiveSkill skill;
+  final int gold;
+  final bool canEquipMore;
+  final VoidCallback onLevelUp;
+  final VoidCallback onToggleEquip;
+
+  @override
+  Widget build(BuildContext context) {
+    const Color color = Color(0xFFE0553A);
+    final bool maxed = skill.isMaxLevel;
+    final bool canAffordLevelUp = !maxed && gold >= skill.nextLevelGoldCost;
+    final bool equipped = skill.isEquipped;
+    final bool canToggle = equipped || canEquipMore;
+
+    return Container(
+      width: 320,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: equipped ? color.withValues(alpha: 0.16) : const Color(0xFF20202C),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: equipped ? color : const Color(0xFF3A3A4A),
+          width: equipped ? 2 : 1.2,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Icon(skill.icon, color: color, size: 26),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      skill.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      skill.type == ActiveSkillType.buff ? '버프기' : '광역기',
+                      style: const TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                maxed ? 'MAX' : 'Lv.${skill.level}/${skill.maxLevel}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            skill.description,
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            skill.type == ActiveSkillType.buff
+                ? '${skill.buffDurationSeconds.toStringAsFixed(0)}초간 공격력 '
+                    '+${(skill.buffAttackPowerBonus * 100).toStringAsFixed(0)}% / 공격속도 '
+                    '+${(skill.buffAttackSpeedBonus * 100).toStringAsFixed(0)}%'
+                : '데미지 배율 x${skill.aoeMultiplier.toStringAsFixed(1)} (공격력 기준)',
+            style: const TextStyle(color: Colors.cyanAccent, fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: maxed ? null : (canAffordLevelUp ? onLevelUp : null),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.black,
+                    disabledBackgroundColor: const Color(0xFF3A3A4A),
+                    disabledForegroundColor: Colors.white38,
+                  ),
+                  child: Text(
+                    maxed
+                        ? 'MAX'
+                        : '레벨업 (${NumberFormatter.format(skill.nextLevelGoldCost.toDouble())}G)',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: canToggle ? onToggleEquip : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: equipped ? Colors.redAccent : Colors.greenAccent,
+                    disabledForegroundColor: Colors.white24,
+                    side: BorderSide(
+                      color: canToggle
+                          ? (equipped ? Colors.redAccent : Colors.greenAccent)
+                          : Colors.white24,
+                    ),
+                  ),
+                  child: Text(
+                    equipped ? '해제' : '장착',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),

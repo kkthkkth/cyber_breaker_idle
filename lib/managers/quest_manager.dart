@@ -34,7 +34,15 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
   List<Quest> _catalog = const [];
   final Map<String, QuestProgress> _progress = {};
 
+  /// 일일 퀘스트([QuestPeriod.daily]) 리셋 커서 — 자정(NTP 기준)이 지나면
+  /// 갱신된다.
   String? _lastResetDate;
+
+  /// 주간 퀘스트([QuestPeriod.weekly]) 리셋 커서 — 그 주의 월요일 날짜
+  /// (`yyyy-MM-dd`)를 키로 쓴다. 월요일이 지나면(=이번 주 월요일 키가
+  /// 바뀌면) 주간 퀘스트만 리셋된다 — 일일 퀘스트와 완전히 독립된 별도
+  /// 커서라 서로의 리셋 타이밍에 영향을 주지 않는다.
+  String? _lastResetWeekKey;
 
   Timer? _syncTimer;
   final Set<String> _dirtyQuestIds = {};
@@ -54,10 +62,10 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 단위 테스트 전용 — [_checkAndResetDaily]를 네트워크 폴백(NTP 실패 시
-  /// 기기 시간)만으로 직접 한 번 돌려본다.
+  /// 단위 테스트 전용 — [_checkAndReset](일일+주간 둘 다)을 네트워크
+  /// 폴백(NTP 실패 시 기기 시간)만으로 직접 한 번 돌려본다.
   @visibleForTesting
-  Future<void> debugCheckAndResetDailyForTest() => _checkAndResetDaily();
+  Future<void> debugCheckAndResetForTest() => _checkAndReset();
 
   /// 단위 테스트 전용 — [_lastResetDate]를 직접 읽고 쓴다.
   @visibleForTesting
@@ -66,13 +74,26 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
   @visibleForTesting
   set debugLastResetDate(String? value) => _lastResetDate = value;
 
+  /// 단위 테스트 전용 — [_lastResetWeekKey]를 직접 읽고 쓴다.
+  @visibleForTesting
+  String? get debugLastResetWeekKey => _lastResetWeekKey;
+
+  @visibleForTesting
+  set debugLastResetWeekKey(String? value) => _lastResetWeekKey = value;
+
   List<QuestDisplayItem> get questsWithProgress => [
     for (final Quest quest in _catalog)
       QuestDisplayItem(quest: quest, progress: _progress[quest.id] ?? QuestProgress.zero),
   ];
 
-  /// 목표를 달성했지만 아직 수령하지 않은 퀘스트가 하나라도 있는지 —
-  /// [QuestHudButton]의 빨간 뱃지가 이 값을 그대로 구독한다.
+  List<QuestDisplayItem> get dailyQuests =>
+      questsWithProgress.where((item) => item.quest.period == QuestPeriod.daily).toList();
+
+  List<QuestDisplayItem> get weeklyQuests =>
+      questsWithProgress.where((item) => item.quest.period == QuestPeriod.weekly).toList();
+
+  /// 목표를 달성했지만 아직 수령하지 않은 퀘스트가 하나라도 있는지(일일+
+  /// 주간 통틀어) — [QuestHudButton]의 빨간 뱃지가 이 값을 그대로 구독한다.
   bool get hasClaimableQuest => questsWithProgress.any((item) => item.isClaimable);
 
   @override
@@ -80,12 +101,13 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // Fire-and-forget: the override signature must stay void/sync (same
       // convention as DungeonManager.didChangeAppLifecycleState).
-      _checkAndResetDaily();
+      _checkAndReset();
     }
   }
 
   /// main()이 앱 시작 시 한 번 호출 — 로컬 캐시로 즉시 채우고, 서버에서
-  /// 카탈로그/오늘 진행도를 다시 확인한 뒤, 자정이 지났으면 리셋한다.
+  /// 카탈로그/오늘(+이번 주) 진행도를 다시 확인한 뒤, 자정/월요일이
+  /// 지났으면 각각 리셋한다.
   Future<void> loadData() async {
     await _loadLocal();
 
@@ -105,10 +127,10 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
       _progress[questId] = QuestProgress.fromJson(row);
     }
 
-    // 서버에서 받아온 값이 "오늘"보다 오래된 값일 수도 있으므로, 병합이
-    // 끝난 뒤에 자정 리셋 여부를 다시 판정한다 — 리셋 대상이면 방금
+    // 서버에서 받아온 값이 "오늘"/"이번 주"보다 오래된 값일 수도 있으므로,
+    // 병합이 끝난 뒤에 리셋 여부를 다시 판정한다 — 리셋 대상이면 방금
     // 병합한 값도 전부 0으로 덮어써진다.
-    await _checkAndResetDaily();
+    await _checkAndReset();
     await _saveLocal();
     notifyListeners();
   }
@@ -145,6 +167,19 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
 
   void _scheduleSync() {
     _syncTimer ??= Timer(_syncDebounce, _flushSync);
+  }
+
+  /// 앱이 백그라운드로 내려가기 직전([MyApp.didChangeAppLifecycleState])
+  /// 등, [_syncDebounce](2초) 타이머가 스스로 발화할 때까지 기다릴 여유가
+  /// 없을 때 대기 중인 진행도 동기화를 즉시 흘려보낸다 — 그러지 않으면
+  /// 타이머가 실제로 발화하기 전에 앱 프로세스가 죽어(백그라운드 킬/기기
+  /// 재부팅 등) 마지막 몇 번의 진행도 증가분이 서버에 영원히 반영되지
+  /// 않을 수 있다. 로컬 저장([_saveLocal])은 [updateProgress]에서 이미
+  /// 즉시 끝나 있어 이 기기에서는 안전하지만, 이 플러시 없이는 재설치/기기
+  /// 변경 시 그 몇 번의 증가분만큼 서버 값이 뒤처져 있을 수 있다.
+  Future<void> flushPendingSync() async {
+    _syncTimer?.cancel();
+    await _flushSync();
   }
 
   Future<void> _flushSync() async {
@@ -206,27 +241,67 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
   /// 이 경우엔 지우지 않고 오늘 날짜로 기준점만 잡는다([WorldBossManager
   /// ._maybeDistributeRewardsForClosedSession]/[ArenaManager
   /// ._checkWeeklySettlement]과 같은 "첫 관측은 베이스라인만" 관례).
-  Future<void> _checkAndResetDaily() async {
+  /// 일일 커서와 주간 커서를 각각 독립적으로 확인/리셋한다 — 자정만
+  /// 지났으면 일일 퀘스트만, 월요일이 됐으면 주간 퀘스트만(자정도 같이
+  /// 지났으면 둘 다) 리셋된다.
+  Future<void> _checkAndReset() async {
     final DateTime now = await getNetworkTime();
-    final String today = _formatDate(now);
-    if (_lastResetDate == today) {
+    await _checkAndResetPeriod(
+      period: QuestPeriod.daily,
+      currentKey: _formatDate(now),
+      lastKey: _lastResetDate,
+      setLastKey: (value) => _lastResetDate = value,
+    );
+    await _checkAndResetPeriod(
+      period: QuestPeriod.weekly,
+      currentKey: _mondayKeyOf(now),
+      lastKey: _lastResetWeekKey,
+      setLastKey: (value) => _lastResetWeekKey = value,
+    );
+  }
+
+  /// [DungeonManager.checkAndResetDailyCounts]와 동일한 관례 — 서버(NTP)
+  /// 시간 기준 커서가 이전과 다르면(기기 시계 조작 방지) 해당 주기
+  /// ([period])의 퀘스트 진행도만 0/미수령으로 되돌린다.
+  ///
+  /// 로컬 커서가 아예 없는 경우(최초 실행, 또는 재설치로 로컬 캐시만
+  /// 사라진 경우)는 예외로 취급한다 — [loadData]가 이 메서드를 부르기
+  /// 직전에 서버 `user_quests`를 이미 병합해 둔 상태라, 그 값이 실제로는
+  /// "이번 주기" 진행도일 수도 있다(재설치 케이스). 무작정 지우면 재설치한
+  /// 유저가 다른 기기/세션에서 이미 쌓아 둔 진행도를 잃어버리므로, 이
+  /// 경우엔 지우지 않고 커서만 잡는다([WorldBossManager
+  /// ._maybeDistributeRewardsForClosedSession]/[ArenaManager
+  /// ._checkWeeklySettlement]과 같은 "첫 관측은 베이스라인만" 관례).
+  Future<void> _checkAndResetPeriod({
+    required QuestPeriod period,
+    required String currentKey,
+    required String? lastKey,
+    required void Function(String) setLastKey,
+  }) async {
+    if (lastKey == currentKey) {
       return;
     }
-    if (_lastResetDate == null) {
-      _lastResetDate = today;
+    if (lastKey == null) {
+      setLastKey(currentKey);
       await _saveLocal();
       return;
     }
-    _lastResetDate = today;
-    _progress.clear();
+    setLastKey(currentKey);
+
+    final List<Quest> resetTargets =
+        _catalog.where((quest) => quest.period == period).toList();
+    for (final Quest quest in resetTargets) {
+      _progress.remove(quest.id);
+    }
     notifyListeners();
     await _saveLocal();
 
-    // 서버도 같은 리셋 상태로 맞춘다 — 리셋 시점에 카탈로그가 비어 있으면
-    // (아직 fetchQuestCatalog 전) 보낼 게 없으니 건너뛴다.
-    if (_catalog.isNotEmpty) {
+    // 서버도 같은 리셋 상태로 맞춘다 — 이 주기에 해당하는 퀘스트가 아직
+    // 카탈로그에 없으면(예: 주간 카탈로그가 비어 있는 상태에서 daily만
+    // 리셋되는 경우) 보낼 게 없으니 건너뛴다.
+    if (resetTargets.isNotEmpty) {
       await SupabaseManager.instance.upsertUserQuestProgressBatch([
-        for (final Quest quest in _catalog)
+        for (final Quest quest in resetTargets)
           {'quest_id': quest.id, 'current_count': 0, 'is_claimed': false},
       ]);
     }
@@ -238,6 +313,14 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
     return '${date.year}-$month-$day';
   }
 
+  /// [date]가 속한 주(월요일 시작)의 월요일 날짜를 `yyyy-MM-dd`로 —
+  /// [DateTime.weekday]는 월=1~일=7이라 `weekday - 1`일만큼 뒤로 가면
+  /// 그 주의 월요일이 나온다.
+  static String _mondayKeyOf(DateTime date) {
+    final DateTime monday = date.subtract(Duration(days: date.weekday - 1));
+    return _formatDate(monday);
+  }
+
   static const String _saveKey = 'quest_manager_save';
 
   Future<void> _saveLocal() async {
@@ -246,6 +329,7 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
       _saveKey,
       jsonEncode({
         'lastResetDate': _lastResetDate,
+        'lastResetWeekKey': _lastResetWeekKey,
         'progress': _progress.map(
           (key, value) => MapEntry(key, {
             'current_count': value.currentCount,
@@ -262,14 +346,19 @@ class QuestManager extends ChangeNotifier with WidgetsBindingObserver {
     if (raw == null) {
       return;
     }
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    _lastResetDate = data['lastResetDate'] as String?;
-    final Map<String, dynamic>? progressJson = data['progress'] as Map<String, dynamic>?;
-    if (progressJson != null) {
-      _progress.clear();
-      progressJson.forEach((key, value) {
-        _progress[key] = QuestProgress.fromJson(value as Map<String, dynamic>);
-      });
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      _lastResetDate = data['lastResetDate'] as String?;
+      _lastResetWeekKey = data['lastResetWeekKey'] as String?;
+      final Map<String, dynamic>? progressJson = data['progress'] as Map<String, dynamic>?;
+      if (progressJson != null) {
+        _progress.clear();
+        progressJson.forEach((key, value) {
+          _progress[key] = QuestProgress.fromJson(value as Map<String, dynamic>);
+        });
+      }
+    } catch (error) {
+      debugPrint('[QuestManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
   }
 }

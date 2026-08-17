@@ -1,9 +1,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13(API 33)+에서 로컬 알림을 실제로 띄우려면 런타임에 이
+         권한을 요청해야 한다(NotificationManager.init()이 앱 시작 시 한
+         번 요청한다) — 매니페스트 선언 자체는 요청을 위한 전제조건일 뿐,
+         유저가 거부하면 알림은 조용히 표시되지 않는다(크래시 없음). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="idle_rpg"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- google_mobile_ads(AdManager)가 요구하는 필수 메타데이터 —
+             값이 없으면 앱이 시작하자마자 크래시한다. 지금 들어있는 값은
+             Google이 공개한 "테스트용 App ID"(admob.google.com 문서
+             참고)이고, 실제 배포 전 반드시 AdMob 콘솔에서 발급받은 이
+             앱만의 실제 App ID로 교체해야 한다 — [AdManager] 문서 참고. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
+        <meta-data
+            android:name="com.google.android.gms.ads.AD_MANAGER_APP"
+            android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

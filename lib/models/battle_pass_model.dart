@@ -37,3 +37,33 @@ class BattlePassRewardTier {
     premiumRewardAmount: (json['premium_reward_amount'] as num?)?.toInt() ?? 0,
   );
 }
+
+/// `battle_pass_seasons` 테이블 한 행 — 시즌 패스는 이 기간 동안만
+/// 유효하다([isActive]). [BattlePassManager]가 앱 시작 시 활성 시즌을
+/// 찾아 진행도([BattlePassManager.bpExp] 등)를 그 시즌에 묶는다 — 로컬에
+/// 남아있던 진행도가 지난 시즌 것이면 새 시즌으로 넘어가는 순간
+/// 자동으로 초기화된다(실제 시즌제 배틀패스의 표준 동작).
+class BattlePassSeason {
+  const BattlePassSeason({
+    required this.id,
+    required this.startDate,
+    required this.endDate,
+  });
+
+  final String id;
+  final DateTime startDate;
+  final DateTime endDate;
+
+  bool get isActive {
+    final DateTime now = DateTime.now();
+    return !now.isBefore(startDate) && now.isBefore(endDate);
+  }
+
+  Duration get remaining => endDate.difference(DateTime.now());
+
+  factory BattlePassSeason.fromJson(Map<String, dynamic> json) => BattlePassSeason(
+    id: json['id'].toString(),
+    startDate: DateTime.parse(json['start_date'] as String).toLocal(),
+    endDate: DateTime.parse(json['end_date'] as String).toLocal(),
+  );
+}

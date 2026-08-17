@@ -4,7 +4,7 @@
 class GameConfig {
   const GameConfig({
     this.offlineRewardEfficiency = 0.5,
-    this.maxOfflineHours = 12,
+    this.maxOfflineHours = 24,
   });
 
   /// Offline earnings run at this fraction of the online rate.
@@ -28,7 +28,7 @@ class GameConfig {
     return GameConfig(
       offlineRewardEfficiency:
           (json['offlineRewardEfficiency'] as num?)?.toDouble() ?? 0.5,
-      maxOfflineHours: (json['maxOfflineHours'] as num?)?.toInt() ?? 12,
+      maxOfflineHours: (json['maxOfflineHours'] as num?)?.toInt() ?? 24,
     );
   }
 }

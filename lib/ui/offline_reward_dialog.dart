@@ -59,47 +59,64 @@ class OfflineRewardDialog extends StatelessWidget {
             ),
           ],
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.nights_stay, color: Colors.amberAccent, size: 48),
-            const SizedBox(height: 12),
-            const Text(
-              '환영합니다!\n잠시 자리를 비운 동안 영웅들이 열심히 싸웠습니다.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-            const SizedBox(height: 20),
-            _InfoRow(label: '방치 시간', value: _formattedDuration),
-            const SizedBox(height: 10),
-            _InfoRow(label: '획득한 골드', value: '🪙 $rewardGold', valueColor: Colors.amberAccent),
-            if (_hasLoot) ...[
-              const SizedBox(height: 16),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '획득한 전리품',
-                  style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+        child: ConstrainedBox(
+          // item_detail_dialog.dart와 같은 관례 — 방치 동안 쌓인 소모품
+          // 종류가 많거나(_LootGrid가 그만큼 키가 커진다) 접근성 글자
+          // 크기가 커진 상태에서도, 위쪽 내용만 스크롤되고 "수령하기"
+          // 버튼은 항상 화면에 고정돼 보이게 한다(RenderFlex overflow
+          // 방지).
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.nights_stay, color: Colors.amberAccent, size: 48),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '환영합니다!\n잠시 자리를 비운 동안 영웅들이 열심히 싸웠습니다.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      const SizedBox(height: 20),
+                      _InfoRow(label: '방치 시간', value: _formattedDuration),
+                      const SizedBox(height: 10),
+                      _InfoRow(label: '획득한 골드', value: '🪙 $rewardGold', valueColor: Colors.amberAccent),
+                      if (_hasLoot) ...[
+                        const SizedBox(height: 16),
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '획득한 전리품',
+                            style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _LootGrid(equipmentCount: equipmentCount, consumableDrops: consumableDrops),
+                      ],
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-              _LootGrid(equipmentCount: equipmentCount, consumableDrops: consumableDrops),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C4FCE),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('수령하기', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ),
             ],
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF6C4FCE),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: const Text('보상 받기', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

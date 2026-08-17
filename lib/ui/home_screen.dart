@@ -5,17 +5,24 @@ import 'package:flutter/material.dart';
 
 import '../game/idle_game.dart';
 import '../managers/attendance_manager.dart';
+import '../managers/battle_pass_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/mission_manager.dart';
+import '../managers/prestige_manager.dart';
 import '../managers/skill_manager.dart';
 import '../managers/speed_manager.dart';
+import '../managers/tutorial_manager.dart';
 import '../managers/world_boss_manager.dart';
+import '../models/active_skill_model.dart';
 import '../models/mission_model.dart';
 import '../models/skill_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
+import 'battle_pass_screen.dart';
 import 'mission_dialog.dart';
 import 'potion_quick_slot.dart';
+import 'prestige_dialog.dart';
+import 'ranking_screen.dart';
 import 'world_boss_entry_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -75,9 +82,21 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Expanded(
                   flex: 1,
-                  child: _BattleView(game: _idleGame, manager: _manager),
+                  child: KeyedSubtree(
+                    key: TutorialManager.battleViewKey,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () {
+                        if (TutorialManager.instance.currentStep == 0) {
+                          TutorialManager.instance.advance();
+                        }
+                      },
+                      child: _BattleView(game: _idleGame, manager: _manager),
+                    ),
+                  ),
                 ),
                 const SkillTreeQuickBar(),
+                const ActiveSkillQuickBar(),
                 Expanded(
                   flex: 1,
                   child: _UpgradeView(manager: _manager),
@@ -120,7 +139,10 @@ class _BattleView extends StatelessWidget {
               // 이 서로 다른 비율을 쓰면 해상도가 바뀔 때마다 둘이 어긋난다.
               final double playerX = constraints.maxWidth * IdleGame.playerXRatio;
               final double playerY = constraints.maxHeight * IdleGame.groundYRatio;
-              const double spriteSize = 56;
+              // PlayerAnimationComponent.boxSize와 반드시 같은 값을 써야
+              // 한다 — 상자 크기가 바뀌면(예전 56 → 180) 이 HP 바 위치도
+              // 함께 따라가지 않으면 캐릭터 머리와 겹쳐 보인다.
+              const double spriteSize = PlayerAnimationComponent.boxSize;
 
               // 몬스터는 항상 화면 가로 중앙(전투 위치)에서 싸운다 — 몬스터
               // HP 바를 그 머리 위, 몬스터 폭의 1.2배 너비로만 짧게 띄운다.
@@ -174,6 +196,21 @@ class _BattleView extends StatelessWidget {
                     top: 64,
                     left: 12,
                     child: _WorldBossHudButton(),
+                  ),
+                  const Positioned(
+                    top: 116,
+                    left: 12,
+                    child: _PrestigeHudButton(),
+                  ),
+                  const Positioned(
+                    top: 168,
+                    left: 12,
+                    child: _RankingHudButton(),
+                  ),
+                  const Positioned(
+                    top: 220,
+                    left: 12,
+                    child: _BattlePassHudButton(),
                   ),
                   // 상단 AppBar의 보석/코인 재화 표시(main.dart) 바로 아래,
                   // 화면 우측 상단에 위치한 물약 퀵슬롯.
@@ -635,6 +672,133 @@ class _WorldBossHudButton extends StatelessWidget {
   }
 }
 
+/// 오버클럭(프레스티지) 진입 버튼 — [_WorldBossHudButton] 바로 아래(같은
+/// 44px 원 규격)에 놓인다. 아직 최소 챕터([PrestigeManager
+/// .minChapterToPrestige])에 도달하지 못했어도 숨기지 않고 회색으로
+/// "잠김" 상태를 보여준다 — 기능 자체를 미리 알려줘야 유저가 그 챕터까지
+/// 갈 목표가 생긴다(완전히 숨기면 이 기능이 있는지조차 모른다).
+class _PrestigeHudButton extends StatelessWidget {
+  const _PrestigeHudButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([PrestigeManager.instance, GameManager.instance]),
+      builder: (context, _) {
+        final PrestigeManager prestige = PrestigeManager.instance;
+        final Color accent = prestige.canPrestige ? const Color(0xFF6C4FCE) : Colors.white24;
+
+        return GestureDetector(
+          onTap: () => showPrestigeDialog(context),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: accent, width: 1.5),
+                ),
+                alignment: Alignment.center,
+                child: Text('⚡', style: TextStyle(fontSize: 22, color: accent)),
+              ),
+              if (prestige.corePoints > 0) ...[
+                const SizedBox(height: 2),
+                _OutlinedCountdownText(text: '${prestige.corePoints}P'),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 명예의 전당(랭킹) 진입 버튼 — [_PrestigeHudButton] 바로 아래(같은 44px
+/// 원 규격)에 놓인다. 항상 같은 색(잠금 상태 없음)으로 표시한다 — 챕터
+/// 진행도와 무관하게 누구나 바로 랭킹을 확인할 수 있어야 하기 때문.
+class _RankingHudButton extends StatelessWidget {
+  const _RankingHudButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => showRankingScreen(context),
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0xFFFFD700), width: 1.5),
+        ),
+        alignment: Alignment.center,
+        child: const Text('🏆', style: TextStyle(fontSize: 20)),
+      ),
+    );
+  }
+}
+
+/// 배틀패스 진입 버튼 — [_RankingHudButton] 바로 아래(같은 44px 원
+/// 규격)에 놓인다. 지금 레벨에서 아직 안 받은 보상(무료든 프리미엄이든)이
+/// 하나라도 있으면 [_QuestHudButton]과 같은 빨간 점 배지를 띄운다.
+class _BattlePassHudButton extends StatelessWidget {
+  const _BattlePassHudButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: BattlePassManager.instance,
+      builder: (context, _) {
+        final BattlePassManager manager = BattlePassManager.instance;
+        final bool hasClaimable = manager.rewardTrack.any(
+          (tier) =>
+              manager.canClaim(tier.level, premium: false) ||
+              manager.canClaim(tier.level, premium: true),
+        );
+
+        return GestureDetector(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const BattlePassScreen()),
+          ),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
+                ),
+                alignment: Alignment.center,
+                child: const Text('🎫', style: TextStyle(fontSize: 20)),
+              ),
+              if (hasClaimable)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// 배경(전투 화면의 패럴랙스/몬스터 등 시각적으로 복잡한 배경)에 텍스트가
 /// 묻히지 않도록, 굵은 검은 테두리(Stroke) 위에 노란 글자를 겹쳐 그리는
 /// 아웃라인 텍스트. `Paint()..style = PaintingStyle.stroke`로 뒤에 테두리용
@@ -717,6 +881,140 @@ class SkillTreeQuickBar extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// 장착된 액티브 스킬(DB 기반 광역기/버프기, 최대
+/// [SkillManager.maxEquippedActiveSkills]개)을 탭해서 쓰는 HUD 슬롯 —
+/// 위의 [SkillTreeQuickBar](쿨타임이 돌아오면 배속 중 자동 재발동)와 달리
+/// 매번 유저가 직접 눌러야 발동하고, 쿨타임은 숫자 대신 원형 게이지로
+/// 채워진다([_ActiveSkillSlot] 참고).
+class ActiveSkillQuickBar extends StatelessWidget {
+  const ActiveSkillQuickBar({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: SkillManager.instance,
+      builder: (context, _) {
+        final List<ActiveSkill> equipped = SkillManager.instance.equippedActiveSkills;
+
+        if (equipped.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Container(
+          color: const Color(0xFF1B1B26),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: SizedBox(
+            height: 56,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: equipped.length,
+              itemBuilder: (context, index) {
+                final ActiveSkill skill = equipped[index];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: _ActiveSkillSlot(key: ValueKey(skill.id), skillId: skill.id),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 액티브 스킬 하나의 탭-발동 슬롯 — 0.1초마다 다시 그려 원형 게이지가
+/// 실시간으로 차오르는 것처럼 보이게 한다([_AutoSkillSlot]과 같은 폴링
+/// 방식이지만, 쿨타임이 끝나도 자동으로 재발동하지 않고 다음 탭을 기다린다).
+class _ActiveSkillSlot extends StatefulWidget {
+  const _ActiveSkillSlot({super.key, required this.skillId});
+
+  final String skillId;
+
+  @override
+  State<_ActiveSkillSlot> createState() => _ActiveSkillSlotState();
+}
+
+class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final SkillManager manager = SkillManager.instance;
+    final ActiveSkill? skill = manager.findActiveSkillById(widget.skillId);
+    if (skill == null) {
+      return const SizedBox.shrink();
+    }
+
+    final double effectiveCooldown = manager.effectiveActiveSkillCooldown(skill);
+    final double remaining = manager.activeSkillCooldownRemaining(widget.skillId);
+    final bool isOnCooldown = remaining > 0;
+    final double progress =
+        effectiveCooldown <= 0 ? 1 : (1 - remaining / effectiveCooldown).clamp(0.0, 1.0);
+    final Color accent =
+        skill.type == ActiveSkillType.buff ? Colors.cyanAccent : Colors.orangeAccent;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: isOnCooldown ? null : () => manager.useActiveSkill(widget.skillId),
+      child: Container(
+        width: 48,
+        height: 48,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: const Color(0xFF20202C),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: accent, width: 1.2),
+        ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(skill.icon, color: accent, size: 22),
+            if (isOnCooldown) ...[
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.all(3),
+                  child: CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 3,
+                    backgroundColor: Colors.white24,
+                    valueColor: const AlwaysStoppedAnimation(Colors.white70),
+                  ),
+                ),
+              ),
+              Container(
+                color: Colors.black54,
+                alignment: Alignment.center,
+                child: Text(
+                  remaining.ceil().toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

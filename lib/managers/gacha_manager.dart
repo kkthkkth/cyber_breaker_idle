@@ -154,10 +154,15 @@ class GachaManager extends ChangeNotifier {
       return;
     }
 
-    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
-    inventory
-      ..clear()
-      ..addAll(decoded.map((entry) => Item.fromJson(entry as Map<String, dynamic>)));
+    try {
+      final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+      inventory
+        ..clear()
+        ..addAll(decoded.map((entry) => Item.fromJson(entry as Map<String, dynamic>)));
+    } catch (error) {
+      debugPrint('[GachaManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+      return;
+    }
 
     notifyListeners();
   }

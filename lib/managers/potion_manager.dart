@@ -366,28 +366,32 @@ class PotionManager extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    final List<dynamic>? catalogJson = data['catalog'] as List<dynamic>?;
-    if (catalogJson != null) {
-      _catalog = catalogJson
-          .map((entry) => ShopConsumableEntry.fromJson(entry as Map<String, dynamic>))
-          .toList();
-    }
-    final Map<String, dynamic>? inventoryJson = data['inventory'] as Map<String, dynamic>?;
-    if (inventoryJson != null) {
-      _inventory
-        ..clear()
-        ..addAll(inventoryJson.map((key, value) => MapEntry(key, (value as num).toInt())));
-    }
-    equippedPotionId = data['equippedPotionId'] as String?;
-    autoUseThresholdRatio =
-        (data['autoUseThresholdRatio'] as num?)?.toDouble() ?? defaultAutoUseThreshold;
-    _lastResetDate = data['lastResetDate'] as String?;
-    final Map<String, dynamic>? countsJson = data['dailyCoinPurchaseCounts'] as Map<String, dynamic>?;
-    if (countsJson != null) {
-      _dailyCoinPurchaseCounts
-        ..clear()
-        ..addAll(countsJson.map((key, value) => MapEntry(key, (value as num).toInt())));
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final List<dynamic>? catalogJson = data['catalog'] as List<dynamic>?;
+      if (catalogJson != null) {
+        _catalog = catalogJson
+            .map((entry) => ShopConsumableEntry.fromJson(entry as Map<String, dynamic>))
+            .toList();
+      }
+      final Map<String, dynamic>? inventoryJson = data['inventory'] as Map<String, dynamic>?;
+      if (inventoryJson != null) {
+        _inventory
+          ..clear()
+          ..addAll(inventoryJson.map((key, value) => MapEntry(key, (value as num).toInt())));
+      }
+      equippedPotionId = data['equippedPotionId'] as String?;
+      autoUseThresholdRatio =
+          (data['autoUseThresholdRatio'] as num?)?.toDouble() ?? defaultAutoUseThreshold;
+      _lastResetDate = data['lastResetDate'] as String?;
+      final Map<String, dynamic>? countsJson = data['dailyCoinPurchaseCounts'] as Map<String, dynamic>?;
+      if (countsJson != null) {
+        _dailyCoinPurchaseCounts
+          ..clear()
+          ..addAll(countsJson.map((key, value) => MapEntry(key, (value as num).toInt())));
+      }
+    } catch (error) {
+      debugPrint('[PotionManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
   }
 }

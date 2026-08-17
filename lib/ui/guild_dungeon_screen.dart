@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../game/idle_game.dart';
 import '../managers/skill_manager.dart';
+import '../models/active_skill_model.dart';
 import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
 import 'top_bar.dart';
 
@@ -35,6 +36,14 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
   // 던전용 IdleGame을 계속 가리키는 일이 없다.
   void Function(double damage)? _previousDamageHandler;
 
+  // 광역기(active_aoe) 낙하 이펙트/데미지도 damageHandler와 같은 이유로
+  // 저장해뒀다가 복원한다(dungeon_screen.dart의 _DungeonBattleScreen과
+  // 동일한 관례) — 안 그러면 길드 던전을 나간 뒤 홈 화면에서 광역기를
+  // 써도 이미 dispose된 이 IdleGame의 콜백이 계속 남아 있어(1) 아무
+  // 효과가 없고 (2) 이 dispose된 인스턴스가 클로저를 통해 계속 메모리에
+  // 붙잡혀 있게 된다.
+  void Function(ActiveSkill skill, double damage)? _previousActiveSkillCast;
+
   @override
   void initState() {
     super.initState();
@@ -48,6 +57,8 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
+    _previousActiveSkillCast = SkillManager.instance.onActiveSkillCast;
+    SkillManager.instance.onActiveSkillCast = _game.castActiveSkill;
   }
 
   @override
@@ -58,6 +69,12 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
       _game.applySkillDamage,
     )) {
       SkillManager.instance.damageHandler = _previousDamageHandler;
+    }
+    if (identical(
+      SkillManager.instance.onActiveSkillCast,
+      _game.castActiveSkill,
+    )) {
+      SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
     }
     // 이 화면 전용 IdleGame 인스턴스는 매번 새로 만들고 여기서 버린다 —
     // EquipmentManager 리스너를 해제하지 않으면 길드 던전에 들어갔다 나올

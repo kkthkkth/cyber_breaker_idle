@@ -1,0 +1,447 @@
+import 'dart:async';
+
+import 'package:flame/game.dart';
+import 'package:flutter/material.dart';
+
+import '../game/idle_game.dart';
+import '../managers/guild_raid_manager.dart';
+import '../managers/skill_manager.dart';
+import '../models/active_skill_model.dart';
+import '../models/guild_boss_model.dart';
+import '../utils/number_formatter.dart';
+import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
+import 'top_bar.dart';
+
+/// 길드 레이드 탭에서 [도전하기]를 누르면 곧장 여기로 진입한다 — 길드
+/// 던전 전투 화면([GuildDungeonScreen])과 같은 [IdleGame] + [GameWidget]
+/// 뼈대를 그대로 재사용하되, 몬스터 체력이 "나만의 인스턴스 체력"이 아니라
+/// 길드원 전원이 공유하는 서버 보스 체력이라는 점이 다르다. 30초가 끝나면
+/// 이번 도전에서 누적으로 가한 데미지([IdleGame.guildRaidDamageDealt])를
+/// [GuildRaidManager.submitDamage]로 한 번에 서버에 제출한다.
+class GuildRaidScreen extends StatefulWidget {
+  const GuildRaidScreen({super.key});
+
+  @override
+  State<GuildRaidScreen> createState() => _GuildRaidScreenState();
+}
+
+class _GuildRaidScreenState extends State<GuildRaidScreen> {
+  late final IdleGame _game;
+  late final Timer _ticker;
+  bool _resultShown = false;
+  bool _isSubmitting = false;
+
+  void Function(double damage)? _previousDamageHandler;
+
+  // 광역기(active_aoe) 낙하 이펙트/데미지도 damageHandler와 같은 이유로
+  // 저장해뒀다가 복원한다(dungeon_screen.dart의 _DungeonBattleScreen과
+  // 동일한 관례) — 안 그러면 이 화면을 나간 뒤 홈 화면에서 광역기를 써도
+  // 이미 dispose된 이 IdleGame의 콜백이 계속 남아 있어(1) 아무 효과가
+  // 없고 (2) 이 dispose된 인스턴스가 클로저를 통해 계속 메모리에 붙잡혀
+  // 있게 된다.
+  void Function(ActiveSkill skill, double damage)? _previousActiveSkillCast;
+
+  @override
+  void initState() {
+    super.initState();
+    _game = IdleGame();
+    _game.guildRaidBossHp = (GuildRaidManager.instance.boss?.currentHp ?? 0).toDouble();
+    _game.onDungeonComplete = _handleDungeonComplete;
+    _game.startDungeon(GameMode.guildRaid);
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+
+    _previousDamageHandler = SkillManager.instance.damageHandler;
+    SkillManager.instance.damageHandler = _game.applySkillDamage;
+    _previousActiveSkillCast = SkillManager.instance.onActiveSkillCast;
+    SkillManager.instance.onActiveSkillCast = _game.castActiveSkill;
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    if (identical(SkillManager.instance.damageHandler, _game.applySkillDamage)) {
+      SkillManager.instance.damageHandler = _previousDamageHandler;
+    }
+    if (identical(SkillManager.instance.onActiveSkillCast, _game.castActiveSkill)) {
+      SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
+    }
+    _game.detachListeners();
+    super.dispose();
+  }
+
+  /// 30초가 끝나는 순간([IdleGame]은 길드 레이드를 "타임아웃=성공"으로
+  /// 취급한다 — 처치가 목표가 아니라 누적 데미지가 목표라서) 호출된다.
+  /// 실제 서버 반영([GuildRaidManager.submitDamage])은 여기서 비동기로
+  /// 진행하고, 끝나는 대로 결과 팝업을 띄운다.
+  void _handleDungeonComplete({
+    required bool success,
+    required int goldReward,
+    int gemReward = 0,
+    dynamic itemReward,
+    int pawprintReward = 0,
+    int guildCoinReward = 0,
+    dynamic consumableItemReward,
+  }) {
+    if (_resultShown || !mounted) {
+      return;
+    }
+    _resultShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _submitAndShowResult());
+  }
+
+  Future<void> _submitAndShowResult() async {
+    if (!mounted) {
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    final int totalDamage = _game.guildRaidDamageDealt.round();
+    final GuildBossAttackResult? result = await GuildRaidManager.instance.submitDamage(totalDamage);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _isSubmitting = false);
+    _showResultDialog(totalDamage: totalDamage, result: result);
+  }
+
+  void _showResultDialog({required int totalDamage, required GuildBossAttackResult? result}) {
+    if (!mounted) {
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B1B26),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            '레이드 결과',
+            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '누적 피해량: ${NumberFormatter.format(totalDamage.toDouble())}',
+                style: const TextStyle(color: Colors.white70),
+              ),
+              if (result == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    '서버에 결과를 반영하지 못했어요. 네트워크를 확인해주세요.',
+                    style: TextStyle(color: Colors.redAccent, fontSize: 12),
+                  ),
+                )
+              else ...[
+                if (result.defeated)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '보스를 처치했습니다! Lv.${result.newLevel} 보스가 새로 나타났어요.',
+                      style: const TextStyle(
+                        color: Colors.amberAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                if (result.coinReward > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '길드 주화 +${result.coinReward}개',
+                      style: const TextStyle(
+                        color: Color(0xFF6C4FCE),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop();
+                }
+              },
+              child: const Text('확인'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
+
+    return PopScope(
+      canPop: _resultShown,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0F0F17),
+        body: SafeArea(
+          child: Column(
+            children: [
+              const TopBar(),
+              SizedBox(
+                height: 56,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Align(
+                      alignment: Alignment.center,
+                      child: Text(
+                        '길드 레이드',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 22,
+                        ),
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: IconButton(
+                        icon: Icon(
+                          Icons.arrow_back,
+                          color: (_resultShown && !_isSubmitting) ? Colors.white : Colors.white24,
+                        ),
+                        onPressed:
+                            (_resultShown && !_isSubmitting) ? () => Navigator.pop(context) : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: GameWidget(game: _game)),
+                    const Positioned.fill(child: SkillEffectOverlay()),
+                    Positioned(
+                      top: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+                            style: const TextStyle(
+                              color: Colors.orangeAccent,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Positioned(bottom: 90, left: 0, right: 0, child: SkillTreeQuickBar()),
+                    Positioned(
+                      bottom: 16,
+                      left: 16,
+                      right: 16,
+                      child: Column(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: LinearProgressIndicator(
+                              value: hpRatio,
+                              minHeight: 14,
+                              backgroundColor: Colors.white24,
+                              valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
+                            '${_game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_isSubmitting)
+                      Container(
+                        color: Colors.black54,
+                        alignment: Alignment.center,
+                        child: const CircularProgressIndicator(color: Colors.redAccent),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 길드 레이드 탭 — [GuildMainScreen] 하단 탭 중 하나. 탭에 들어설 때마다
+/// 최신 보스 상태를 받아오고(다른 길드원의 공격을 반영), 오늘 남은 도전
+/// 횟수/보스 체력 바를 보여준다.
+class GuildRaidTab extends StatefulWidget {
+  const GuildRaidTab({super.key});
+
+  @override
+  State<GuildRaidTab> createState() => _GuildRaidTabState();
+}
+
+class _GuildRaidTabState extends State<GuildRaidTab> {
+  bool _isEntering = false;
+
+  @override
+  void initState() {
+    super.initState();
+    GuildRaidManager.instance.refreshBoss();
+  }
+
+  Future<void> _enter() async {
+    if (_isEntering || GuildRaidManager.instance.boss == null) {
+      // 보스 정보가 아직 로드되기 전(refreshBoss 진행 중)에는 입장을 막는다
+      // — 그러지 않으면 IdleGame이 guildRaidBossHp=0으로 시작해 1(최소
+      // 폴백값)짜리 표시 체력으로 전투가 시작되는(실제 서버 반영은
+      // 정상이지만 체력 바만 잘못 보이는) 경합 상태가 생긴다.
+      return;
+    }
+    setState(() => _isEntering = true);
+    final bool consumed = await GuildRaidManager.instance.consumeAttempt();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _isEntering = false);
+    if (!consumed) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('오늘 도전 횟수를 모두 사용했어요.')));
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const GuildRaidScreen()),
+    );
+    if (mounted) {
+      await GuildRaidManager.instance.refreshBoss();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: GuildRaidManager.instance,
+      builder: (context, _) {
+        final GuildRaidManager manager = GuildRaidManager.instance;
+        final GuildBoss? boss = manager.boss;
+
+        return RefreshIndicator(
+          onRefresh: manager.refreshBoss,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF20202C),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6)),
+                ),
+                child: boss == null
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text('보스 정보를 불러오는 중입니다...', style: TextStyle(color: Colors.white54)),
+                        ),
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.local_fire_department, color: Colors.redAccent, size: 20),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    '길드 레이드 보스',
+                                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                              Text(
+                                'Lv.${boss.level}',
+                                style: const TextStyle(
+                                  color: Colors.redAccent,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: LinearProgressIndicator(
+                              value: boss.hpRatio,
+                              minHeight: 10,
+                              backgroundColor: Colors.white12,
+                              valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${NumberFormatter.format(boss.currentHp.toDouble())} / '
+                            '${NumberFormatter.format(boss.maxHp.toDouble())}',
+                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
+                        ],
+                      ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                '오늘 남은 도전 횟수: ${manager.remainingAttemptsToday} / ${GuildRaidManager.maxDailyAttempts}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '30초 동안 온 힘을 다해 보스를 공격하세요! 보스 체력이 0이 되면\n다음 레벨 보스가 나타나고, 참여한 길드원 전원에게 길드 주화가 지급돼요.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: (manager.hasAttemptsLeft && !_isEntering && boss != null) ? _enter : null,
+                icon: const Icon(Icons.sports_kabaddi),
+                label: Text(
+                  !manager.hasAttemptsLeft
+                      ? '도전 횟수 소진'
+                      : boss == null
+                      ? '불러오는 중...'
+                      : '도전하기',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF3A3A4A),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}

@@ -312,19 +312,24 @@ class AffectionManager extends ChangeNotifier {
       return;
     }
 
-    final Map<String, dynamic> decoded = jsonDecode(raw) as Map<String, dynamic>;
-    _data.clear();
-    decoded.forEach((key, value) {
-      final AffectionData data = AffectionData.fromJson(value as Map<String, dynamic>);
-      // 로컬 저장 파일이 손상되거나(수동 편집 등) 예전 버전의 규칙으로
-      // 저장된 값이 남아 있어도 항상 유효한 범위 안으로 강제한다 — 여기서
-      // 클램프해 두면 그 이후의 모든 읽기/쓰기 경로는 항상 정상 범위라고
-      // 믿고 써도 된다.
-      data.unlockedLevel = data.unlockedLevel.clamp(1, maxLevel);
-      data.currentAffinityPercent = data.currentAffinityPercent.clamp(0, 100).toDouble();
-      data.chatCountToday = data.chatCountToday.clamp(0, maxChatsPerDay);
-      _data[key] = data;
-    });
+    try {
+      final Map<String, dynamic> decoded = jsonDecode(raw) as Map<String, dynamic>;
+      _data.clear();
+      decoded.forEach((key, value) {
+        final AffectionData data = AffectionData.fromJson(value as Map<String, dynamic>);
+        // 로컬 저장 파일이 손상되거나(수동 편집 등) 예전 버전의 규칙으로
+        // 저장된 값이 남아 있어도 항상 유효한 범위 안으로 강제한다 — 여기서
+        // 클램프해 두면 그 이후의 모든 읽기/쓰기 경로는 항상 정상 범위라고
+        // 믿고 써도 된다.
+        data.unlockedLevel = data.unlockedLevel.clamp(1, maxLevel);
+        data.currentAffinityPercent = data.currentAffinityPercent.clamp(0, 100).toDouble();
+        data.chatCountToday = data.chatCountToday.clamp(0, maxChatsPerDay);
+        _data[key] = data;
+      });
+    } catch (error) {
+      debugPrint('[AffectionManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+      return;
+    }
 
     notifyListeners();
   }

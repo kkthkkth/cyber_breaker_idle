@@ -35,9 +35,9 @@ class DailyQuestHudButton extends StatelessWidget {
   }
 }
 
-/// 일일 퀘스트 화면 — 목표 진행도 프로그레스 바를 보여주고, 달성한
-/// 퀘스트는 [받기] 버튼으로 배틀패스 BP 경험치를 수령한다. 우측 상단
-/// 버튼으로 [BattlePassScreen]에 바로 진입할 수 있다.
+/// 퀘스트 화면 — 일일/주간 탭으로 나뉘어 목표 진행도 프로그레스 바를
+/// 보여주고, 달성한 퀘스트는 [받기] 버튼으로 배틀패스 BP 경험치를
+/// 수령한다. 우측 상단 버튼으로 [BattlePassScreen]에 바로 진입할 수 있다.
 class QuestScreen extends StatelessWidget {
   const QuestScreen({super.key});
 
@@ -54,93 +54,134 @@ class QuestScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: Listenable.merge([QuestManager.instance, BattlePassManager.instance]),
       builder: (context, _) {
-        final List<QuestDisplayItem> items = QuestManager.instance.questsWithProgress;
+        final List<QuestDisplayItem> dailyItems = QuestManager.instance.dailyQuests;
+        final List<QuestDisplayItem> weeklyItems = QuestManager.instance.weeklyQuests;
         final BattlePassManager battlePass = BattlePassManager.instance;
 
-        return Scaffold(
-          backgroundColor: const Color(0xFF14141C),
-          appBar: AppBar(
-            backgroundColor: const Color(0xFF1B1B26),
-            elevation: 0,
-            // 뒤로 가기 버튼처럼 별도 색을 안 준 아이콘이 어두운 배경에
-            // 묻히지 않도록 명시한다.
-            foregroundColor: Colors.white,
-            title: const Text(
-              '일일 퀘스트',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        return DefaultTabController(
+          length: 2,
+          child: Scaffold(
+            backgroundColor: const Color(0xFF14141C),
+            appBar: AppBar(
+              backgroundColor: const Color(0xFF1B1B26),
+              elevation: 0,
+              // 뒤로 가기 버튼처럼 별도 색을 안 준 아이콘이 어두운 배경에
+              // 묻히지 않도록 명시한다.
+              foregroundColor: Colors.white,
+              title: const Text(
+                '퀘스트',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              centerTitle: true,
+              bottom: const TabBar(
+                indicatorColor: Color(0xFF6C4FCE),
+                labelColor: Colors.white,
+                unselectedLabelColor: Colors.white54,
+                tabs: [
+                  Tab(text: '일일'),
+                  Tab(text: '주간'),
+                ],
+              ),
             ),
-            centerTitle: true,
-          ),
-          body: Column(
-            children: [
-              InkWell(
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const BattlePassScreen()),
-                ),
-                child: Container(
-                  margin: const EdgeInsets.all(16),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF6C4FCE), Color(0xFF3A2A6E)],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
+            body: Column(
+              children: [
+                InkWell(
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const BattlePassScreen()),
                   ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.military_tech, color: Colors.amberAccent, size: 28),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '배틀패스 Lv.${battlePass.level}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: LinearProgressIndicator(
-                                value: battlePass.levelProgressRatio,
-                                minHeight: 6,
-                                backgroundColor: Colors.white24,
-                                valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
-                              ),
-                            ),
-                          ],
-                        ),
+                  child: Container(
+                    margin: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF6C4FCE), Color(0xFF3A2A6E)],
                       ),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.chevron_right, color: Colors.white70),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.military_tech, color: Colors.amberAccent, size: 28),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '배틀패스 Lv.${battlePass.level}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: LinearProgressIndicator(
+                                  value: battlePass.levelProgressRatio,
+                                  minHeight: 6,
+                                  backgroundColor: Colors.white24,
+                                  valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right, color: Colors.white70),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _QuestListView(
+                        items: dailyItems,
+                        emptyMessage: '오늘의 퀘스트를 불러오는 중이에요.',
+                        onClaim: (item) => _claim(context, item),
+                      ),
+                      _QuestListView(
+                        items: weeklyItems,
+                        emptyMessage: '이번 주 퀘스트를 불러오는 중이에요.',
+                        onClaim: (item) => _claim(context, item),
+                      ),
                     ],
                   ),
                 ),
-              ),
-              Expanded(
-                child: items.isEmpty
-                    ? const Center(
-                        child: Text(
-                          '오늘의 퀘스트를 불러오는 중이에요.',
-                          style: TextStyle(color: Colors.white54),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          final QuestDisplayItem item = items[index];
-                          return _QuestTile(item: item, onClaim: () => _claim(context, item));
-                        },
-                      ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
+      },
+    );
+  }
+}
+
+class _QuestListView extends StatelessWidget {
+  const _QuestListView({
+    required this.items,
+    required this.emptyMessage,
+    required this.onClaim,
+  });
+
+  final List<QuestDisplayItem> items;
+  final String emptyMessage;
+  final ValueChanged<QuestDisplayItem> onClaim;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return Center(
+        child: Text(emptyMessage, style: const TextStyle(color: Colors.white54)),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final QuestDisplayItem item = items[index];
+        return _QuestTile(item: item, onClaim: () => onClaim(item));
       },
     );
   }

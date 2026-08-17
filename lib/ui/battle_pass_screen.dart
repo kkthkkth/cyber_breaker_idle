@@ -5,8 +5,10 @@ import '../managers/game_manager.dart';
 import '../models/battle_pass_model.dart';
 import '../widgets/center_toast.dart';
 
-/// 배틀패스 화면 — 상단에 내 레벨/exp 바(+ 프리미엄 해금 버튼), 중앙에
-/// 레벨별 보상 트랙(무료/프리미엄 2열)을 세로 스크롤 리스트로 보여준다.
+/// 배틀패스 화면 — 상단에 내 레벨/exp 바(+ 시즌 D-day, 프리미엄 해금
+/// 버튼), 아래에 레벨별 보상을 가로로 스크롤하는 2행(위: 무료, 아래:
+/// 프리미엄) 트랙을 보여준다(요구사항: "가로로 스크롤하며... 전형적인
+/// UI").
 class BattlePassScreen extends StatelessWidget {
   const BattlePassScreen({super.key});
 
@@ -49,7 +51,7 @@ class BattlePassScreen extends StatelessWidget {
             // 묻히지 않도록 명시한다.
             foregroundColor: Colors.white,
             title: const Text(
-              '배틀패스',
+              '🎫 배틀패스',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
             centerTitle: true,
@@ -60,52 +62,35 @@ class BattlePassScreen extends StatelessWidget {
                 level: manager.level,
                 ratio: manager.levelProgressRatio,
                 isPremium: manager.isPremium,
+                season: manager.currentSeason,
                 onTapUnlock: () => showDialog<void>(
                   context: context,
                   builder: (context) => const _PremiumUnlockDialog(),
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  children: [
-                    SizedBox(width: 48, child: Text('Lv', style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold))),
-                    Expanded(
-                      child: Center(
-                        child: Text('무료', style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: Text('프리미엄', style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               Expanded(
-                child: manager.rewardTrack.isEmpty
+                child: manager.currentSeason == null
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 24),
+                          child: Text(
+                            '현재 진행 중인 시즌이 없어요.\n다음 시즌을 기다려 주세요!',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white54),
+                          ),
+                        ),
+                      )
+                    : manager.rewardTrack.isEmpty
                     ? const Center(
                         child: Text(
                           '보상 트랙을 불러오는 중이에요.',
                           style: TextStyle(color: Colors.white54),
                         ),
                       )
-                    : ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        itemCount: manager.rewardTrack.length,
-                        itemBuilder: (context, index) {
-                          final BattlePassRewardTier tier = manager.rewardTrack[index];
-                          return _RewardTile(
-                            tier: tier,
-                            myLevel: manager.level,
-                            isPremium: manager.isPremium,
-                            freeClaimed: manager.hasClaimedFree(tier.level),
-                            premiumClaimed: manager.hasClaimedPremium(tier.level),
-                            onTapFree: () => _onTapReward(context, tier, premium: false),
-                            onTapPremium: () => _onTapReward(context, tier, premium: true),
-                          );
-                        },
+                    : _BattlePassTrack(
+                        manager: manager,
+                        onTapFree: (tier) => _onTapReward(context, tier, premium: false),
+                        onTapPremium: (tier) => _onTapReward(context, tier, premium: true),
                       ),
               ),
             ],
@@ -121,13 +106,24 @@ class _BattlePassHeader extends StatelessWidget {
     required this.level,
     required this.ratio,
     required this.isPremium,
+    required this.season,
     required this.onTapUnlock,
   });
 
   final int level;
   final double ratio;
   final bool isPremium;
+  final BattlePassSeason? season;
   final VoidCallback onTapUnlock;
+
+  String? get _seasonLabel {
+    final BattlePassSeason? s = season;
+    if (s == null) {
+      return null;
+    }
+    final int daysLeft = s.remaining.inDays;
+    return daysLeft > 0 ? '시즌 종료까지 D-$daysLeft' : '오늘 시즌 종료';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -149,16 +145,27 @@ class _BattlePassHeader extends StatelessWidget {
               border: Border.all(color: Colors.amberAccent, width: 1.5),
             ),
             alignment: Alignment.center,
-            child: const Icon(Icons.military_tech, color: Colors.amberAccent, size: 26),
+            child: const Text('🎫', style: TextStyle(fontSize: 24)),
           ),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Lv.$level',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                Row(
+                  children: [
+                    Text(
+                      'Lv.$level',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                    ),
+                    if (_seasonLabel != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        _seasonLabel!,
+                        style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 6),
                 ClipRRect(
@@ -191,8 +198,93 @@ class _BattlePassHeader extends StatelessWidget {
   }
 }
 
-class _RewardTile extends StatelessWidget {
-  const _RewardTile({
+/// 레벨별 보상을 가로로 스크롤하는 2행 트랙 — 왼쪽엔 고정된 "무료/Lv/
+/// 프리미엄" 행 라벨을, 오른쪽엔 레벨마다 한 열(무료 칸 위/프리미엄 칸
+/// 아래, 그 사이에 레벨 배지)을 가로로 나열한다.
+class _BattlePassTrack extends StatelessWidget {
+  const _BattlePassTrack({
+    required this.manager,
+    required this.onTapFree,
+    required this.onTapPremium,
+  });
+
+  final BattlePassManager manager;
+  final ValueChanged<BattlePassRewardTier> onTapFree;
+  final ValueChanged<BattlePassRewardTier> onTapPremium;
+
+  static const double _cellHeight = 74;
+  static const double _badgeRowHeight = 40;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(
+          width: 52,
+          child: Column(
+            children: [
+              SizedBox(
+                height: _cellHeight,
+                child: Center(
+                  child: Text(
+                    '무료',
+                    style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: _badgeRowHeight,
+                child: Center(
+                  child: Text(
+                    'Lv',
+                    style: TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: _cellHeight,
+                child: Center(
+                  child: Text(
+                    '프리미엄',
+                    style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+            child: Row(
+              children: [
+                for (final BattlePassRewardTier tier in manager.rewardTrack)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: _BattlePassColumn(
+                      tier: tier,
+                      myLevel: manager.level,
+                      isPremium: manager.isPremium,
+                      freeClaimed: manager.hasClaimedFree(tier.level),
+                      premiumClaimed: manager.hasClaimedPremium(tier.level),
+                      onTapFree: () => onTapFree(tier),
+                      onTapPremium: () => onTapPremium(tier),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 레벨 한 칸 — 위: 무료 보상, 가운데: 레벨 배지, 아래: 프리미엄 보상.
+class _BattlePassColumn extends StatelessWidget {
+  const _BattlePassColumn({
     required this.tier,
     required this.myLevel,
     required this.isPremium,
@@ -214,41 +306,49 @@ class _RewardTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF20202C),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: _reached ? const Color(0xFF6C4FCE) : const Color(0xFF3A3A4A),
-          width: _reached ? 1.4 : 1,
-        ),
-      ),
-      child: Row(
+    return SizedBox(
+      width: 78,
+      child: Column(
         children: [
           SizedBox(
-            width: 48,
-            child: Text(
-              '${tier.level}',
-              style: TextStyle(
-                color: _reached ? Colors.white : Colors.white38,
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-              ),
-            ),
-          ),
-          Expanded(
-            child: _RewardCell(
+            height: _BattlePassTrack._cellHeight,
+            child: _BattlePassCell(
               label: tier.freeRewardLabel,
               reached: _reached,
               claimed: freeClaimed,
               locked: false,
+              accent: const Color(0xFF6C4FCE),
               onTap: onTapFree,
             ),
           ),
-          Expanded(
-            child: _RewardCell(
+          SizedBox(
+            height: _BattlePassTrack._badgeRowHeight,
+            child: Center(
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: _reached ? const Color(0xFF6C4FCE) : const Color(0xFF20202C),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _reached ? Colors.amberAccent : const Color(0xFF3A3A4A),
+                  ),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${tier.level}',
+                  style: TextStyle(
+                    color: _reached ? Colors.white : Colors.white38,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(
+            height: _BattlePassTrack._cellHeight,
+            child: _BattlePassCell(
               label: tier.premiumRewardLabel,
               reached: _reached,
               claimed: premiumClaimed,
@@ -263,8 +363,8 @@ class _RewardTile extends StatelessWidget {
   }
 }
 
-class _RewardCell extends StatelessWidget {
-  const _RewardCell({
+class _BattlePassCell extends StatelessWidget {
+  const _BattlePassCell({
     required this.label,
     required this.reached,
     required this.claimed,
@@ -291,12 +391,13 @@ class _RewardCell extends StatelessWidget {
       onTap: (claimed && !locked) ? null : onTap,
       borderRadius: BorderRadius.circular(10),
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
-          color: _isClaimable ? accent.withValues(alpha: 0.18) : Colors.black26,
+          color: _isClaimable ? accent.withValues(alpha: 0.18) : const Color(0xFF20202C),
           borderRadius: BorderRadius.circular(10),
-          border: _isClaimable ? Border.all(color: accent) : null,
+          border: _isClaimable
+              ? Border.all(color: accent)
+              : Border.all(color: const Color(0xFF3A3A4A), width: 1),
         ),
         alignment: Alignment.center,
         child: Column(

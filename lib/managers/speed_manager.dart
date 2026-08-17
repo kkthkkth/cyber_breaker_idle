@@ -125,27 +125,32 @@ class SpeedManager extends ChangeNotifier {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    final int? endTimeMillis = data['endTimeMillis'] as int?;
-    final int? savedSpeed = data['activeSpeed'] as int?;
-    if (endTimeMillis == null || savedSpeed == null) {
-      await prefs.remove(_saveKey);
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final int? endTimeMillis = data['endTimeMillis'] as int?;
+      final int? savedSpeed = data['activeSpeed'] as int?;
+      if (endTimeMillis == null || savedSpeed == null) {
+        await prefs.remove(_saveKey);
+        return;
+      }
+
+      final DateTime endTime = DateTime.fromMillisecondsSinceEpoch(endTimeMillis);
+      final int secondsLeft = endTime.difference(DateTime.now()).inSeconds;
+
+      if (secondsLeft <= 0) {
+        await prefs.remove(_saveKey);
+        return;
+      }
+
+      activeSpeed = savedSpeed;
+      gameSpeedMultiplier = savedSpeed;
+      _endTime = endTime;
+      remainingSeconds = secondsLeft;
+      _startTimer();
+    } catch (error) {
+      debugPrint('[SpeedManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
       return;
     }
-
-    final DateTime endTime = DateTime.fromMillisecondsSinceEpoch(endTimeMillis);
-    final int secondsLeft = endTime.difference(DateTime.now()).inSeconds;
-
-    if (secondsLeft <= 0) {
-      await prefs.remove(_saveKey);
-      return;
-    }
-
-    activeSpeed = savedSpeed;
-    gameSpeedMultiplier = savedSpeed;
-    _endTime = endTime;
-    remainingSeconds = secondsLeft;
-    _startTimer();
     notifyListeners();
   }
 }

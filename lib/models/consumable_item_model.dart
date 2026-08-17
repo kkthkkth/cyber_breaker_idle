@@ -26,6 +26,12 @@ enum ConsumableType {
   // Lv.MAX에서 [AffectionManager.tryOath]가 1개 소모하고 해당 캐릭터의
   // AffectionData.isOathed를 영구 true로 바꾼다.
   oathRing,
+
+  // 요일 던전(수요일) 전용 보상 재화 — 지금은 순수 수집/보관용이며, 장비
+  // 레벨업 비용(Equipment.levelUpCost)은 여전히 골드만 쓴다. 이 재화를
+  // 실제 강화 소모 자원으로 편입하는 건 별도 밸런스 결정이 필요해 이번
+  // 범위엔 넣지 않았다.
+  enhanceStone,
 }
 
 extension ConsumableTypeX on ConsumableType {
@@ -67,6 +73,8 @@ extension ConsumableTypeX on ConsumableType {
         return '보석';
       case ConsumableType.oathRing:
         return '서약의 반지';
+      case ConsumableType.enhanceStone:
+        return '강화석';
     }
   }
 
@@ -104,6 +112,8 @@ extension ConsumableTypeX on ConsumableType {
         return Icons.diamond;
       case ConsumableType.oathRing:
         return Icons.diamond_outlined;
+      case ConsumableType.enhanceStone:
+        return Icons.construction;
     }
   }
 

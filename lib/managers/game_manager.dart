@@ -1,89 +1,31 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/artifact_model.dart';
 import '../models/collection_model.dart';
 import '../models/equipment.dart';
+import '../models/equipment_set_model.dart';
+import '../models/pet_stat_metadata_model.dart';
 import '../models/quest_model.dart';
+import '../models/rune_model.dart';
 import '../models/skill_model.dart';
+import 'achievement_manager.dart';
+import 'artifact_manager.dart';
+import 'battle_pass_manager.dart';
 import 'consumable_manager.dart';
 import 'equipment_manager.dart';
+import 'equipment_set_manager.dart';
 import 'guild_manager.dart';
 import 'monster_drop_manager.dart';
-import 'pet_manager.dart';
+import 'prestige_manager.dart';
 import 'quest_manager.dart';
+import 'rune_manager.dart';
 import 'skill_manager.dart';
-import 'speed_manager.dart';
-
-class Skill {
-  Skill({
-    required this.id,
-    required this.name,
-    required this.icon,
-    required this.cost,
-    required this.cooldown,
-    this.isLearned = false,
-    this.lastUsedTime,
-  });
-
-  final String id;
-  final String name;
-  final IconData icon;
-  final int cost;
-  final double cooldown;
-  bool isLearned;
-  DateTime? lastUsedTime;
-
-  double get cooldownRemaining {
-    if (lastUsedTime == null) {
-      return 0;
-    }
-    final double elapsed =
-        DateTime.now().difference(lastUsedTime!).inMilliseconds / 1000.0;
-    // Speed boosts make cooldowns tick down faster: elapsed wall-clock time
-    // counts for `activeSpeed`x as much against the fixed cooldown.
-    final double scaledElapsed =
-        elapsed * SpeedManager.instance.gameSpeedMultiplier;
-    final double remaining = cooldown - scaledElapsed;
-    return remaining > 0 ? remaining : 0;
-  }
-
-  bool get isReady => isLearned && cooldownRemaining <= 0;
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'isLearned': isLearned,
-      'lastUsedTime': lastUsedTime?.millisecondsSinceEpoch,
-    };
-  }
-
-  // icon/name/cost/cooldown come from the static catalog (not persisted,
-  // since IconData isn't meaningfully JSON-serializable) — the caller
-  // passes the matching catalog skill's fields back in.
-  factory Skill.fromJson(
-    Map<String, dynamic> json, {
-    required String name,
-    required IconData icon,
-    required int cost,
-    required double cooldown,
-  }) {
-    final int? lastUsedMillis = json['lastUsedTime'] as int?;
-    return Skill(
-      id: json['id'] as String,
-      name: name,
-      icon: icon,
-      cost: cost,
-      cooldown: cooldown,
-      isLearned: json['isLearned'] as bool? ?? false,
-      lastUsedTime: lastUsedMillis != null
-          ? DateTime.fromMillisecondsSinceEpoch(lastUsedMillis)
-          : null,
-    );
-  }
-}
+import 'supabase_manager.dart';
 
 class GameManager extends ChangeNotifier {
   GameManager._internal() {
@@ -103,8 +45,6 @@ class GameManager extends ChangeNotifier {
   /// 그대로 유지했다(monster_drop_table 기반 신규 드랍 시스템은 완전히
   /// 별도 경로로 추가된 것이지, 이 레거시 메커니즘을 대체하지 않는다).
   static const double _legacyEquipmentDropRate = 0.3;
-  static const double skillMinMultiplier = 5.0;
-  static const double skillMaxMultiplier = 10.0;
 
   // ── 절대 스테이지 번호 ↔ (챕터, 서브스테이지) 변환 ──────────────────
   // 프로젝트 전체에서 "절대 스테이지 번호로부터 챕터/서브스테이지를
@@ -118,30 +58,6 @@ class GameManager extends ChangeNotifier {
   /// [chapter]/[stage](서브스테이지)를 절대 스테이지 번호로 합친 값 —
   /// [chapterOf]/[subStageOf]의 역변환.
   int get absoluteStage => (chapter - 1) * maxStage + stage;
-
-  final List<Skill> skills = [
-    Skill(
-      id: 'meteor_strike',
-      name: '메테오 스트라이크',
-      icon: Icons.whatshot,
-      cost: 500,
-      cooldown: 10.0,
-    ),
-    Skill(
-      id: 'blizzard',
-      name: '블리자드',
-      icon: Icons.ac_unit,
-      cost: 800,
-      cooldown: 15.0,
-    ),
-    Skill(
-      id: 'thunder_strike',
-      name: '썬더 스트라이크',
-      icon: Icons.bolt,
-      cost: 1200,
-      cooldown: 20.0,
-    ),
-  ];
 
   int gold = 0;
   int gems = 0;
@@ -166,8 +82,11 @@ class GameManager extends ChangeNotifier {
   /// (0.05 == +5%)을 그대로 더하면 된다.
   double get effectiveCriticalMultiplier =>
       criticalMultiplier +
-      PetManager.instance.criticalDamageBoost +
-      EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalDamage);
+      _petSpecialStat(PetSpecialStat.criticalDamageBoost) +
+      EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalDamage) +
+      EquipmentSetManager.instance
+          .totalBonus(EquipmentSetStat.criticalDamagePercent, _equippedSetCounts) +
+      RuneManager.instance.totalBonus(RuneStat.criticalDamagePercent);
 
   int attackLevel = 1;
   int attackSpeedLevel = 1;
@@ -201,7 +120,23 @@ class GameManager extends ChangeNotifier {
   double itemDropRate = 0.0;
 
   // ── 플레이어 HP ─────────────────────────────────────────────────
-  double maxHp = 200;
+  double baseMaxHp = 200;
+
+  /// 유물(Artifact)의 [ArtifactStat.maxHpPercent] 패시브가 곱산으로 반영된
+  /// 실제 최대 체력 — 기존 필드명 `maxHp`를 그대로 getter로 남겨서 게임
+  /// 내/외부의 모든 기존 호출부(전투 로직, HP바 UI 등)가 수정 없이 자동으로
+  /// 유물 보너스를 받는다.
+  double get maxHp =>
+      baseMaxHp *
+      (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
+      (1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.maxHpPercent, _equippedSetCounts)) *
+      (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent));
+
+  /// 장착 세트별 부위 수 — [EquipmentSetManager.totalBonus] 호출마다 매번
+  /// 새로 계산하지 않도록 한 곳에 모았다(EquipmentManager.equippedItems를
+  /// 그대로 위임).
+  Map<String, int> get _equippedSetCounts => EquipmentManager.instance.equippedSetCounts;
+
   double currentHp = 200;
 
   bool get isPlayerDefeated => currentHp <= 0;
@@ -231,9 +166,6 @@ class GameManager extends ChangeNotifier {
 
   double bossTimeRemaining = bossTimeLimit;
 
-  /// Fired when a skill successfully activates, so Flame can play the effect.
-  void Function(Skill skill)? onSkillUsed;
-
   /// Fired the moment [chapter] advances into a brand-new chapter's first
   /// stage (right after a boss clear) — [_MainNavigationScreenState] uses
   /// this to trigger that chapter's main-story cutscene
@@ -255,8 +187,14 @@ class GameManager extends ChangeNotifier {
 
   /// 펫 패시브 스킬은 장착된 펫(EquipType.pet)이 1개 이상 있을 때만 합산되고,
   /// 해제하는 즉시(다음 계산부터) 0으로 취급된다 — 캐시하지 않고 매번 조회.
-  bool get _hasPetEquipped =>
-      EquipmentManager.instance.equippedItems[EquipType.pet] != null;
+  bool get _hasPetEquipped => EquipmentManager.instance.equippedPet != null;
+
+  /// 장착 펫의 특수 스탯([key], [PetSpecialStat]의 6개 키 중 하나) 값 —
+  /// 펫이 없거나 그 펫이 이 스탯을 안 굴렸으면 0. 예전엔 이 값들이 아무도
+  /// 채우지 않는 별개의 죽은 PetManager에서 왔다 — 이제 실제로 가챠/
+  /// 장착이 이뤄지는 [EquipmentManager.equippedPet]에서 직접 읽는다.
+  double _petSpecialStat(String key) =>
+      EquipmentManager.instance.equippedPet?.specialStats[key] ?? 0;
 
   double get attackPower {
     double power = baseAttackPower *
@@ -267,21 +205,39 @@ class GameManager extends ChangeNotifier {
     power *= 1 + (collectionBonuses[CollectionStatType.attackPower] ?? 0);
     // 장착 펫(신규 Pet 모델)의 "최종 공격력 증폭" 옵션 — 위의 스킬트리 기반
     // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
-    power *= 1 + PetManager.instance.finalAttackBoost;
+    power *= 1 + _petSpecialStat(PetSpecialStat.finalAttackBoost);
     // 장비 서브 옵션(EquipmentStatType.attack)의 "공격력" 값 — statMultiplier
     // 기반 getTotalEquipmentMultiplier()와는 별개 소스라 곱산이 한 번 더 들어간다.
     power *= 1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attack);
     // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.attackBonus가
     // 0이라 곱산에 영향이 없다.
     power *= 1 + GuildManager.instance.attackBonus;
+    // 오버클럭(프레스티지) 누적 코어 포인트 버프 — 한 번도 오버클럭하지
+    // 않았으면 PrestigeManager.attackBonus가 0이라 곱산에 영향이 없다.
+    power *= 1 + PrestigeManager.instance.attackBonus;
+    // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    power *= 1 + ArtifactManager.instance.totalBonus(ArtifactStat.attackPercent);
+    // 액티브 버프 스킬(active_buff)의 일시적 공격력 증폭 — 버프가 꺼져
+    // 있으면 activeBuffAttackPowerBonus가 0이라 곱산에 영향이 없다.
+    power *= 1 + SkillManager.instance.activeBuffAttackPowerBonus;
+    // 장비 세트 효과(2/4부위) — 발동 중인 세트가 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    power *= 1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.attackPercent, _equippedSetCounts);
+    // 룬(공격형, 붉은 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    power *= 1 + RuneManager.instance.totalBonus(RuneStat.attackPercent);
     return power;
   }
 
   /// 장착 중인 실제 공격 속도 — 골드로 올린 기본치([attackSpeed])에 장비
-  /// 서브 옵션(EquipmentStatType.attackSpeed)의 % 보너스를 곱해 반영한다.
-  /// 전투 루프(IdleGame)와 스킬 데미지 계산은 반드시 이 값을 써야 한다.
+  /// 서브 옵션(EquipmentStatType.attackSpeed)의 % 보너스와 액티브 버프
+  /// 스킬의 일시적 공격 속도 증폭을 곱해 반영한다. 전투 루프(IdleGame)와
+  /// 스킬 데미지 계산은 반드시 이 값을 써야 한다.
   double get effectiveAttackSpeed =>
-      attackSpeed * (1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attackSpeed));
+      attackSpeed *
+      (1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attackSpeed)) *
+      (1 + SkillManager.instance.activeBuffAttackSpeedBonus);
 
   /// 스킬 크리티컬 판정에 실제로 쓰이는 확률 — 업그레이드로 쌓인 [criticalRate]에
   /// 펫이 장착돼 있을 때만 크리티컬 확률 증가 패시브를, 도감 보너스와 장비
@@ -293,6 +249,9 @@ class GameManager extends ChangeNotifier {
     }
     rate += collectionBonuses[CollectionStatType.criticalRate] ?? 0;
     rate += EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalRate);
+    rate += EquipmentSetManager.instance
+        .totalBonus(EquipmentSetStat.criticalRatePercent, _equippedSetCounts);
+    rate += RuneManager.instance.totalBonus(RuneStat.criticalRatePercent);
     return rate.clamp(0.0, _maxCriticalRate);
   }
 
@@ -300,6 +259,15 @@ class GameManager extends ChangeNotifier {
   double get defensePower {
     double value = baseDefense + EquipmentManager.instance.getTotalDefenseBonus();
     value += collectionBonuses[CollectionStatType.defense] ?? 0;
+    // 유물(Artifact) 누적 패시브 — 여기까지의 가산 방어력 합계에 곱산으로
+    // 적용한다(공격력 곱산 체인과 같은 방식).
+    value *= 1 + ArtifactManager.instance.totalBonus(ArtifactStat.defensePercent);
+    // 장비 세트 효과(2/4부위) — 발동 중인 세트가 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    value *= 1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.defensePercent, _equippedSetCounts);
+    // 룬(방어형, 푸른 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    value *= 1 + RuneManager.instance.totalBonus(RuneStat.defensePercent);
     return value;
   }
 
@@ -313,7 +281,8 @@ class GameManager extends ChangeNotifier {
   double get effectiveEvasionRate {
     final double rate = evasionRate +
         EquipmentManager.instance.getTotalEvasionRateBonus() +
-        (collectionBonuses[CollectionStatType.evasionRate] ?? 0);
+        (collectionBonuses[CollectionStatType.evasionRate] ?? 0) +
+        RuneManager.instance.totalBonus(RuneStat.evasionRatePercent);
     return rate.clamp(0.0, _maxEvasionRate);
   }
 
@@ -341,6 +310,49 @@ class GameManager extends ChangeNotifier {
   /// (초당 타격 횟수)를 [_averageHitsPerKill]로 나눈 값을 시간당으로
   /// 환산한다.
   double get estimatedKillsPerHour => (effectiveAttackSpeed * 3600) / _averageHitsPerKill;
+
+  /// [chapter]/[stage] 몬스터를 처치했을 때 실제로 받는 골드 — 기본 공식과
+  /// 펫/길드/오버클럭/유물 보너스 곱산 체인을 [_onMonsterDefeated]와
+  /// [offlineGoldPerMinute]가 공유한다(두 곳이 서로 다른 공식을 쓰다 밸런스가
+  /// 어긋나는 일을 막기 위해 여기 하나로 모았다).
+  int goldRewardForKill({required int chapter, required int stage}) {
+    int goldReward = (10 * chapter * stage).round();
+    if (_hasPetEquipped) {
+      goldReward =
+          (goldReward * (1 + SkillManager.instance.petPassiveBonus(PetPassiveType.coinRate))).round();
+    }
+    // 장착 펫(신규 Pet 모델)의 "골드 획득 증가" 옵션 — 스킬트리 기반
+    // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
+    goldReward = (goldReward * (1 + _petSpecialStat(PetSpecialStat.goldGain))).round();
+    // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.goldBonus가
+    // 0이라 곱산에 영향이 없다.
+    goldReward = (goldReward * (1 + GuildManager.instance.goldBonus)).round();
+    // 오버클럭(프레스티지) 누적 코어 포인트 버프 — 한 번도 오버클럭하지
+    // 않았으면 PrestigeManager.goldBonus가 0이라 곱산에 영향이 없다.
+    goldReward = (goldReward * (1 + PrestigeManager.instance.goldBonus)).round();
+    // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    goldReward = (goldReward *
+            (1 + ArtifactManager.instance.totalBonus(ArtifactStat.goldGainPercent)))
+        .round();
+    // 룬(유틸형, 초록 룬) 골드 획득량 증가 — 장착 룬이 없으면 totalBonus가
+    // 0이라 곱산에 영향이 없다.
+    goldReward =
+        (goldReward * (1 + RuneManager.instance.totalBonus(RuneStat.goldGainPercent))).round();
+    return goldReward;
+  }
+
+  /// 오프라인 방치 보상 전용 — [highestReachedChapter]의 "평균적인" 몬스터
+  /// (서브스테이지 1~[maxStage]의 중간값)를 잡았을 때 골드 기준으로 분당
+  /// 획득량을 추정한다. 실제 온라인 전투와 같은 공식+보너스 체인
+  /// ([goldRewardForKill])을 쓰므로, 오프라인 중에도 펫/길드/오버클럭/유물
+  /// 보너스가 그대로 반영된다.
+  double get offlineGoldPerMinute {
+    const double averageStage = (1 + maxStage) / 2;
+    final int goldPerKill =
+        goldRewardForKill(chapter: highestReachedChapter, stage: averageStage.round());
+    return goldPerKill * estimatedKillsPerHour / 60;
+  }
 
   int get attackUpgradeCost => (50 * pow(1.15, attackLevel - 1)).round();
 
@@ -446,6 +458,22 @@ class GameManager extends ChangeNotifier {
     saveGame();
   }
 
+  /// "오버클럭"(프레스티지) 실행 — [PrestigeManager.prestige]가 코어
+  /// 포인트를 정산한 직후 호출한다. 스테이지 진행도([chapter]/[stage])와
+  /// [gold]를 처음(1-1)으로 되돌리지만, [highestReachedChapter](역대 최고
+  /// 기록 — 다음 오버클럭 보상 계산의 기준)와 장비/캐릭터/보석/길드 등
+  /// "수집형" 진행도는 전혀 건드리지 않는다 — 되돌리는 건 오직 이번 판의
+  /// 스테이지 주행 기록뿐이다.
+  void resetForPrestige() {
+    chapter = 1;
+    stage = 1;
+    gold = 0;
+    currentHp = maxHp;
+    _resetMonsterHp();
+    notifyListeners();
+    saveGame();
+  }
+
   ({Equipment? droppedItem, int goldReward}) damageMonster(double damage) {
     if (monsterHp <= 0) {
       return (droppedItem: null, goldReward: 0);
@@ -458,7 +486,7 @@ class GameManager extends ChangeNotifier {
       }
       // 장착 펫(신규 Pet 모델)의 "보스 데미지 증가" 옵션 — 스킬트리 기반
       // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
-      effectiveDamage *= 1 + PetManager.instance.bossDamageBonus;
+      effectiveDamage *= 1 + _petSpecialStat(PetSpecialStat.bossDamage);
     }
 
     monsterHp -= effectiveDamage;
@@ -482,20 +510,24 @@ class GameManager extends ChangeNotifier {
     // 이벤트라 QuestManager가 스스로 서버 동기화를 디바운스한다(여기서는
     // 그냥 부담 없이 매번 호출).
     QuestManager.instance.updateProgress(QuestActionType.monsterKill, 1);
+    // 업적("누적 몬스터 처치") 진행도 — 위 일일 퀘스트와 달리 자정에도
+    // 리셋되지 않는 영구 누적값이다. AchievementManager도 로컬 저장만
+    // 매번 하고 서버 동기화는 실제로 보상을 받을 때만 하므로 잦은 호출이
+    // 문제되지 않는다.
+    AchievementManager.instance.recordMonsterKill();
 
-    int goldReward = (10 * chapter * stage).round();
-    if (_hasPetEquipped) {
-      goldReward = (goldReward * (1 + SkillManager.instance.petPassiveBonus(PetPassiveType.coinRate))).round();
+    // 배틀패스 BP — 몬스터 처치마다 저확률(BattlePassManager.monsterKillDropChance)로
+    // 소량 지급된다. 활성 시즌이 없으면 addBpExp가 스스로 아무 일도 하지
+    // 않으므로 여기서 별도로 시즌 유무를 확인할 필요가 없다.
+    if (_random.nextDouble() < BattlePassManager.monsterKillDropChance) {
+      unawaited(BattlePassManager.instance.addBpExp(BattlePassManager.monsterKillDropAmount));
     }
-    // 장착 펫(신규 Pet 모델)의 "골드 획득 증가" 옵션 — 스킬트리 기반
-    // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
-    goldReward = (goldReward * (1 + PetManager.instance.goldGainBonus)).round();
-    // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.goldBonus가
-    // 0이라 곱산에 영향이 없다.
-    goldReward = (goldReward * (1 + GuildManager.instance.goldBonus)).round();
+
+    final int goldReward = goldRewardForKill(chapter: chapter, stage: stage);
 
     final double effectiveDropRate =
-        (_legacyEquipmentDropRate * (1 + PetManager.instance.dropRateBonus)).clamp(0.0, 1.0);
+        (_legacyEquipmentDropRate * (1 + _petSpecialStat(PetSpecialStat.dropRateBoost)))
+            .clamp(0.0, 1.0);
     final Equipment? droppedItem = _random.nextDouble() < effectiveDropRate
         ? EquipmentManager.instance.generateRandomLoot()
         : null;
@@ -508,7 +540,11 @@ class GameManager extends ChangeNotifier {
     // 나올 수도 있다).
     MonsterDropTableManager.instance.rollDropsForKill(
       chapter: chapter,
-      itemDropRate: itemDropRate,
+      // 유물(Artifact)/룬(유틸형)의 드랍률 패시브는 itemDropRate와 같은
+      // 가산(%) 성격이라 곱산이 아니라 그대로 더한다.
+      itemDropRate: itemDropRate +
+          ArtifactManager.instance.totalBonus(ArtifactStat.dropRatePercent) +
+          RuneManager.instance.totalBonus(RuneStat.dropRatePercent),
     );
 
     // 다음 (챕터, 서브스테이지)는 항상 [chapterOf]/[subStageOf] 공식 하나로만
@@ -528,11 +564,22 @@ class GameManager extends ChangeNotifier {
       // 오프닝 스토리/배경 전환 트리거.
       onChapterAdvanced?.call(chapter);
 
-      // 10, 20, 30... 챕터에 "처음" 도달했을 때만 캐릭터 SP 1을 지급한다.
-      if (chapter % 10 == 0 && chapter > highestReachedChapter) {
-        SkillManager.instance.addSkillPoints(1);
+      // 이 챕터가 역대 최초 도달이면(10 단위가 아니어도) highestReachedChapter를
+      // 갱신하고 명예의 전당 랭킹([RankingManager])의 정렬 기준인
+      // profiles.highest_reached_chapter도 동기화한다. 예전엔 이 갱신을
+      // "10 단위 챕터일 때만" 했는데, 그러면 23챕터에 있는 유저와 21챕터에
+      // 있는 유저가 둘 다 highestReachedChapter=20으로 똑같이 찍혀서
+      // 랭킹/오프라인 보상 계산의 정밀도가 실제 진행도보다 훨씬 떨어졌다.
+      final bool isNewHighest = chapter > highestReachedChapter;
+      if (isNewHighest) {
         highestReachedChapter = chapter;
         saveGame();
+        unawaited(SupabaseManager.instance.updateHighestReachedChapter(highestReachedChapter));
+      }
+      // 10, 20, 30... 챕터에 "처음" 도달했을 때만 캐릭터 SP 1을 지급한다 —
+      // highestReachedChapter 갱신과는 독립적인, 10 단위 전용 보상이다.
+      if (isNewHighest && chapter % 10 == 0) {
+        SkillManager.instance.addSkillPoints(1);
       }
     } else if (stage == maxStage) {
       // 챕터의 보스 스테이지(1-10, 11-10, 21-10...)에 "방금" 진입했다 —
@@ -693,36 +740,6 @@ class GameManager extends ChangeNotifier {
     return (damage: damage, isCritical: isCritical);
   }
 
-  bool learnSkill(String skillId) {
-    final Skill skill = skills.firstWhere((s) => s.id == skillId);
-    if (skill.isLearned || gold < skill.cost) {
-      return false;
-    }
-
-    gold -= skill.cost;
-    skill.isLearned = true;
-    notifyListeners();
-    return true;
-  }
-
-  bool useActiveSkill(String skillId) {
-    final Skill skill = skills.firstWhere((s) => s.id == skillId);
-    if (!skill.isReady) {
-      return false;
-    }
-
-    skill.lastUsedTime = DateTime.now();
-    notifyListeners();
-    onSkillUsed?.call(skill);
-    return true;
-  }
-
-  double rollSkillDamage() {
-    final double multiplier = skillMinMultiplier +
-        _random.nextDouble() * (skillMaxMultiplier - skillMinMultiplier);
-    return attackPower * multiplier;
-  }
-
   static const String _saveKey = 'game_manager_save';
 
   Future<void> saveGame() async {
@@ -749,8 +766,7 @@ class GameManager extends ChangeNotifier {
       'evasionRate': evasionRate,
       'critDefenseRate': critDefenseRate,
       'itemDropRate': itemDropRate,
-      'maxHp': maxHp,
-      'skills': skills.map((skill) => skill.toJson()).toList(),
+      'maxHp': baseMaxHp,
       'collectionBonuses': {
         for (final MapEntry<CollectionStatType, double> entry in collectionBonuses.entries)
           entry.key.name: entry.value,
@@ -766,11 +782,31 @@ class GameManager extends ChangeNotifier {
     final String? raw = prefs.getString(_saveKey);
     if (raw == null) {
       debugPrint('Game loaded: no saved data found under "$_saveKey"');
-      return;
+    } else {
+      try {
+        _applySavedData(jsonDecode(raw) as Map<String, dynamic>);
+      } catch (error) {
+        debugPrint('[GameManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+      }
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+    // 서버가 이 유저의 최고 도달 챕터를 더 정확히 알고 있을 수 있다(예: 다른
+    // 기기에서 진행) — 로컬보다 서버 값이 더 높을 때만 반영해서, 오프라인
+    // 중에 로컬에서 이미 앞서간 진행도를 실수로 되돌리지 않는다
+    // ([DungeonManager.loadDungeonData]의 highestClearedFloor 병합과 같은
+    // 관례).
+    final int? serverHighestChapter =
+        await SupabaseManager.instance.fetchHighestReachedChapter();
+    if (serverHighestChapter != null && serverHighestChapter > highestReachedChapter) {
+      highestReachedChapter = serverHighestChapter;
+    }
 
+    _resetMonsterHp();
+    notifyListeners();
+    debugPrint('Game loaded: gold=$gold, chapter=$chapter, stage=$stage');
+  }
+
+  void _applySavedData(Map<String, dynamic> data) {
     gold = data['gold'] as int? ?? gold;
     gems = data['gems'] as int? ?? gems;
     chapter = data['chapter'] as int? ?? chapter;
@@ -795,7 +831,7 @@ class GameManager extends ChangeNotifier {
     critDefenseRate =
         (data['critDefenseRate'] as num?)?.toDouble() ?? critDefenseRate;
     itemDropRate = (data['itemDropRate'] as num?)?.toDouble() ?? itemDropRate;
-    maxHp = (data['maxHp'] as num?)?.toDouble() ?? maxHp;
+    baseMaxHp = (data['maxHp'] as num?)?.toDouble() ?? baseMaxHp;
     currentHp = maxHp;
 
     final Map<String, dynamic>? savedCollectionBonuses =
@@ -808,29 +844,5 @@ class GameManager extends ChangeNotifier {
         }
       }
     }
-
-    final List<dynamic>? savedSkills = data['skills'] as List<dynamic>?;
-    if (savedSkills != null) {
-      for (final dynamic entry in savedSkills) {
-        final Map<String, dynamic> json = entry as Map<String, dynamic>;
-        final int index = skills.indexWhere((s) => s.id == json['id']);
-        if (index == -1) {
-          continue;
-        }
-        final Skill catalogSkill = skills[index];
-        skills[index] = Skill.fromJson(
-          json,
-          name: catalogSkill.name,
-          icon: catalogSkill.icon,
-          cost: catalogSkill.cost,
-          cooldown: catalogSkill.cooldown,
-        );
-      }
-    }
-
-    _resetMonsterHp();
-    notifyListeners();
-    debugPrint('Game loaded: gold=$gold, chapter=$chapter, stage=$stage');
   }
-
 }

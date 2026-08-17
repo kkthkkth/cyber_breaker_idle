@@ -1,8 +1,13 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../constants/app_images.dart';
+import '../managers/sound_manager.dart';
 import '../models/equipment.dart';
+import '../widgets/confetti_overlay.dart';
+import '../widgets/safe_image.dart';
 
 /// 캐릭터/장비/펫 뽑기 결과를 카드 뒤집기 연출로 보여주는 전체 화면 —
 /// [showBoxShakingDialog]의 상자 흔들림이 끝난 직후(`onFinished` 콜백)
@@ -11,10 +16,11 @@ import '../models/equipment.dart';
 /// `_showResultDialog` 참고) — 합성(`synthesis_screen.dart`)처럼 "가챠
 /// 연출"이 아닌 배치 결과는 여전히 기존 [ItemResultDialog]를 그대로 쓴다.
 ///
-/// [주의: 이미지 자리표시자] 카드 앞/뒷면에 실제 캐릭터·장비 아트가 아직
-/// 없어서, 지금은 등급 색([getGradeColor])만 칠한 단색 컨테이너로 틀만
-/// 잡아 뒀다 — 나중에 아트가 준비되면 [_CardFace]의 `_buildBack`/
-/// `_buildFront` 안에 `CustomSafeImage`만 끼워 넣으면 된다.
+/// 카드 양면은 [_frontImagePathFor]가 캐릭터/펫이면 실제 프론트 이미지를
+/// [CustomSafeImage]로 그린다 — 뒤집기 전(밑그림)은 [ColorFilter]로 새까만
+/// 실루엣만 보여주고, 뒤집은 뒤에는 원본 색 그대로 보여준다([_CardFace]
+/// 참고). 장비는 아직 전용 아트가 없어([_frontImagePathFor]가 null을
+/// 돌려주면) 예전처럼 부위별 [Icon]으로 대체한다.
 class GachaRevealScreen extends StatefulWidget {
   const GachaRevealScreen({super.key, required this.results, this.title = '뽑기 결과'});
 
@@ -50,6 +56,17 @@ class _GachaRevealScreenState extends State<GachaRevealScreen>
   /// 카드 자체의 그로우(`_CardFace`)만으로 충분히 차등을 준다.
   bool _isFlashGrade(ItemGrade grade) => grade.index >= ItemGrade.ur.index;
 
+  /// SSSR 이상("최고 등급")에서 폭죽을 터뜨린다 — [_CardFace.isTopGrade]와
+  /// 같은 기준. UR 이상에서만 도는 [_isFlashGrade]보다 더 낮은 문턱이라,
+  /// SSSR은 번쩍임 없이 폭죽만, UR/LR은 번쩍임+폭죽 둘 다 나온다.
+  bool _isConfettiGrade(ItemGrade grade) => grade.index >= ItemGrade.sssr.index;
+
+  /// [ConfettiBurst]를 새로 터뜨릴 때마다 1씩 늘려 위젯의 key로 쓴다 —
+  /// key가 바뀌면 Flutter가 기존 인스턴스를 버리고 새로 만들어서, 한 번
+  /// 재생되고 멈춘 애니메이션도 다음 최고 등급 카드에서 처음부터 다시
+  /// 터진다.
+  int _confettiTriggerCount = 0;
+
   @override
   void dispose() {
     _flashController.dispose();
@@ -60,8 +77,17 @@ class _GachaRevealScreenState extends State<GachaRevealScreen>
     if (_flipped[index]) {
       return;
     }
-    if (_isFlashGrade(widget.results[index].grade)) {
+    unawaited(SoundManager.instance.playGachaReveal());
+    final ItemGrade grade = widget.results[index].grade;
+    if (_isFlashGrade(grade)) {
       _flashController.forward(from: 0);
+    }
+    if (_isConfettiGrade(grade)) {
+      setState(() {
+        _flipped[index] = true;
+        _confettiTriggerCount++;
+      });
+      return;
     }
     setState(() => _flipped[index] = true);
   }
@@ -188,6 +214,11 @@ class _GachaRevealScreenState extends State<GachaRevealScreen>
                 },
               ),
             ),
+            // SSSR 이상 카드를 뒤집을 때 화면 전체에 터지는 폭죽.
+            if (_confettiTriggerCount > 0)
+              Positioned.fill(
+                child: ConfettiBurst(key: ValueKey(_confettiTriggerCount)),
+              ),
           ],
         ),
       ),
@@ -248,7 +279,7 @@ class _GachaCardState extends State<_GachaCard> with SingleTickerProviderStateMi
             transform: Matrix4.identity()
               ..setEntry(3, 2, 0.001)
               ..rotateY(displayAngle),
-            child: showFront ? _CardFace.front(item: widget.item) : const _CardFace.back(),
+            child: _CardFace(item: widget.item, revealed: showFront),
           );
         },
       ),
@@ -256,61 +287,90 @@ class _GachaCardState extends State<_GachaCard> with SingleTickerProviderStateMi
   }
 }
 
-/// 카드 한 면(앞/뒤)의 시각적 틀 — [_CardFace.back]은 아직 뒤집지 않은
-/// 모든 카드가 공유하는 고정 디자인, [_CardFace.front]는 등급색으로
-/// 채워진 결과 표시다. 실제 아트가 준비되면 이 클래스의 두 named
-/// constructor 안쪽만 `CustomSafeImage`로 바꾸면 된다.
+/// [item]의 실제 프론트 이미지 원격 경로 — 캐릭터/펫만 아트가 있다
+/// ([AppImages.playerFront]/[AppImages.petFront], 둘 다 [Equipment
+/// .gradeBadgeLabel]을 id로 쓴다). 장비는 아직 전용 아트가 없어 null을
+/// 돌려주고, 호출부([_CardFace])가 예전처럼 부위별 [Icon]으로 대체한다.
+String? _frontImagePathFor(Equipment item) => switch (item.type) {
+  EquipType.character => AppImages.playerFront(item.gradeBadgeLabel),
+  EquipType.pet => AppImages.petFront(item.gradeBadgeLabel),
+  _ => null,
+};
+
+/// 카드 한 면(앞/뒤)의 시각적 틀 — [revealed]가 false면(아직 안 뒤집음)
+/// 모든 카드가 같은 보라색 테두리의 "미확인" 프레임을 쓰지만, 그 안에는
+/// [item]의 실제 프론트 이미지를 새까만 실루엣([ColorFilter])으로 살짝
+/// 보여준다("이 안에 뭐가 있는지" 밑그림 힌트). [revealed]가 true면
+/// 등급색 프레임 + 원본 색 이미지 + 등급 텍스트로 결과를 보여준다. 장비처럼
+/// 아직 이미지가 없는 부위([_frontImagePathFor]가 null)는 두 상태 모두
+/// 기존처럼 [Icon]으로 대체된다.
 class _CardFace extends StatelessWidget {
-  const _CardFace.back() : item = null;
+  const _CardFace({required this.item, required this.revealed});
 
-  const _CardFace.front({required Equipment this.item});
-
-  final Equipment? item;
+  final Equipment item;
+  final bool revealed;
 
   @override
   Widget build(BuildContext context) {
-    final Equipment? item = this.item;
-    if (item == null) {
-      return Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF20202C),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
-        ),
-        alignment: Alignment.center,
-        child: const Icon(Icons.auto_awesome, color: Color(0xFF6C4FCE), size: 32),
-      );
-    }
-
     final Color gradeColor = getGradeColor(item.grade);
     final bool isTopGrade = item.grade.index >= ItemGrade.sssr.index;
+    final String? imagePath = _frontImagePathFor(item);
+
+    final Widget visual = imagePath == null
+        ? Icon(
+            revealed ? _iconFor(item.type) : Icons.auto_awesome,
+            color: revealed ? gradeColor : const Color(0xFF6C4FCE),
+            size: 32,
+          )
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(
+              width: 56,
+              height: 56,
+              child: revealed
+                  ? CustomSafeImage(path: imagePath, fit: BoxFit.contain)
+                  : ColorFiltered(
+                      // 알파(투명) 영역은 그대로 두고 그림이 그려진
+                      // 부분만 새까맣게 채운다(BlendMode.srcIn) — 흐리게
+                      // 어둡히는 게 아니라 진짜 실루엣(그림자) 모양이
+                      // 남는다.
+                      colorFilter: const ColorFilter.mode(Colors.black, BlendMode.srcIn),
+                      child: CustomSafeImage(path: imagePath, fit: BoxFit.contain),
+                    ),
+            ),
+          );
 
     return Container(
       decoration: BoxDecoration(
-        color: gradeColor.withValues(alpha: 0.22),
+        color: revealed ? gradeColor.withValues(alpha: 0.22) : const Color(0xFF20202C),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: gradeColor, width: 2),
-        boxShadow: isTopGrade
+        border: Border.all(
+          color: revealed ? gradeColor : const Color(0xFF6C4FCE),
+          width: revealed ? 2 : 1.5,
+        ),
+        boxShadow: revealed && isTopGrade
             ? [BoxShadow(color: gradeColor.withValues(alpha: 0.7), blurRadius: 16, spreadRadius: 1)]
             : null,
       ),
       alignment: Alignment.center,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(_iconFor(item.type), color: gradeColor, size: 28),
-          const SizedBox(height: 6),
-          Text(
-            item.grade.displayName,
-            style: TextStyle(color: gradeColor, fontWeight: FontWeight.bold, fontSize: 15),
-          ),
-        ],
-      ),
+      child: revealed
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                visual,
+                const SizedBox(height: 6),
+                Text(
+                  item.grade.displayName,
+                  style: TextStyle(color: gradeColor, fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ],
+            )
+          : visual,
     );
   }
 
-  /// 실제 캐릭터/장비/펫 아트가 붙기 전까지, 부위 종류를 한눈에 구분할 수
-  /// 있게 최소한으로만 아이콘을 나눈다.
+  /// 장비([_frontImagePathFor]가 null인 부위)는 아직 전용 아트가 없어,
+  /// 부위 종류를 한눈에 구분할 수 있게 최소한으로만 아이콘을 나눈다.
   IconData _iconFor(EquipType type) {
     switch (type) {
       case EquipType.character:

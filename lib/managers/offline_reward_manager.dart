@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,17 +7,20 @@ import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
 import '../models/game_config_model.dart';
 import '../utils/time_util.dart';
+import 'battle_pass_manager.dart';
 import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'game_manager.dart';
 import 'monster_drop_manager.dart';
+import 'supabase_manager.dart';
 
 class OfflineRewardManager with WidgetsBindingObserver {
   OfflineRewardManager._internal();
 
   static final OfflineRewardManager instance = OfflineRewardManager._internal();
 
-  static const int _minOfflineSeconds = 60;
+  /// 최소 10분 이상 자리를 비웠을 때만 보상을 계산한다(요구사항).
+  static const int _minOfflineSeconds = 600;
   static const String _lastExitTimeKey = 'offline_reward_last_exit_time';
 
   /// Swappable at runtime once fetched from a real config endpoint — see
@@ -64,7 +69,7 @@ class OfflineRewardManager with WidgetsBindingObserver {
   }
 
   /// Call on app start (see main.dart) and whenever the app resumes from the
-  /// background. Measures the offline gap and, if it clears the 60s floor,
+  /// background. Measures the offline gap and, if it clears the 10분 floor,
   /// fires [onRewardCalculated] with the computed gold/아이템 — actually
   /// crediting anything happens in [claimReward], only once the player taps
   /// through the popup. The exit-time marker is refreshed either way.
@@ -75,11 +80,22 @@ class OfflineRewardManager with WidgetsBindingObserver {
     final DateTime now = await getNetworkTime();
     await prefs.setInt(_lastExitTimeKey, now.millisecondsSinceEpoch);
 
-    if (lastExitMillis == null) {
+    DateTime? lastExitTime =
+        lastExitMillis != null ? DateTime.fromMillisecondsSinceEpoch(lastExitMillis) : null;
+
+    // 이 기기에 로컬 종료 시각 기록이 없다(최초 실행/재설치/기기 변경 등)
+    // — profiles.last_seen(길드 접속중 하트비트로 이미 관리되던 값,
+    // SupabaseManager.updateLastSeen 참고)을 대체 기준 시각으로 써서, 그
+    // 경우에도 오프라인 보상을 완전히 놓치지 않게 한다. 하트비트가 2분마다
+    // 갱신되는 값이라 실제 종료 시각보다 최대 몇 분 앞설 수 있지만, 10분
+    // 최소 문턱과 [offlineRewardEfficiency] 감쇠를 감안하면 무시할 수 있는
+    // 오차다.
+    lastExitTime ??= await SupabaseManager.instance.fetchLastSeen();
+
+    if (lastExitTime == null) {
       return;
     }
 
-    final DateTime lastExitTime = DateTime.fromMillisecondsSinceEpoch(lastExitMillis);
     final int rawOfflineSeconds = now.difference(lastExitTime).inSeconds;
     // 방어 코드: NTP 조회 자체가 실패해 기기 시계로 폴백했거나, 그 사이
     // 기기 시계가 되감겼다면 음수가 나올 수 있다 — 0 미만은 0으로,
@@ -92,7 +108,10 @@ class OfflineRewardManager with WidgetsBindingObserver {
       return;
     }
 
-    final double goldPerSecond = GameManager.instance.goldPerHour / 3600;
+    // highestReachedChapter의 몬스터를 처치했을 때 받는 골드(펫/길드/
+    // 오버클럭/유물 보너스까지 반영, GameManager.offlineGoldPerMinute 참고)를
+    // 기준으로 분당 획득량을 내고, 여기에 오프라인 시간을 곱한다.
+    final double goldPerSecond = GameManager.instance.offlineGoldPerMinute / 60;
     final int rewardGold =
         (offlineSeconds * goldPerSecond * config.offlineRewardEfficiency).round();
 
@@ -118,13 +137,24 @@ class OfflineRewardManager with WidgetsBindingObserver {
   /// 팝업이 닫힌 뒤 실제로 보상을 지급한다 — [equipmentCount]개의 무작위
   /// 장비(현재 챕터 수준 등급 풀)와 [consumableDrops]에 담긴 소모품들을
   /// [MonsterDropTableManager.equipmentGradesForChapter]와 같은 기준으로
-  /// 생성/지급한다.
+  /// 생성/지급한다. profiles.last_seen도 지금 시각으로 즉시 갱신한다
+  /// (요구사항) — 2분 주기 하트비트를 기다리지 않고 바로 최신화해서, 이
+  /// 방치 구간이 다시 이중으로 계산되는 일이 없게 한다. [offlineSeconds]에
+  /// 비례해 배틀패스 BP도 함께 지급한다(요구사항: "방치 시간에 비례해서
+  /// BP 경험치를 획득") — 활성 시즌이 없으면 BattlePassManager.addBpExp가
+  /// 스스로 아무 일도 하지 않는다.
   void claimReward({
     required int rewardGold,
+    required int offlineSeconds,
     int equipmentCount = 0,
     Map<ConsumableType, int> consumableDrops = const {},
   }) {
     GameManager.instance.addGold(rewardGold);
+    unawaited(SupabaseManager.instance.updateLastSeen());
+
+    final int bpExpGained =
+        (offlineSeconds / 60 * BattlePassManager.bpExpPerOfflineMinute).round();
+    unawaited(BattlePassManager.instance.addBpExp(bpExpGained));
 
     final List<ItemGrade> grades =
         MonsterDropTableManager.equipmentGradesForChapter(GameManager.instance.chapter);

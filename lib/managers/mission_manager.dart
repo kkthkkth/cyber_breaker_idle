@@ -111,17 +111,21 @@ class MissionManager extends ChangeNotifier with WidgetsBindingObserver {
     final String? raw = prefs.getString(_saveKey);
 
     if (raw != null) {
-      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-      final List<dynamic>? savedMissions =
-          data['activeMissions'] as List<dynamic>?;
-      if (savedMissions != null && savedMissions.isNotEmpty) {
-        activeMissions = savedMissions
-            .map((entry) => Mission.fromJson(entry as Map<String, dynamic>))
-            .toList();
+      try {
+        final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+        final List<dynamic>? savedMissions =
+            data['activeMissions'] as List<dynamic>?;
+        if (savedMissions != null && savedMissions.isNotEmpty) {
+          activeMissions = savedMissions
+              .map((entry) => Mission.fromJson(entry as Map<String, dynamic>))
+              .toList();
+        }
+        _lastDailyReset = data['lastDailyReset'] as String?;
+        _lastWeeklyReset = data['lastWeeklyReset'] as String?;
+        _lastMonthlyReset = data['lastMonthlyReset'] as String?;
+      } catch (error) {
+        debugPrint('[MissionManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
       }
-      _lastDailyReset = data['lastDailyReset'] as String?;
-      _lastWeeklyReset = data['lastWeeklyReset'] as String?;
-      _lastMonthlyReset = data['lastMonthlyReset'] as String?;
     }
 
     if (activeMissions.isEmpty) {

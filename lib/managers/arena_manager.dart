@@ -277,10 +277,14 @@ class ArenaManager extends ChangeNotifier with WidgetsBindingObserver {
     if (raw == null) {
       return;
     }
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    score = (data['score'] as num?)?.toInt() ?? score;
-    wins = (data['wins'] as num?)?.toInt() ?? wins;
-    losses = (data['losses'] as num?)?.toInt() ?? losses;
-    _lastKnownSeasonId = data['lastKnownSeasonId'] as String?;
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      score = (data['score'] as num?)?.toInt() ?? score;
+      wins = (data['wins'] as num?)?.toInt() ?? wins;
+      losses = (data['losses'] as num?)?.toInt() ?? losses;
+      _lastKnownSeasonId = data['lastKnownSeasonId'] as String?;
+    } catch (error) {
+      debugPrint('[ArenaManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+    }
   }
 }

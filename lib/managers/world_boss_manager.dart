@@ -370,18 +370,22 @@ class WorldBossManager extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    final List<dynamic>? hours = data['scheduleHours'] as List<dynamic>?;
-    if (hours != null && hours.isNotEmpty) {
-      scheduleHours = hours.map((dynamic e) => (e as num).toInt()).toList();
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final List<dynamic>? hours = data['scheduleHours'] as List<dynamic>?;
+      if (hours != null && hours.isNotEmpty) {
+        scheduleHours = hours.map((dynamic e) => (e as num).toInt()).toList();
+      }
+      durationMinutes = (data['durationMinutes'] as num?)?.toInt() ?? durationMinutes;
+      maxHp = (data['maxHp'] as num?)?.toDouble() ?? maxHp;
+      ticketsUsedToday = (data['ticketsUsedToday'] as num?)?.toInt() ?? ticketsUsedToday;
+      extraTickets = (data['extraTickets'] as num?)?.toInt() ?? extraTickets;
+      totalDamageDealt = (data['totalDamageDealt'] as num?)?.toInt() ?? totalDamageDealt;
+      _lastResetDate = data['lastResetDate'] as String?;
+      _lastBossSession = data['lastBossSession'] as String?;
+      _lastDistributedSessionId = data['lastDistributedSessionId'] as String?;
+    } catch (error) {
+      debugPrint('[WorldBossManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
-    durationMinutes = (data['durationMinutes'] as num?)?.toInt() ?? durationMinutes;
-    maxHp = (data['maxHp'] as num?)?.toDouble() ?? maxHp;
-    ticketsUsedToday = (data['ticketsUsedToday'] as num?)?.toInt() ?? ticketsUsedToday;
-    extraTickets = (data['extraTickets'] as num?)?.toInt() ?? extraTickets;
-    totalDamageDealt = (data['totalDamageDealt'] as num?)?.toInt() ?? totalDamageDealt;
-    _lastResetDate = data['lastResetDate'] as String?;
-    _lastBossSession = data['lastBossSession'] as String?;
-    _lastDistributedSessionId = data['lastDistributedSessionId'] as String?;
   }
 }

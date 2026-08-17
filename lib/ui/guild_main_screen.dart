@@ -4,8 +4,11 @@ import '../constants/guild_emblems.dart';
 import '../managers/guild_manager.dart';
 import '../managers/supabase_manager.dart';
 import '../models/guild_model.dart';
+import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
+import 'guild_chat_screen.dart';
 import 'guild_dungeon_screen.dart';
+import 'guild_raid_screen.dart';
 import 'guild_shop_screen.dart';
 
 /// 가입 상태 전용 — 상단 헤더(엠블럼/이름/레벨/exp바/공지) + 출석체크
@@ -118,7 +121,7 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
         final GuildManager manager = GuildManager.instance;
 
         return DefaultTabController(
-          length: 4,
+          length: 6,
           child: Scaffold(
             backgroundColor: const Color(0xFF14141C),
             appBar: AppBar(
@@ -133,24 +136,38 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
               ),
               centerTitle: true,
               actions: [
-                Container(
-                  margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF20202C),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFF3A3A4A)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.savings, color: Colors.amberAccent, size: 16),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${manager.guildCoins}',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-                      ),
-                    ],
+                // Flexible로 감싸는 이유: 길드 주화가 커지면(수천~수만 이상)
+                // 이 배지가 늘어나면서 오른쪽의 새로고침/탈퇴 아이콘을
+                // 밀어낼 수 있었다 — main.dart/top_bar.dart의 통화 표시와
+                // 같은 문제, 같은 해법이다.
+                Flexible(
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF20202C),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFF3A3A4A)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.savings, color: Colors.amberAccent, size: 16),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            NumberFormatter.format(manager.guildCoins.toDouble()),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 IconButton(
@@ -204,6 +221,8 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
                     Tab(text: '길드 버프'),
                     Tab(text: '길드 상점'),
                     Tab(text: '길드 던전'),
+                    Tab(text: '길드 레이드'),
+                    Tab(text: '길드 채팅'),
                   ],
                 ),
                 const Expanded(
@@ -213,6 +232,8 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
                       _GuildBuffsTab(),
                       GuildShopTab(),
                       GuildDungeonTab(),
+                      GuildRaidTab(),
+                      GuildChatTab(),
                     ],
                   ),
                 ),
@@ -614,8 +635,24 @@ class _MemberTile extends StatelessWidget {
     GuildRole.member => Colors.white54,
   };
 
+  /// "최종 접속: YYYY-MM-DD HH:MM" — intl 패키지 없이 이 프로젝트 전반의
+  /// 관례([GuildManager._formatDate] 등)와 동일하게 padLeft로 직접 조립한다.
+  static String _formatLastSeen(DateTime? lastSeen) {
+    if (lastSeen == null) {
+      return '접속 기록 없음';
+    }
+    String two(int n) => n.toString().padLeft(2, '0');
+    final String date = '${lastSeen.year}-${two(lastSeen.month)}-${two(lastSeen.day)}';
+    final String time = '${two(lastSeen.hour)}:${two(lastSeen.minute)}';
+    return '최종 접속: $date $time';
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 길드장 전용 정보라 요구사항대로 뷰어(나) 기준으로 판단한다 —
+    // member.role이 아니라 GuildManager.instance.isMaster(내 직책).
+    final bool showLastSeenToViewer = GuildManager.instance.isMaster;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -636,21 +673,52 @@ class _MemberTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  member.nickname,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                Row(
+                  children: [
+                    // 접속중(🟢)/오프라인(⚪) 표시 — 최근 5분
+                    // (GuildMember.onlineThreshold) 이내 접속이면 초록.
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: member.isOnline ? Colors.greenAccent : Colors.white24,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        member.nickname,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
                 ),
                 Text(
                   guildRoleLabel(member.role),
                   style: TextStyle(color: _roleColor, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
+                // 길드장에게만 보이는 다른 길드원의 최종 접속 시각 — 일반
+                // 길드원은 이 줄 자체가 렌더링되지 않는다.
+                if (showLastSeenToViewer)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      _formatLastSeen(member.lastSeen),
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                    ),
+                  ),
               ],
             ),
           ),
-          Text(
-            '기여도 ${member.contribution}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          Flexible(
+            child: Text(
+              '기여도 ${NumberFormatter.format(member.contribution.toDouble())}',
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            ),
           ),
           if (canManage)
             PopupMenuButton<String>(

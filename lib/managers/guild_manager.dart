@@ -523,17 +523,21 @@ class GuildManager extends ChangeNotifier {
     if (raw == null) {
       return;
     }
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    guildId = data['guildId'] as String?;
-    final String? roleValue = data['myRole'] as String?;
-    myRole = roleValue != null ? guildRoleFromString(roleValue) : null;
-    myContribution = (data['myContribution'] as num?)?.toInt() ?? myContribution;
-    _lastCheckIn = data['lastCheckIn'] as String?;
-    guildName = data['guildName'] as String? ?? guildName;
-    guildEmblem = data['guildEmblem'] as String? ?? guildEmblem;
-    guildLevel = (data['guildLevel'] as num?)?.toInt() ?? guildLevel;
-    guildExp = (data['guildExp'] as num?)?.toInt() ?? guildExp;
-    guildNotice = data['guildNotice'] as String? ?? guildNotice;
-    guildCoins = (data['guildCoins'] as num?)?.toInt() ?? guildCoins;
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      guildId = data['guildId'] as String?;
+      final String? roleValue = data['myRole'] as String?;
+      myRole = roleValue != null ? guildRoleFromString(roleValue) : null;
+      myContribution = (data['myContribution'] as num?)?.toInt() ?? myContribution;
+      _lastCheckIn = data['lastCheckIn'] as String?;
+      guildName = data['guildName'] as String? ?? guildName;
+      guildEmblem = data['guildEmblem'] as String? ?? guildEmblem;
+      guildLevel = (data['guildLevel'] as num?)?.toInt() ?? guildLevel;
+      guildExp = (data['guildExp'] as num?)?.toInt() ?? guildExp;
+      guildNotice = data['guildNotice'] as String? ?? guildNotice;
+      guildCoins = (data['guildCoins'] as num?)?.toInt() ?? guildCoins;
+    } catch (error) {
+      debugPrint('[GuildManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
+    }
   }
 }

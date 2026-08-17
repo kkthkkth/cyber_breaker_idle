@@ -4,6 +4,18 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- google_mobile_ads(AdManager)가 요구하는 필수 키 — 값이 없으면 앱이
+	     시작하자마자 크래시한다. 지금 들어있는 값은 Google이 공개한
+	     "테스트용 App ID"이고, 실제 배포 전 반드시 AdMob 콘솔에서 발급받은
+	     이 앱만의 실제 App ID로 교체해야 한다 — AdManager 문서 참고. -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<!-- iOS 14+에서 광고 SDK가 IDFA(광고 추적 식별자)를 요청할 때 뜨는
+	     "앱 추적 투명성" 팝업에 보여줄 문구 — google_mobile_ads가 이 키가
+	     없으면 추적 권한 요청 자체를 건너뛰어(요청 안 함) 맞춤 광고 대신
+	     비맞춤 광고만 채워지지만, 크래시는 나지 않는다. -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>더 관련성 높은 광고를 보여드리기 위해 사용됩니다.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

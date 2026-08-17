@@ -87,6 +87,16 @@ class AppImages {
     '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_thumbnail.png',
   );
 
+  // Pet art — assets/images/pet/{GRADE}/{petId}/ 아래 정면 이미지가
+  // 들어간다. [petId]는 [playerFront]의 characterId와 동일한 형식
+  // (Equipment.gradeBadgeLabel, 예: "N1")이고, 등급 폴더도 같은 규칙
+  // ([_gradeFolder])으로 뗀다 — 캐릭터/펫이 [Equipment] 하나를 공유하는
+  // 구조라 id 형식도 동일하다.
+  static String _petDir(String petId) => 'assets/images/pet/${_gradeFolder(petId)}/$petId';
+
+  static String petFront(String petId) =>
+      AssetPaths.resolve('${_petDir(petId)}/pet_${petId.toLowerCase()}_front.png');
+
   /// 성급(★0~5) 해금 일러스트 — Live2D풍으로 움직이는 애니메이션(.webp)이
   /// 우선 시도된다. 아직 애니메이션 작업이 안 된 캐릭터는 이 경로가 404로
   /// 실패하므로, 호출부는 반드시 [characterStarFallback](같은 파일명의
@@ -105,7 +115,10 @@ class AppImages {
   /// [characterStar]류(성급 ★0~5, `star$level`)와는 별개 자산이다. 정지
   /// 프레임은 이 함수(.png), Live2D풍 애니메이션은
   /// [affectionIllustrationAnimated](.webp)를 쓴다 — 어느 쪽을 부를지는
-  /// 재생/일시정지 상태에 따라 호출부([AffectionScreen])가 고른다.
+  /// 재생/일시정지 상태에 따라 호출부([AffectionScreen])가 고른다. 서약
+  /// (Oath) 여부와 무관하게 항상 이 파일명 규칙 그대로다 — 원격 레포 실제
+  /// 구조 확인 결과 `_oath` 접미사가 붙은 별도 파일은 존재하지 않는다(예전
+  /// 코드가 `heart${level}_oath.png`를 만들어 404를 유발했었다).
   static String affectionIllustration(String characterId, int level) =>
       AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart$level.png');
 
@@ -113,21 +126,6 @@ class AppImages {
   /// 불러온다.
   static String affectionIllustrationAnimated(String characterId, int level) =>
       AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart$level.webp');
-
-  /// 서약(Oath) 완료 캐릭터 전용 스킨 일러스트 — 파일명 규칙은
-  /// [affectionIllustration]과 같은 폴더에 `_oath` 접미사만 붙는다(예:
-  /// `heart3_oath.png`). 아직 어떤 캐릭터도 이 아트가 준비되지 않았으므로
-  /// 호출부([AffectionScreen])는 항상 [affectionIllustration](일반본)을
-  /// fallbackPath로 함께 넘겨서, 서약 전용 아트가 없는 캐릭터는 조용히
-  /// 기존 일반 일러스트로 대체되게 한다.
-  static String oathIllustration(String characterId, int level) => AssetPaths.resolve(
-    '${_playerDir(characterId)}/illustration/heart${level}_oath.png',
-  );
-
-  /// [oathIllustration]의 애니메이션(.webp) 버전.
-  static String oathIllustrationAnimated(String characterId, int level) => AssetPaths.resolve(
-    '${_playerDir(characterId)}/illustration/heart${level}_oath.webp',
-  );
 
   /// 스토리(프롤로그) 대화창 뒤에 까는 배경 맵 이미지 — [sceneId]는
   /// "prologue" 형식. 시즌1 메인 스토리(챕터 1~10)는 실제 원격 레포에

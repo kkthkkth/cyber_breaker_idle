@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../game/idle_game.dart';
 import '../managers/collection_manager.dart';
 import '../managers/encyclopedia_manager.dart';
 import '../managers/equipment_manager.dart';
+import '../managers/equipment_set_manager.dart';
 import '../managers/game_manager.dart';
 import '../models/equipment.dart';
+import '../models/equipment_set_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/character_face_portrait.dart';
@@ -13,6 +16,7 @@ import 'collection_screen.dart';
 import 'consumable_inventory_screen.dart';
 import 'crafting_screen.dart';
 import 'item_detail_dialog.dart';
+import 'rune_screen.dart';
 
 class CharacterScreen extends StatefulWidget {
   const CharacterScreen({super.key});
@@ -167,6 +171,19 @@ class _CharacterScreenState extends State<CharacterScreen> {
                             MaterialPageRoute(
                               builder: (context) => const CollectionScreen(),
                             ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.hexagon,
+                        label: '룬',
+                        accentColor: const Color(0xFF3FBF6E),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const RuneScreen(),
                           ),
                         ),
                       ),
@@ -481,24 +498,29 @@ class _EquipAreaState extends State<EquipArea> {
                                       if (equippedPet != null) ...[
                                         _PetPreviewAvatar(
                                           pet: equippedPet,
-                                          size: 128 * 0.65,
+                                          size: PlayerAnimationComponent.boxSize * 0.65,
                                         ),
                                         const SizedBox(width: 8),
                                       ],
                                       Column(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          // 기존 64에서 2배(128)로 확대 —
-                                          // CharacterIdlePreview가 내부적으로
-                                          // FilterQuality.none을 이미
-                                          // 적용하므로 픽셀 아트가 흐려지지
-                                          // 않는다. 정적 정면 이미지 대신
+                                          // 인게임 전투 스케일과 동일하게
+                                          // [PlayerAnimationComponent.boxSize]를
+                                          // 그대로 재사용한다(기존 128 →
+                                          // 180). CharacterIdlePreview가
+                                          // 내부적으로 FilterQuality.none을
+                                          // 이미 적용하므로 픽셀 아트가
+                                          // 흐려지지 않고, 512x512 캔버스
+                                          // 여백도 자체적으로 잘라내
+                                          // 캐릭터 알맹이가 상자를 꽉
+                                          // 채운다. 정적 정면 이미지 대신
                                           // 대기(wait) 모션을 반복 재생해
                                           // 캐릭터가 살아있는 느낌을 준다.
                                           CharacterIdlePreview(
                                             characterId:
                                                 equippedCharacter.gradeBadgeLabel,
-                                            size: 128,
+                                            size: PlayerAnimationComponent.boxSize,
                                             borderRadius: 12,
                                           ),
                                           const SizedBox(height: 6),
@@ -872,11 +894,54 @@ class StatPanel extends StatelessWidget {
                     ),
                   ],
                 ),
+                const _ActiveSetBonusRow(),
               ],
             ),
           ),
         );
       },
+    );
+  }
+}
+
+/// 지금 발동 중인 세트 효과를 칩으로 나열 — 하나도 없으면(장착 중인 세트
+/// 장비가 2부위 미만이면) 자리 자체를 차지하지 않는다.
+class _ActiveSetBonusRow extends StatelessWidget {
+  const _ActiveSetBonusRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final List<ActiveSetBonus> bonuses = EquipmentSetManager.instance
+        .activeBonuses(EquipmentManager.instance.equippedSetCounts);
+    if (bonuses.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final ActiveSetBonus bonus in bonuses)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6C4FCE).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFF8A6FE0)),
+              ),
+              child: Text(
+                bonus.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

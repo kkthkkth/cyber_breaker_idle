@@ -148,12 +148,16 @@ class EncyclopediaManager extends ChangeNotifier {
       return;
     }
 
-    final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-    final List<dynamic> rewardedIds = data['rewardedIds'] as List<dynamic>? ?? [];
-    for (final EncyclopediaEntry entry in entries) {
-      if (rewardedIds.contains(entry.id)) {
-        entry.isRewarded = true;
+    try {
+      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
+      final List<dynamic> rewardedIds = data['rewardedIds'] as List<dynamic>? ?? [];
+      for (final EncyclopediaEntry entry in entries) {
+        if (rewardedIds.contains(entry.id)) {
+          entry.isRewarded = true;
+        }
       }
+    } catch (error) {
+      debugPrint('[EncyclopediaManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
     notifyListeners();
   }

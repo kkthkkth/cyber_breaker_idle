@@ -80,24 +80,16 @@ class _AffectionScreenState extends State<AffectionScreen> {
   String _illustrationHeroTag(int level) =>
       'affection-illustration-$_characterId-$level';
 
-  /// 서약(Oath) 완료 캐릭터는 전용 스킨 일러스트를 우선 시도한다 — 그
-  /// 아트가 아직 없는 캐릭터는 [_staticFallbackImagePath]/
-  /// [IllustrationViewer.staticFallbackImagePath]가 평소 일러스트로
-  /// 조용히 대체해 준다.
-  String _staticImagePath(int level) => _manager.isOathed(_characterId)
-      ? AppImages.oathIllustration(_characterId, level)
-      : AppImages.affectionIllustration(_characterId, level);
+  // 서약(Oath) 여부와 무관하게 항상 같은 `heart$level` 파일명 규칙을
+  // 쓴다([AppImages.affectionIllustration] 참고 — 원격 레포에 `_oath`
+  // 접미사가 붙은 별도 파일은 존재하지 않는다). 정지(.png) → 애니메이션
+  // (.webp) 2단계 fallback은 [IllustrationViewer]가 기본으로 처리해 주므로
+  // 여기서 별도 fallback 경로를 만들 필요가 없다.
+  String _staticImagePath(int level) =>
+      AppImages.affectionIllustration(_characterId, level);
 
-  String _animatedImagePath(int level) => _manager.isOathed(_characterId)
-      ? AppImages.oathIllustrationAnimated(_characterId, level)
-      : AppImages.affectionIllustrationAnimated(_characterId, level);
-
-  /// 서약 상태가 아니면 애초에 [_staticImagePath]가 이미 평소 이미지라
-  /// null(불필요) — 서약 상태일 때만 "전용 스킨이 없으면 평소 그림으로"
-  /// 대체하는 fallback을 넘긴다.
-  String? _staticFallbackImagePath(int level) => _manager.isOathed(_characterId)
-      ? AppImages.affectionIllustration(_characterId, level)
-      : null;
+  String _animatedImagePath(int level) =>
+      AppImages.affectionIllustrationAnimated(_characterId, level);
 
   void _selectLevel(int level) {
     if (!_manager.isLevelUnlocked(_characterId, level)) {
@@ -267,10 +259,9 @@ class _AffectionScreenState extends State<AffectionScreen> {
   bool _isOathInFlight = false;
 
   /// 만렙에서 노출되는 "[서약하기]" 버튼의 동작 — 인벤토리의 서약 반지를
-  /// 1개 소모해 [AffectionData.isOathed]를 영구 true로 바꾼다. 성공하면
-  /// 스킨 일러스트가 곧바로 서약 전용 아트로 바뀐다([_staticImagePath]가
-  /// [AffectionManager.isOathed]를 다시 읽으므로 별도 상태 동기화가
-  /// 필요 없다 — setState 한 번으로 전부 갱신됨).
+  /// 1개 소모해 [AffectionData.isOathed]를 영구 true로 바꾼다. 일러스트
+  /// 자체는(서약 전용 파일이 따로 없어) 바뀌지 않고, 스탯 보너스
+  /// ([AffectionManager.statMultiplierBonus])와 서약 뱃지만 갱신된다.
   Future<void> _tryOath() async {
     if (_isOathInFlight) {
       return;
@@ -390,7 +381,6 @@ class _AffectionScreenState extends State<AffectionScreen> {
                           child: IllustrationViewer(
                             heroTag: _illustrationHeroTag(_selectedLevel),
                             staticImagePath: _staticImagePath(_selectedLevel),
-                            staticFallbackImagePath: _staticFallbackImagePath(_selectedLevel),
                             animatedImagePath: _animatedImagePath(_selectedLevel),
                             fit: BoxFit.cover,
                             overlays: [
@@ -913,7 +903,12 @@ class _ShopGiftSlot extends StatelessWidget {
             Center(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: CustomSafeImage(path: entry.iconPath, width: 22, height: 22),
+                child: CustomSafeImage(
+                  path: entry.iconPath,
+                  fallbackPath: entry.iconFallbackPath,
+                  width: 22,
+                  height: 22,
+                ),
               ),
             ),
             Positioned(

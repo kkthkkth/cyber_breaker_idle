@@ -38,10 +38,8 @@ class IllustrationViewer extends StatefulWidget {
 
   /// [staticImagePath] 로드가 실패했을 때 대신 시도할 경로 — 기본(null)은
   /// "정지 이미지는 이미 원본이라 fallback이 필요 없다"는 대부분의 경우에
-  /// 맞다. 다만 서약(Oath) 전용 스킨처럼 "이 캐릭터엔 아직 준비 안 된
-  /// 특수 아트를 우선 시도하고, 없으면 평소 그림으로 조용히 되돌아가야
-  /// 하는" 경우에는 평소 그림 경로를 여기 넘긴다
-  /// ([AffectionScreen._staticFallbackImagePath] 참고).
+  /// 맞다. 아직 준비 안 된 특수 스킨처럼 별도 아트를 우선 시도하고, 없으면
+  /// 평소 그림으로 조용히 되돌아가야 하는 경우에 쓴다.
   final String? staticFallbackImagePath;
 
   final BoxFit fit;

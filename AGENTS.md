@@ -23,3 +23,21 @@
 - The app uses Flame for the battle scene and shared_preferences for save/load behavior.
 - If you change progression, skill, or equipment logic, keep it consistent with the existing manager-driven flow and notify listeners where appropriate.
 - The home screen includes offline reward handling, so be careful when modifying lifecycle or async UI behavior.
+
+
+
+## AI Agent Office & Automation Rules
+
+### 1. Image Processing & Asset Pipeline
+- When a raw asset is added or image background removal is requested, run `python process_image.py <input_path> <output_path>`.
+- Place generated images in the `assets/` directory and update `pubspec.yaml` assets configuration if needed.
+
+### 2. QA & Test Automation Workflow
+- After modifying or adding features, always run `flutter analyze` and `flutter test`.
+- If tests fail or static analysis throws errors, analyze the output, fix the code automatically, and re-run tests until all checks pass.
+- Maintain existing state architecture (Managers + ChangeNotifier) during all auto-refactoring.
+
+### 3. Role Delegation Protocol
+- **Planning/PM**: Update or review project specs, feature flows, and tasks before implementation.
+- **Developer**: Implement clean Dart/Flame code adhering to existing project architecture.
+- **QA/Tester**: Verify widget/game logic with tests and ensure zero analysis errors.

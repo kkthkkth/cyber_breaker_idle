@@ -6,11 +6,15 @@ import 'package:flutter/material.dart';
 import '../game/idle_game.dart';
 import '../managers/dungeon_manager.dart';
 import '../managers/skill_manager.dart';
+import '../managers/sound_manager.dart';
 import '../managers/tower_floor_manager.dart';
+import '../managers/weekday_dungeon_manager.dart';
 import '../managers/world_boss_manager.dart';
+import '../models/active_skill_model.dart';
 import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
 import '../models/tower_floor_model.dart';
+import '../models/weekday_dungeon_model.dart';
 import 'arena_screen.dart';
 import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
 import 'top_bar.dart';
@@ -51,7 +55,9 @@ class _DungeonScreenState extends State<DungeonScreen> {
       GameMode.towerOfInfinity ||
       GameMode.mainStage ||
       GameMode.worldBoss ||
-      GameMode.guildDungeon => null,
+      GameMode.guildDungeon ||
+      GameMode.weekdayDungeon ||
+      GameMode.guildRaid => null,
     };
 
     if (ticketType != null) {
@@ -71,6 +77,73 @@ class _DungeonScreenState extends State<DungeonScreen> {
       MaterialPageRoute<void>(
         builder: (context) =>
             _DungeonBattleScreen(mode: mode, isSweepMode: isSweepMode),
+      ),
+    );
+  }
+
+  /// 요일 던전 전용 입장 진입점 — 무료 입장이 남아있으면 그것부터 쓰고,
+  /// 다 썼으면 보석 [WeekdayDungeonManager.extraEntryCostGems]개를 소모할지
+  /// 확인 팝업을 띄운다.
+  Future<void> _enterWeekdayDungeon(BuildContext context) async {
+    final WeekdayDungeonManager manager = WeekdayDungeonManager.instance;
+
+    if (manager.canEnterFree) {
+      final bool consumed = await manager.consumeFreeEntry();
+      if (!context.mounted || !consumed) {
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => const _DungeonBattleScreen(mode: GameMode.weekdayDungeon),
+        ),
+      );
+      return;
+    }
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1B26),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('추가 입장', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          '오늘의 무료 입장을 모두 사용했습니다.\n'
+          '보석 ${WeekdayDungeonManager.extraEntryCostGems}개를 소모해 추가로 입장할까요?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.cyanAccent,
+              foregroundColor: Colors.black87,
+            ),
+            child: const Text('입장하기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) {
+      return;
+    }
+
+    final bool consumed = await manager.consumeEntryWithGems();
+    if (!context.mounted) {
+      return;
+    }
+    if (!consumed) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('보석이 부족합니다')));
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const _DungeonBattleScreen(mode: GameMode.weekdayDungeon),
       ),
     );
   }
@@ -147,9 +220,10 @@ class _DungeonScreenState extends State<DungeonScreen> {
   @override
   Widget build(BuildContext context) {
     final DungeonManager dungeonManager = DungeonManager.instance;
+    final WeekdayDungeonManager weekdayDungeonManager = WeekdayDungeonManager.instance;
 
     return AnimatedBuilder(
-      animation: dungeonManager,
+      animation: Listenable.merge([dungeonManager, weekdayDungeonManager]),
       builder: (context, _) {
         return Scaffold(
           backgroundColor: const Color(0xFF14141C),
@@ -172,6 +246,20 @@ class _DungeonScreenState extends State<DungeonScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               const _WorldBossBanner(),
+              const SizedBox(height: 16),
+              _DungeonCard(
+                title: weekdayDungeonManager.todayConfig.name,
+                description:
+                    '오늘의 요일 던전 — 클리어 파도만큼 ${weekdayDungeonManager.todayConfig.rewardType.resourceLabel} 획득! '
+                    '(60초 제한, 5파도마다 보스)',
+                icon: weekdayDungeonManager.todayConfig.rewardType.icon,
+                accentColor: weekdayDungeonManager.todayConfig.rewardType.color,
+                buttonLabel: weekdayDungeonManager.canEnterFree
+                    ? '입장 (${weekdayDungeonManager.remainingFreeEntries}/${WeekdayDungeonManager.maxDailyFreeEntries})'
+                    : '보석으로 입장',
+                enabled: true,
+                onTap: () => _enterWeekdayDungeon(context),
+              ),
               const SizedBox(height: 16),
               _DungeonCard(
                 title: '결투장 (Arena)',
@@ -606,6 +694,12 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
   // doesn't leave skills pointed at a disposed dungeon monster.
   void Function(double damage)? _previousDamageHandler;
 
+  // 광역기(active_aoe) 낙하 이펙트/데미지도 damageHandler와 같은 이유로
+  // 저장해뒀다가 복원한다 — 안 그러면 던전을 나간 뒤 홈 화면에서 광역기를
+  // 써도 이미 dispose된 던전 IdleGame의 콜백이 계속 남아 있어 아무 효과가
+  // 없다.
+  void Function(ActiveSkill skill, double damage)? _previousActiveSkillCast;
+
   @override
   void initState() {
     super.initState();
@@ -619,6 +713,9 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
+    _previousActiveSkillCast = SkillManager.instance.onActiveSkillCast;
+    SkillManager.instance.onActiveSkillCast = _game.castActiveSkill;
+    unawaited(SoundManager.instance.playDungeonBgm());
   }
 
   @override
@@ -630,10 +727,17 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
     )) {
       SkillManager.instance.damageHandler = _previousDamageHandler;
     }
+    if (identical(
+      SkillManager.instance.onActiveSkillCast,
+      _game.castActiveSkill,
+    )) {
+      SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
+    }
     // 이 화면 전용 IdleGame 인스턴스는 매번 새로 만들고 여기서 버린다 —
     // EquipmentManager 리스너를 해제하지 않으면 던전에 들어갔다 나올
     // 때마다 계속 쌓인다.
     _game.detachListeners();
+    unawaited(SoundManager.instance.playLobbyBgm());
     super.dispose();
   }
 
@@ -670,11 +774,18 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
               fontWeight: FontWeight.bold,
             ),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (gemReward > 0)
+          content: ConstrainedBox(
+            // item_detail_dialog.dart와 같은 관례 — 보상 종류가 여러 개
+            //동시에(예: 탑 층 클리어의 보석+골드+아이템) 뜨거나 접근성
+            // 글자 크기가 커진 상태에서 이 Column이 다이얼로그 높이를
+            // 넘어서도(RenderFlex overflow 대신) 안전하게 스크롤되게 한다.
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (gemReward > 0)
                 Text(
                   '무한의 탑 $clearedFloor층 클리어! 보석 $gemReward개를 획득했습니다.',
                   style: const TextStyle(
@@ -729,7 +840,9 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
                   '보상이 없습니다. 다시 도전해보세요!',
                   style: TextStyle(color: Colors.white70),
                 ),
-            ],
+                ],
+              ),
+            ),
           ),
           actions: [
             TextButton(
@@ -767,6 +880,12 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
         // worldBoss와 같은 이유 — 전용 GuildDungeonScreen이 따로 있어
         // 실제로 이 값이 쓰이지 않는다.
         return '길드 던전';
+      case GameMode.guildRaid:
+        // worldBoss와 같은 이유 — 전용 GuildRaidScreen이 따로 있어
+        // 실제로 이 값이 쓰이지 않는다.
+        return '길드 레이드';
+      case GameMode.weekdayDungeon:
+        return WeekdayDungeonManager.instance.todayConfig.name;
       case GameMode.mainStage:
         return '';
     }
@@ -777,7 +896,11 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
     final bool timed =
         widget.mode == GameMode.goldDungeon ||
         widget.mode == GameMode.equipDungeon ||
-        widget.mode == GameMode.petDungeon;
+        widget.mode == GameMode.petDungeon ||
+        widget.mode == GameMode.weekdayDungeon ||
+        // 무한의 탑도 이제 45초 타임어택이라(_towerDungeonDuration) 남은
+        // 시간 HUD를 보여준다 — 예전엔 무제한(-1)이라 이 목록에 없었다.
+        widget.mode == GameMode.towerOfInfinity;
     final double hpRatio = _game.dungeonMonsterMaxHp <= 0
         ? 0
         : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);

@@ -5,6 +5,7 @@ import '../managers/guild_manager.dart';
 import '../managers/guild_shop_manager.dart';
 import '../models/equipment.dart';
 import '../models/guild_shop_model.dart';
+import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 
 /// 길드 상점 탭 — [GuildMainScreen] 하단 탭 중 하나로 곧장 렌더링된다
@@ -72,7 +73,7 @@ class _GuildShopTabState extends State<GuildShopTab> {
                       const Icon(Icons.savings, color: Colors.amberAccent, size: 16),
                       const SizedBox(width: 4),
                       Text(
-                        '${GuildManager.instance.guildCoins}',
+                        NumberFormatter.format(GuildManager.instance.guildCoins.toDouble()),
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,

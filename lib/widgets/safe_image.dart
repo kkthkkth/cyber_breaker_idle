@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
@@ -28,7 +30,15 @@ import 'package:flutter/material.dart';
 /// but the framework's in-memory [ImageCache] still avoids re-decoding a
 /// [key]-stable image across rebuilds — see below). Every other extension
 /// keeps using [CachedNetworkImage] as before, for its disk caching.
-class CustomSafeImage extends StatelessWidget {
+///
+/// [주의] 네트워크 경로는 성공도 실패도 아닌 채로 멈춰 있을 수 있다(DNS
+/// 문제, 응답 없는 연결 등) — `Image.network`/`CachedNetworkImage` 둘 다
+/// 기본적으로 타임아웃이 없어서, 이런 경우 로딩 스피너가 무한히 돈다(호감도
+/// "영상"/성급 일러스트처럼 원격 레포에서 큰 .webp를 받아오는 화면에서
+/// 특히 체감된다). 그래서 이 위젯은 [_networkTimeout] 안에 성공/실패 어느
+/// 쪽으로도 결론이 안 나면 강제로 실패 처리해 [fallbackPath]/placeholder로
+/// 넘어간다([_CustomSafeImageState] 참고).
+class CustomSafeImage extends StatefulWidget {
   CustomSafeImage({
     Key? key,
     required this.path,
@@ -41,12 +51,14 @@ class CustomSafeImage extends StatelessWidget {
 
   final String path;
 
-  /// [path] 로드가 실패하면(예: 아직 준비되지 않은 애니메이션 .webp)
-  /// 대신 시도할 경로 — 그마저 실패하면 그때 최종적으로 회색 placeholder를
-  /// 보여준다([_errorPlaceholder]). null이면 기존과 동일하게 [path] 실패
-  /// 시 바로 placeholder로 간다. 예: 캐릭터 일러스트는 Live2D풍 .webp를
-  /// 우선 시도하고, 아직 준비 안 된 캐릭터는 기존 정지 .png로 조용히
-  /// 대체한다([AppImages.characterStar]/[AppImages.characterStarFallback]).
+  /// [path] 로드가 실패하면(예: 아직 준비되지 않은 애니메이션 .webp, 디코딩
+  /// 실패, 또는 타임아웃) 대신 시도할 경로 — 그마저 실패하면 최종적으로
+  /// 회색 placeholder를 보여준다([_CustomSafeImageState._errorPlaceholder]).
+  /// null이면 기존과 동일하게 [path] 실패 시 바로 placeholder로 간다. 예:
+  /// 캐릭터 일러스트는 Live2D풍 .webp를 우선 시도하고, 아직 준비 안 된
+  /// 캐릭터는 기존 정지 .png로 조용히 대체한다([AppImages.characterStar]/
+  /// [AppImages.characterStarFallback], 호감도 화면의 heart 일러스트도
+  /// 같은 관례를 따른다).
   final String? fallbackPath;
 
   final double? width;
@@ -58,14 +70,64 @@ class CustomSafeImage extends StatelessWidget {
   /// 기본값과 동일한 medium이라 기존 호출부는 그대로 동작한다).
   final FilterQuality filterQuality;
 
-  bool get _isNetwork => path.startsWith('http://') || path.startsWith('https://');
+  bool get isNetwork => path.startsWith('http://') || path.startsWith('https://');
 
-  bool get _isWebp => path.toLowerCase().endsWith('.webp');
+  bool get isWebp => path.toLowerCase().endsWith('.webp');
+
+  @override
+  State<CustomSafeImage> createState() => _CustomSafeImageState();
+}
+
+class _CustomSafeImageState extends State<CustomSafeImage> {
+  /// 네트워크 요청이 이 시간 안에 성공도 실패도 아닌 채로 멈춰 있으면
+  /// 강제로 실패 처리한다 — 로컬 asset은 디스크에서 즉시 성공/실패가
+  /// 갈리므로(무한정 멈출 이유가 없다) 네트워크 경로에만 적용한다. 위젯의
+  /// [ValueKey]가 `path`/`fallbackPath` 조합마다 다르므로, 경로가 바뀌면
+  /// 항상 새 State(= 새 타이머)로 시작한다.
+  static const Duration _networkTimeout = Duration(seconds: 8);
+
+  Timer? _timeoutTimer;
+
+  /// 성공(이미지가 실제로 화면에 그려짐) 또는 실패(errorBuilder가 이미
+  /// 한 번 불림)로 이미 결론이 난 뒤에는 타임아웃이 뒤늦게 발동해 멀쩡히
+  /// 뜬 이미지를 다시 placeholder로 덮어쓰는 일이 없도록 막는 가드.
+  bool _settled = false;
+
+  bool _timedOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isNetwork) {
+      _timeoutTimer = Timer(_networkTimeout, () {
+        if (!_settled && mounted) {
+          debugPrint(
+            '[AssetLoadError] Timed out after ${_networkTimeout.inSeconds}s: ${widget.path}',
+          );
+          setState(() => _timedOut = true);
+        }
+      });
+    }
+  }
+
+  void _markSettled() {
+    if (_settled) {
+      return;
+    }
+    _settled = true;
+    _timeoutTimer?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _timeoutTimer?.cancel();
+    super.dispose();
+  }
 
   Widget _errorPlaceholder(BuildContext context) {
     return Container(
-      width: width,
-      height: height,
+      width: widget.width,
+      height: widget.height,
       decoration: BoxDecoration(
         color: Colors.grey.withValues(alpha: 0.3),
         borderRadius: BorderRadius.circular(4),
@@ -74,16 +136,16 @@ class CustomSafeImage extends StatelessWidget {
       child: Icon(
         Icons.image,
         color: Colors.grey,
-        size: (width ?? height ?? 24) * 0.6,
+        size: (widget.width ?? widget.height ?? 24) * 0.6,
       ),
     );
   }
 
   Widget _loadingPlaceholder(BuildContext context) {
-    final double indicatorSize = (width ?? height ?? 24) * 0.4;
+    final double indicatorSize = (widget.width ?? widget.height ?? 24) * 0.4;
     return Container(
-      width: width,
-      height: height,
+      width: widget.width,
+      height: widget.height,
       decoration: BoxDecoration(
         color: Colors.grey.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(4),
@@ -97,57 +159,96 @@ class CustomSafeImage extends StatelessWidget {
     );
   }
 
-  /// [path]가 실패했을 때 보여줄 위젯 — [fallbackPath]가 있으면 그 경로로
-  /// (더 이상 fallback 없이) 재귀적으로 다시 시도하고, 없으면 바로 회색
-  /// placeholder. 재귀 호출 한 번으로 끝나므로("webp 실패 → png 시도, png도
-  /// 실패하면 그때 placeholder") 무한 루프 걱정은 없다.
+  /// [widget.path](또는 타임아웃)가 실패했을 때 보여줄 위젯 —
+  /// [widget.fallbackPath]가 있으면 그 경로로(더 이상 fallback 없이)
+  /// 재귀적으로 다시 시도하고, 없으면 바로 회색 placeholder. 재귀 호출
+  /// 한 번으로 끝나므로("webp 실패 → png 시도, png도 실패하면 그때
+  /// placeholder") 무한 루프 걱정은 없다 — fallback 시도 자체도 새
+  /// [CustomSafeImage](=새 State=새 타이머)라 자체적으로 타임아웃 보호를
+  /// 받는다.
   Widget _buildFallbackOrPlaceholder(BuildContext context) {
-    final String? fallback = fallbackPath;
+    final String? fallback = widget.fallbackPath;
     if (fallback == null) {
       return _errorPlaceholder(context);
     }
     return CustomSafeImage(
       path: fallback,
-      width: width,
-      height: height,
-      fit: fit,
-      filterQuality: filterQuality,
+      width: widget.width,
+      height: widget.height,
+      fit: widget.fit,
+      filterQuality: widget.filterQuality,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isNetwork) {
-      if (_isWebp) {
+    if (_timedOut) {
+      return _buildFallbackOrPlaceholder(context);
+    }
+
+    if (widget.isNetwork) {
+      if (widget.isWebp) {
         return Image.network(
-          path,
-          width: width,
-          height: height,
-          fit: fit,
-          filterQuality: filterQuality,
-          loadingBuilder: (context, child, progress) =>
-              progress == null ? child : _loadingPlaceholder(context),
-          errorBuilder: (context, error, stackTrace) => _buildFallbackOrPlaceholder(context),
+          widget.path,
+          width: widget.width,
+          height: widget.height,
+          fit: widget.fit,
+          filterQuality: widget.filterQuality,
+          loadingBuilder: (context, child, progress) {
+            if (progress != null) {
+              return _loadingPlaceholder(context);
+            }
+            _markSettled();
+            return child;
+          },
+          errorBuilder: (context, error, stackTrace) {
+            _markSettled();
+            debugPrint(
+              '[AssetLoadError] Failed to load: ${widget.path}, exception: $error, stack: $stackTrace',
+            );
+            return _buildFallbackOrPlaceholder(context);
+          },
         );
       }
       return CachedNetworkImage(
-        imageUrl: path,
-        width: width,
-        height: height,
-        fit: fit,
-        filterQuality: filterQuality,
+        imageUrl: widget.path,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        filterQuality: widget.filterQuality,
         placeholder: (context, url) => _loadingPlaceholder(context),
-        errorWidget: (context, url, error) => _buildFallbackOrPlaceholder(context),
+        imageBuilder: (context, imageProvider) {
+          _markSettled();
+          return Image(
+            image: imageProvider,
+            width: widget.width,
+            height: widget.height,
+            fit: widget.fit,
+            filterQuality: widget.filterQuality,
+          );
+        },
+        errorWidget: (context, url, error) {
+          _markSettled();
+          debugPrint(
+            '[AssetLoadError] Failed to load: $url, exception: $error, stack: null',
+          );
+          return _buildFallbackOrPlaceholder(context);
+        },
       );
     }
 
     return Image.asset(
-      path,
-      width: width,
-      height: height,
-      fit: fit,
-      filterQuality: filterQuality,
-      errorBuilder: (context, error, stackTrace) => _buildFallbackOrPlaceholder(context),
+      widget.path,
+      width: widget.width,
+      height: widget.height,
+      fit: widget.fit,
+      filterQuality: widget.filterQuality,
+      errorBuilder: (context, error, stackTrace) {
+        debugPrint(
+          '[AssetLoadError] Failed to load: ${widget.path}, exception: $error, stack: $stackTrace',
+        );
+        return _buildFallbackOrPlaceholder(context);
+      },
     );
   }
 }

@@ -213,6 +213,9 @@ class _ConsumableInventoryScreenState extends State<ConsumableInventoryScreen> {
       case ConsumableType.oathRing:
         message = '호감도 Lv.MAX 화면에서 서약할 때 사용할 수 있습니다.';
         break;
+      case ConsumableType.enhanceStone:
+        message = '요일 던전(수요일) 보상 재화입니다. 향후 강화 콘텐츠에서 사용될 예정입니다.';
+        break;
     }
     setState(() {
       _selectedItem = item;
