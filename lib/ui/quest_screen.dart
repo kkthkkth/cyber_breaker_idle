@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../managers/battle_pass_manager.dart';
 import '../managers/quest_manager.dart';
 import '../models/quest_model.dart';
+import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 import 'battle_pass_screen.dart';
 
@@ -246,7 +247,7 @@ class _QuestTile extends StatelessWidget {
             const Icon(Icons.check_circle, color: Colors.greenAccent)
           else
             ElevatedButton(
-              onPressed: item.isClaimable ? onClaim : null,
+              onPressed: withTapHaptic(item.isClaimable ? onClaim : null),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.amberAccent,
                 foregroundColor: Colors.black87,

@@ -7,7 +7,6 @@ import '../main.dart';
 import '../managers/profile_manager.dart';
 import '../managers/supabase_manager.dart';
 import '../widgets/center_toast.dart';
-import 'nickname_screen.dart';
 
 /// [state]가 "방금 구글 로그인이 완료됐다"고 반응해야 할 이벤트인지
 /// 판단한다 — [AuthChangeEvent.signedIn]이 아니면(콜드 스타트 세션 복원인
@@ -133,13 +132,14 @@ class _LoginScreenState extends State<LoginScreen> {
       );
   }
 
-  /// 로그인(자동/게스트/구글) 성공 직후 공통으로 거치는 라우팅 — 서버에
-  /// 저장된 닉네임 유무 하나로 [NicknameScreen]/[GameEntryScreen]을
-  /// 가른다. 세 로그인 경로(콜드 스타트 자동 로그인, 게스트, 구글) 모두
-  /// 이 함수 하나로 수렴해서, "닉네임 없으면 무조건 닉네임 화면부터"라는
-  /// 규칙이 한 곳에서만 관리된다 — 예를 들어 닉네임 설정 도중 앱이 죽은
-  /// 게스트 유저가 다음에 앱을 켰을 때도(자동 로그인 경로) 똑같이
-  /// 닉네임 화면으로 다시 보내진다.
+  /// 로그인(자동/게스트/구글) 성공 직후 공통으로 거치는 라우팅 — 항상
+  /// [GameEntryScreen]으로 넘긴다. 닉네임이 아직 없는 신규 유저를
+  /// [NicknameScreen]으로 보내는 판단은 더 이상 여기서 하지 않는다 —
+  /// 프롤로그 중 N1이 이름을 묻는 장면 직후에 끼워 넣어야 하므로
+  /// [GameEntryScreen]이 "프롤로그를 아직 안 봤는지"와 "닉네임이 있는지"를
+  /// 함께 보고 스스로 판단한다(프롤로그를 이미 마친 구버전 계정이 닉네임만
+  /// 없는 드문 경우의 안전망도 거기서 함께 처리한다). 세 로그인 경로
+  /// (콜드 스타트 자동 로그인, 게스트, 구글) 모두 이 함수 하나로 수렴한다.
   Future<void> _routeAfterAuth() async {
     if (_hasRoutedAfterAuth) {
       return;
@@ -153,9 +153,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _hasRoutedAfterAuth = true;
     ProfileManager.instance.setNickname(nickname);
 
-    final Widget destination = nickname == null ? const NicknameScreen() : const GameEntryScreen();
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => destination),
+      MaterialPageRoute<void>(builder: (_) => const GameEntryScreen()),
     );
   }
 

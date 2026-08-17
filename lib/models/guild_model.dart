@@ -47,6 +47,8 @@ class GuildInfo {
     required this.exp,
     required this.notice,
     required this.masterId,
+    this.treasuryCoin = 0,
+    this.treasuryGem = 0,
   });
 
   final String id;
@@ -57,6 +59,13 @@ class GuildInfo {
   final String notice;
   final String masterId;
 
+  /// 길드 금고(Treasury) — 길드 전쟁 승리 보상(누적 세금 + 최소 보장
+  /// 금액)이 여기로 입금된다. 유저 개인 재화([GameManager.gold]/[gems])와
+  /// 완전히 분리된 값이라, 길드장이 [GuildWarManager.transferTreasury]로
+  /// 명시적으로 분배해야만 개인 재화로 옮겨간다.
+  final int treasuryCoin;
+  final int treasuryGem;
+
   factory GuildInfo.fromJson(Map<String, dynamic> json) => GuildInfo(
     id: json['id'].toString(),
     name: json['name'] as String,
@@ -65,6 +74,8 @@ class GuildInfo {
     exp: (json['exp'] as num?)?.toInt() ?? 0,
     notice: json['notice'] as String? ?? '',
     masterId: json['master_id'] as String? ?? '',
+    treasuryCoin: (json['treasury_coin'] as num?)?.toInt() ?? 0,
+    treasuryGem: (json['treasury_gem'] as num?)?.toInt() ?? 0,
   );
 }
 

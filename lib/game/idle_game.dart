@@ -41,6 +41,7 @@ enum GameMode {
   guildDungeon,
   weekdayDungeon,
   guildRaid,
+  guildWar,
 }
 
 /// 메인 스테이지 전용 조우 상태 — [GameMode.mainStage]일 때만 의미가
@@ -224,6 +225,10 @@ class IdleGame extends FlameGame {
   /// 진홍색을 쓴다.
   static const Color _guildRaidMonsterColor = Color(0xFFD32F2F);
 
+  /// 길드 전쟁(GvG) 거점(성) 전용 — 레이드(진홍)와도 구분되는 짙은
+  /// 금색/청동색으로, "적 길드의 성"이라는 느낌을 준다.
+  static const Color _guildWarBaseColor = Color(0xFFB8860B);
+
   static const double _goldDungeonDuration = 60.0;
   static const double _equipDungeonDuration = 60.0;
   static const double _petDungeonDuration = 60.0;
@@ -248,6 +253,11 @@ class IdleGame extends FlameGame {
   /// [GuildRaidManager.submitDamage]가 이 30초가 끝난 뒤 누적 데미지를 한
   /// 번에 제출해 처리한다.
   static const double _guildRaidDuration = 30.0;
+
+  /// 길드 전쟁 거점 공격 1회의 제한 시간(초) — 길드 레이드와 같은 "처치가
+  /// 아니라 누적 데미지" 구조를 그대로 응용한다([_guildRaidDuration] 문서
+  /// 참고, 정확한 밸런스 데이터가 없어 같은 값으로 맞췄다).
+  static const double _guildWarDuration = 30.0;
 
   /// '펫 산책로' 보스를 잡으면 한 번에 지급되는 발바닥 수량.
   static const int _petDungeonPawprintReward = 300;
@@ -295,6 +305,15 @@ class IdleGame extends FlameGame {
   /// 깎아 둔 상태를 그대로 반영). [_activateDungeon]이 이 값을 초기 몬스터
   /// 체력으로 그대로 스폰한다.
   double guildRaidBossHp = 0;
+
+  /// [GuildWarScreen]이 도전이 끝난 뒤 읽어 [GuildWarManager.submitDamage]
+  /// 에 한 번에 제출한다 — [guildRaidDamageDealt]와 동일한 성격.
+  double _guildWarDamageDealt = 0;
+  double get guildWarDamageDealt => _guildWarDamageDealt;
+
+  /// [GuildWarScreen]이 [startDungeon] 호출 직전에 서버에서 받아온 상대
+  /// 거점의 현재 체력으로 채워 둔다 — [guildRaidBossHp]와 동일한 성격.
+  double guildWarBaseHp = 0;
 
   GameMode mode = GameMode.mainStage;
   double dungeonMonsterHp = 0;
@@ -671,6 +690,7 @@ class IdleGame extends FlameGame {
     _dungeonGoldEarned = 0;
     _worldBossDamageDealt = 0;
     _guildRaidDamageDealt = 0;
+    _guildWarDamageDealt = 0;
     // 던전은 걸어 들어가는 연출 없이 곧장 전투 상태다.
     _player.setDesiredState(PlayerState.attacking);
 
@@ -723,6 +743,13 @@ class IdleGame extends FlameGame {
           hp: guildRaidBossHp > 0 ? guildRaidBossHp : 1,
           color: _guildRaidMonsterColor,
           emoji: '👹',
+        );
+      case GameMode.guildWar:
+        dungeonTimeRemaining = _guildWarDuration;
+        _spawnDungeonMonster(
+          hp: guildWarBaseHp > 0 ? guildWarBaseHp : 1,
+          color: _guildWarBaseColor,
+          emoji: '🏰',
         );
       case GameMode.mainStage:
         break;
@@ -863,8 +890,10 @@ class IdleGame extends FlameGame {
           );
         } else {
           final bool isGoldDungeon = mode == GameMode.goldDungeon;
-          final bool cleared =
-              isGoldDungeon || mode == GameMode.worldBoss || mode == GameMode.guildRaid;
+          final bool cleared = isGoldDungeon ||
+              mode == GameMode.worldBoss ||
+              mode == GameMode.guildRaid ||
+              mode == GameMode.guildWar;
           _endDungeon(
             success: cleared,
             goldReward: isGoldDungeon ? _dungeonGoldEarned : 0,
@@ -1074,6 +1103,12 @@ class IdleGame extends FlameGame {
       _guildRaidDamageDealt += damage;
     }
 
+    // 길드 전쟁도 동일 — 실제 서버 거점 체력 차감은 30초가 끝난 뒤
+    // [GuildWarManager.submitDamage]가 이 누적치를 한 번에 제출해 처리한다.
+    if (mode == GameMode.guildWar) {
+      _guildWarDamageDealt += damage;
+    }
+
     dungeonMonsterHp -= damage;
     if (dungeonMonsterHp > 0) {
       return;
@@ -1197,6 +1232,12 @@ class IdleGame extends FlameGame {
           hp: dungeonMonsterMaxHp,
           color: _guildRaidMonsterColor,
           emoji: '👹',
+        );
+      case GameMode.guildWar:
+        _spawnDungeonMonster(
+          hp: dungeonMonsterMaxHp,
+          color: _guildWarBaseColor,
+          emoji: '🏰',
         );
       case GameMode.mainStage:
         break;

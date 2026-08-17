@@ -193,7 +193,7 @@ class _GuildShopItemTile extends StatelessWidget {
           ElevatedButton.icon(
             onPressed: canAfford ? onBuy : null,
             icon: const Icon(Icons.savings, size: 14),
-            label: Text('${item.price}'),
+            label: Text(NumberFormatter.format(item.price.toDouble())),
             style: ElevatedButton.styleFrom(
               backgroundColor: _accent,
               foregroundColor: Colors.white,

@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/battle_pass_model.dart';
+import '../models/mission_model.dart' show RewardType, rewardTypeFromString;
+import '../utils/time_util.dart';
 import 'game_manager.dart';
 import 'supabase_manager.dart';
 
@@ -113,13 +115,14 @@ class BattlePassManager extends ChangeNotifier {
   Future<void> loadData() async {
     await _loadLocal();
 
+    final DateTime now = await getNetworkTime();
     final List<Map<String, dynamic>> seasonRows =
         await SupabaseManager.instance.fetchBattlePassSeasons();
     BattlePassSeason? activeSeason;
     for (final Map<String, dynamic> row in seasonRows) {
       try {
         final BattlePassSeason season = BattlePassSeason.fromJson(row);
-        if (season.isActive) {
+        if (season.isActiveAt(now)) {
           activeSeason = season;
           break;
         }
@@ -220,13 +223,12 @@ class BattlePassManager extends ChangeNotifier {
   }
 
   void _applyReward(String rewardType, int amount) {
-    switch (rewardType) {
-      case 'gem':
+    switch (rewardTypeFromString(rewardType)) {
+      case RewardType.gem:
         GameManager.instance.addGems(amount);
-      case 'gold':
-      case 'coin':
+      case RewardType.gold:
         GameManager.instance.addGold(amount);
-      default:
+      case null:
         debugPrint('[BattlePassManager] 알 수 없는 보상 타입: $rewardType');
     }
   }

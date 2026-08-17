@@ -14,6 +14,12 @@ enum EquipType {
   pet,
   character,
   relic,
+
+  /// 길드 전쟁 승리 시에만 지급되는 기간제 "휘장" — 강화/분해/합성이
+  /// 불가능하고([EquipmentManager]의 각 메서드가 이 타입을 명시적으로
+  /// 제외한다), [Equipment.expiresAt]이 지나면 [GuildWarManager]가 자동
+  /// 회수한다. 일반 가챠/필드 드랍으로는 절대 생성되지 않는다.
+  badge,
 }
 
 extension EquipTypeX on EquipType {
@@ -41,6 +47,8 @@ extension EquipTypeX on EquipType {
         return '캐릭터';
       case EquipType.relic:
         return '유물';
+      case EquipType.badge:
+        return '휘장';
     }
   }
 }
@@ -275,6 +283,7 @@ class Equipment {
     this.classType,
     this.specialStats = const {},
     this.setId,
+    this.expiresAt,
   });
 
   final String id;
@@ -323,6 +332,24 @@ class Equipment {
   /// [EquipType.character]에도 이론적으로 붙을 수 있지만, 실제 세트
   /// 카탈로그는 장비 부위(무기/방어구류) 중심으로 구성하는 것을 권장한다.
   final String? setId;
+
+  /// [EquipType.badge] 전용 만료 시각 — 그 외 타입은 항상 null(무기한).
+  /// [GuildWarManager]가 이 시각을 지나면 인벤토리에서 회수한다.
+  final DateTime? expiresAt;
+
+  /// 지금 이 순간 만료됐는지 — badge가 아닌 타입은 항상 false(만료 개념이
+  /// 없다). 전투 스탯 계산([GameManager.goldRewardForKill]/
+  /// [effectiveCriticalMultiplier])처럼 매 프레임 동기적으로 읽어야 하는
+  /// 자리 전용 — 기기 시계를 그대로 쓰므로, 회수(confiscate) 여부를
+  /// 최종적으로 결정하는 자리에서는 대신 [isExpiredAt]으로 NTP 시간을
+  /// 명시적으로 넘겨야 한다([EquipmentManager.removeExpiredBadge] 참고).
+  bool get isExpired => expiresAt != null && DateTime.now().isAfter(expiresAt!);
+
+  /// [now](반드시 NTP로 받아온 시간) 기준으로 만료됐는지 — 휘장 회수
+  /// 스윕이 실제 판정에 쓴다. 기기 시계를 만료 시각 이전으로 되돌리면
+  /// [isExpired]만으로는 휘장이 계속 "유효함"으로 남아, 자정 회수를
+  /// 영구히 피하며 전투 버프를 계속 받을 수 있었다.
+  bool isExpiredAt(DateTime now) => expiresAt != null && now.isAfter(expiresAt!);
 
   /// UI에서 옵션 텍스트를 렌더링할 때 쓰는 표시 순서 — 메인 스탯이 항상
   /// 최상단에 오고, 그 아래로 서브 옵션이 이어진다.
@@ -417,6 +444,7 @@ class Equipment {
       'classType': classType?.name,
       'specialStats': specialStats,
       'setId': setId,
+      'expiresAt': expiresAt?.toIso8601String(),
     };
   }
 
@@ -453,6 +481,7 @@ class Equipment {
           ) ??
           const {},
       setId: json['setId'] as String?,
+      expiresAt: json['expiresAt'] != null ? DateTime.tryParse(json['expiresAt'] as String) : null,
     );
   }
 

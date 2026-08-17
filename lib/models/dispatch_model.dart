@@ -57,12 +57,21 @@ class DispatchMission {
   DateTime get endTime => startTime.add(duration.duration);
 
   /// 남은 시간 — 이미 끝났다면 [Duration.zero](음수를 돌려주지 않는다).
+  /// 순수 카운트다운 표시용이라 기기 시계를 그대로 써도 안전하다 — 실제
+  /// 지급 판정은 항상 [isCompleteAt]을 거친다.
   Duration get remaining {
     final Duration left = endTime.difference(DateTime.now());
     return left.isNegative ? Duration.zero : left;
   }
 
   bool get isComplete => remaining == Duration.zero;
+
+  /// [now](반드시 NTP로 받아온 시간) 기준으로 이미 완료됐는지 —
+  /// [DispatchManager.claimReward]가 실제 보상 지급 전에 이걸로 다시
+  /// 검증한다. [isComplete](기기 시계)만 믿으면, 파견을 시작한 뒤 기기
+  /// 시계를 [duration]만큼 앞으로 돌려 즉시 완료 처리하고 다시 편성하는
+  /// 식으로 골드/선물 아이템을 무한히 파밍할 수 있었다.
+  bool isCompleteAt(DateTime now) => !endTime.isAfter(now);
 
   Map<String, dynamic> toJson() => {
     'slotIndex': slotIndex,

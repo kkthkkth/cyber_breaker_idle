@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import '../constants/app_images.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/equipment_set_manager.dart';
+import '../managers/guild_war_manager.dart';
 import '../models/equipment.dart';
+import '../models/guild_war_model.dart';
 import '../models/equipment_set_model.dart';
 import '../models/pet_stat_metadata_model.dart';
 import '../utils/number_formatter.dart';
@@ -405,7 +407,11 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                     ],
                     const SizedBox(height: 20),
 
-                    // ── 중단: 메인 스탯(부위/카테고리에 맞게 동적으로) + 서브 옵션 ──
+                    // ── 중단: 휘장은 전용 버프 안내 카드, 그 외엔 기존
+                    // 메인 스탯(부위/카테고리에 맞게 동적으로) + 서브 옵션 ──
+                    if (equipment.type == EquipType.badge)
+                      _BadgeBuffCard(equipment: equipment)
+                    else
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(
@@ -486,7 +492,10 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                     ),
                     const SizedBox(height: 20),
 
-                    // ── 하단: 장착/해제, (장비 한정) 레벨업 버튼 ─────────────────
+                    // ── 하단: 장착/해제, (장비 한정) 레벨업 버튼 — 휘장은
+                    // 강화/장착 해제가 불가능해야 하므로(요구사항) 이 Row
+                    // 자체를 그리지 않는다.
+                    if (equipment.type != EquipType.badge)
                     Row(
                       children: [
                         Expanded(
@@ -581,11 +590,12 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
           // 우측 상단 제작/합성 바로가기 — 이 팝업을 닫고, 열려 있던
           // 아이템의 카테고리(장비/펫/캐릭터)에 맞는 제작 화면 탭으로 바로
           // 진입한다([_navigateToCrafting] 참고).
-          Positioned(
-            top: 8,
-            right: 8,
-            child: _CraftingShortcutButton(onTap: _navigateToCrafting),
-          ),
+          if (equipment.type != EquipType.badge)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: _CraftingShortcutButton(onTap: _navigateToCrafting),
+            ),
           // 좌측에 나란히 놓이는 호감도(하트) 바로가기 — 캐릭터 상세에서만
           // 보인다([_navigateToAffection] 참고).
           if (equipment.type == EquipType.character)
@@ -850,6 +860,72 @@ class _StarIllustrationSlot extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 휘장([EquipType.badge]) 전용 버프 안내 카드 — 요구사항 문구 그대로
+/// "승리자의 기운: 골드 획득 +20%, 크리티컬 데미지 +10% (남은 기간: X일
+/// X시간)"을 보여준다. 퍼센트 수치는 [GuildWarManager.config](DB
+/// `guild_war_config`)에서, 남은 기간은 [Equipment.expiresAt]에서 매번
+/// 다시 계산한다 — 팝업이 떠 있는 동안 시간이 흘러도 다음에 다시 열 때
+/// 정확한 값을 보여준다(실시간 카운트다운까지는 아니다).
+class _BadgeBuffCard extends StatelessWidget {
+  const _BadgeBuffCard({required this.equipment});
+
+  final Equipment equipment;
+
+  String get _remainingLabel {
+    final DateTime? expiresAt = equipment.expiresAt;
+    if (expiresAt == null) {
+      return '기간 정보 없음';
+    }
+    final Duration remaining = expiresAt.difference(DateTime.now());
+    if (remaining.isNegative) {
+      return '만료됨';
+    }
+    final int days = remaining.inDays;
+    final int hours = remaining.inHours % 24;
+    return '$days일 $hours시간';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final GuildWarConfig config = GuildWarManager.instance.config;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF4A3B0A), Color(0xFF20202C)],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFFD54F).withValues(alpha: 0.7)),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.military_tech, color: Color(0xFFFFD54F), size: 28),
+          const SizedBox(height: 8),
+          const Text(
+            '승리자의 기운',
+            style: TextStyle(color: Color(0xFFFFD54F), fontWeight: FontWeight.bold, fontSize: 15),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '골드 획득 +${(config.badgeBuffGoldRate * 100).toStringAsFixed(0)}%, '
+            '크리티컬 데미지 +${(config.badgeBuffCritDmg * 100).toStringAsFixed(0)}%',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '(남은 기간: $_remainingLabel)',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ],
       ),
     );
   }

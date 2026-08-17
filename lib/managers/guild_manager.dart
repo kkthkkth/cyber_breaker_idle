@@ -82,6 +82,14 @@ class GuildManager extends ChangeNotifier {
   int guildLevel = 1;
   int guildExp = 0;
 
+  /// 길드 금고 — 길드 전쟁 승리 보상이 입금되고, 길드장의
+  /// [GuildWarManager.transferTreasury]로만 개인 재화로 빠져나간다. 둘 다
+  /// 서버 RPC가 원자적으로 처리하는 공유 상태라 [guildCoins](개인 주화)와
+  /// 달리 로컬에서 낙관적으로 증감하지 않고 항상 [refreshGuild]로만
+  /// 갱신한다.
+  int treasuryCoin = 0;
+  int treasuryGem = 0;
+
   /// [guildLevel]에서 다음 레벨까지 필요한 exp — EXP 바 표시([expRatio])와
   /// 출석체크 레벨업 판정([_applyGuildExpGain])이 공유하는 단일 공식.
   static int expForLevel(int level) => level * 1000;
@@ -172,6 +180,8 @@ class GuildManager extends ChangeNotifier {
     guildLevel = info.level;
     guildExp = info.exp;
     guildNotice = info.notice;
+    treasuryCoin = info.treasuryCoin;
+    treasuryGem = info.treasuryGem;
     notifyListeners();
     await _saveLocal();
   }
@@ -513,6 +523,8 @@ class GuildManager extends ChangeNotifier {
         'guildExp': guildExp,
         'guildNotice': guildNotice,
         'guildCoins': guildCoins,
+        'treasuryCoin': treasuryCoin,
+        'treasuryGem': treasuryGem,
       }),
     );
   }
@@ -536,6 +548,8 @@ class GuildManager extends ChangeNotifier {
       guildExp = (data['guildExp'] as num?)?.toInt() ?? guildExp;
       guildNotice = data['guildNotice'] as String? ?? guildNotice;
       guildCoins = (data['guildCoins'] as num?)?.toInt() ?? guildCoins;
+      treasuryCoin = (data['treasuryCoin'] as num?)?.toInt() ?? treasuryCoin;
+      treasuryGem = (data['treasuryGem'] as num?)?.toInt() ?? treasuryGem;
     } catch (error) {
       debugPrint('[GuildManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }

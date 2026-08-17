@@ -5,6 +5,7 @@ import '../managers/artifact_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/gacha_manager.dart';
 import '../managers/game_manager.dart';
+import '../managers/guild_war_manager.dart';
 import '../managers/pity_manager.dart';
 import '../managers/potion_manager.dart';
 import '../managers/tutorial_manager.dart';
@@ -12,6 +13,7 @@ import '../models/artifact_model.dart';
 import '../models/equipment.dart';
 import '../models/item_model.dart';
 import '../models/shop_consumable_model.dart';
+import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/safe_image.dart';
 import 'box_shaking_dialog.dart';
@@ -187,6 +189,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('골드가 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(coinSpent: cost);
 
     final List<Equipment> results = _equipmentManager.drawMultipleGacha(count);
     await showBoxShakingDialog(
@@ -201,6 +204,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('보석이 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
 
     final Item best = results.reduce(
       (Item a, Item b) => b.rarity.index > a.rarity.index ? b : a,
@@ -218,6 +222,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('골드가 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(coinSpent: cost);
 
     final List<Equipment> results = List.generate(
       count,
@@ -234,6 +239,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('보석이 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
 
     final List<Equipment> results = List.generate(
       times,
@@ -260,6 +266,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('골드가 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(coinSpent: cost);
 
     final List<Equipment> results = List.generate(
       count,
@@ -283,6 +290,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
       _showSnackBar('보석이 부족합니다');
       return;
     }
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
 
     final List<Equipment> results = List.generate(
       times,
@@ -667,7 +675,7 @@ class _AdRewardCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           ElevatedButton.icon(
-            onPressed: canWatch ? onWatch : null,
+            onPressed: withTapHaptic(canWatch ? onWatch : null),
             icon: busy
                 ? const SizedBox(
                     width: 14,
@@ -1503,9 +1511,8 @@ class _GachaButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return BouncyButton(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -1553,9 +1560,8 @@ class _PremiumGachaButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return BouncyButton(
       onTap: enabled ? onTap : null,
-      borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
         decoration: BoxDecoration(

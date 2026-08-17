@@ -10,6 +10,7 @@ import '../models/weekday_dungeon_model.dart';
 import '../utils/time_util.dart';
 import 'consumable_manager.dart';
 import 'game_manager.dart';
+import 'guild_war_manager.dart';
 import 'quest_manager.dart';
 import 'rune_manager.dart';
 import 'skill_manager.dart';
@@ -45,8 +46,16 @@ class WeekdayDungeonManager extends ChangeNotifier with WidgetsBindingObserver {
 
   String? _lastResetDate;
 
-  WeekdayDungeonConfig get todayConfig =>
-      WeekdayDungeonSchedule.configFor(DateTime.now().weekday);
+  /// NTP 기준으로 마지막에 확인한 "오늘의 요일"(1=월 ~ 7=일) —
+  /// [checkAndResetDailyCounts]가 매번 갱신한다. [DateTime.now().weekday]를
+  /// 직접 쓰면 기기 시계를 원하는 요일로 바꿔놓기만 해도 그날의 보상을
+  /// 영구히 고정해서 받아갈 수 있었다(예: 항상 "토요일"로 맞춰 두면 매일
+  /// 토요일 보상만 받음) — 반드시 서버(NTP) 시간을 거쳐야 한다. 앱을 아직
+  /// 한 번도 [loadData]하지 않은 극초반(위젯 빌드 중 우연히 먼저 읽히는
+  /// 경우 등)에만 기기 시계로 임시 폴백한다.
+  int _cachedWeekday = DateTime.now().weekday;
+
+  WeekdayDungeonConfig get todayConfig => WeekdayDungeonSchedule.configFor(_cachedWeekday);
 
   bool get canEnterFree => remainingFreeEntries > 0;
 
@@ -76,6 +85,7 @@ class WeekdayDungeonManager extends ChangeNotifier with WidgetsBindingObserver {
     if (!GameManager.instance.spendGems(extraEntryCostGems)) {
       return false;
     }
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: extraEntryCostGems);
     extraEntriesPurchasedToday++;
     notifyListeners();
     await _saveAndSync();
@@ -138,6 +148,11 @@ class WeekdayDungeonManager extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> checkAndResetDailyCounts() async {
     final DateTime now = await getNetworkTime();
+    // 날짜가 안 바뀌어 아래 리셋이 스킵되는 호출에서도 요일 캐시는 항상
+    // 최신 NTP 기준으로 다시 맞춘다 — 다만 날짜가 그대로면(_lastResetDate
+    // == today) 같은 달력일이라 요일도 항상 그대로이므로, 실제로 값이
+    // 바뀌는 건 자정을 실제로 넘겼을 때뿐이다.
+    _cachedWeekday = now.weekday;
     final String today = _formatDate(now);
     if (_lastResetDate == today) {
       return;

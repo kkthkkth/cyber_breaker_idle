@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/mission_model.dart' show RewardType;
+import '../utils/time_util.dart';
 import 'game_manager.dart';
 
 class AttendanceManager extends ChangeNotifier {
@@ -35,10 +36,15 @@ class AttendanceManager extends ChangeNotifier {
 
   /// Call once at app startup. Bumps [attendanceDays] the first time the
   /// player opens the app on a given calendar day.
+  ///
+  /// [주의] 반드시 [getNetworkTime](NTP)을 써야 한다 — 기기 시계
+  /// (DateTime.now())를 썼던 예전 버전은 기기 날짜를 하루씩 앞당겼다
+  /// 되돌리기만 반복해도 15일치 출석 보상을 몇 분 만에 전부 파밍할 수
+  /// 있었다.
   Future<void> checkDailyLogin() async {
     await _load();
 
-    final DateTime now = DateTime.now();
+    final DateTime now = await getNetworkTime();
     final DateTime today = DateTime(now.year, now.month, now.day);
     final DateTime? lastDay = lastLoginDate;
 

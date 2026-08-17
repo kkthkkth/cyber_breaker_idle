@@ -22,6 +22,7 @@ import 'managers/gacha_manager.dart';
 import 'managers/game_manager.dart';
 import 'managers/guild_manager.dart';
 import 'managers/guild_raid_manager.dart';
+import 'managers/guild_war_manager.dart';
 import 'managers/mailbox_manager.dart';
 import 'managers/main_story_manager.dart';
 import 'managers/midnight_reset_manager.dart';
@@ -34,6 +35,7 @@ import 'managers/pet_stat_metadata_manager.dart';
 import 'managers/pity_manager.dart';
 import 'managers/potion_manager.dart';
 import 'managers/prestige_manager.dart';
+import 'managers/profile_manager.dart';
 import 'managers/quest_manager.dart';
 import 'managers/rookie_attendance_manager.dart';
 import 'managers/rune_manager.dart';
@@ -57,6 +59,7 @@ import 'ui/guild_screen.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
 import 'ui/mailbox_screen.dart';
+import 'ui/nickname_screen.dart';
 import 'ui/offline_reward_dialog.dart';
 import 'ui/quest_screen.dart';
 import 'ui/settings_dialog.dart';
@@ -74,6 +77,9 @@ Future<void> main() async {
   // 예약은 나중에 특정 이벤트 시점에만 실제로 쓰인다) 가장 먼저 끝내
   // 둔다. 지원하지 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
   await NotificationManager.instance.init();
+  // 요구사항: "토요일 오후 8시 50분(시작 10분 전)" 길드 전쟁 알림 — 최초
+  // 한 번만 예약하면 매주 자동으로 반복된다.
+  unawaited(NotificationManager.instance.scheduleWeeklyWarStartReminder());
   // 길드원 목록의 접속중(🟢) 표시가 참조하는 profiles.last_seen 하트비트 —
   // 아직 로그인 전이면(게스트 로그인을 아직 안 거쳤으면) 매번 조용히
   // no-op하다가, 로그인 후 다음 주기(SupabaseManager.lastSeenInterval)부터
@@ -147,6 +153,10 @@ Future<void> main() async {
   // 한다.
   await GuildManager.instance.loadData();
   await GuildRaidManager.instance.loadData();
+  await GuildWarManager.instance.loadData();
+  // EquipmentManager.loadEquipment()가 이미 끝난 뒤라(위쪽), 지난 정산으로
+  // 받은 휘장이 있으면 지금 바로 인벤토리에 반영/만료 회수한다.
+  await GuildWarManager.instance.syncBadgeOnStartup();
   await ArenaManager.instance.loadData();
   // 상점 '무료 보상' 탭이 곧바로 AdManager.instance.canWatchAd/dailyAdViews를
   // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다. 지원하지
@@ -262,12 +272,32 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 }
 
+/// [GameEntryScreen]이 지금 보여줘야 할 화면 — 프롤로그를 "이름을 묻기
+/// 전/후"로 쪼개고 그 사이에 닉네임 입력을 끼워 넣기 위한 4단계 상태.
+enum _EntryStep {
+  /// N1이 쓰러진 주인공을 발견하고 이름을 묻는 데까지([prologueBeforeName]).
+  prologueBeforeName,
+
+  /// N1의 질문에 실제로 답하는 닉네임 입력 UI.
+  nickname,
+
+  /// 이름을 밝힌 직후 이어지는 후반부([prologueAfterName]).
+  prologueAfterName,
+
+  /// 프롤로그를 마친 뒤(또는 이미 마친 유저의 재실행) 보여주는 메인 로비.
+  main,
+}
+
 /// 로그인 완료(자동 로그인 또는 [LoginScreen]의 게스트/구글 버튼) 직후
-/// 실제로 진입하는 게임 화면 — 최초 실행이라 아직 프롤로그를 안 봤다면
-/// 프롤로그 스토리를, 이미 봤다면 곧장 메인 로비([MainNavigationScreen])를
-/// 보여준다. 로그인 여부와 프롤로그 시청 여부는 서로 다른 축의 상태라
-/// [LoginScreen]과 이 화면으로 분리해 뒀다 — 로그인은 항상 이 화면보다
-/// 먼저 확인된다.
+/// 실제로 진입하는 게임 화면.
+///
+/// 신규 유저는 프롤로그 전반부 → (N1이 이름을 묻는 장면 직후) 닉네임 입력
+/// → 프롤로그 후반부 → 메인 로비 순서로 진행한다 — 닉네임 입력이 로그인
+/// 직후가 아니라 프롤로그 서사 한가운데 자연스럽게 끼워지도록 이 화면이
+/// 직접 단계를 관리한다([LoginScreen]은 더 이상 닉네임 유무를 보고
+/// 갈라치지 않는다). 프롤로그를 이미 마친 유저는 곧장 메인 로비로 가되,
+/// 아주 드물게(구버전 계정 등) 닉네임이 없다면 안전망으로 닉네임 입력만
+/// 거치게 한다.
 class GameEntryScreen extends StatefulWidget {
   const GameEntryScreen({super.key});
 
@@ -277,9 +307,34 @@ class GameEntryScreen extends StatefulWidget {
 
 class _GameEntryScreenState extends State<GameEntryScreen> {
   // main()에서 StoryManager.instance.loadData()를 이미 await한 뒤 runApp이
-  // 호출되므로, 이 시점엔 로컬 저장값이 확정돼 있다 — 신규 유저(최초 실행)면
-  // false라 프롤로그가 먼저 뜨고, 이미 클리어한 유저면 true라 바로 메인 화면.
-  bool _showPrologue = !StoryManager.instance.isPrologueCleared;
+  // 호출되므로, 이 시점엔 로컬 저장값이 확정돼 있다.
+  late _EntryStep _step = _resolveInitialStep();
+
+  _EntryStep _resolveInitialStep() {
+    final bool hasNickname = ProfileManager.instance.nickname != null;
+    if (StoryManager.instance.isPrologueCleared) {
+      // 이미 프롤로그를 본 유저 — 정상적인 경우 닉네임도 이미 있다.
+      // 구버전 계정 등으로 닉네임만 없는 드문 경우에만 안전망으로 다시 묻는다.
+      return hasNickname ? _EntryStep.main : _EntryStep.nickname;
+    }
+    // 신규 유저(최초 실행) — 이름을 아직 안 밝혔다면 프롤로그 전반부부터,
+    // 이미 밝혔지만 후반부를 못 본 채 앱이 죽었다면 후반부부터 이어본다.
+    return hasNickname ? _EntryStep.prologueAfterName : _EntryStep.prologueBeforeName;
+  }
+
+  void _advanceToNickname() {
+    setState(() => _step = _EntryStep.nickname);
+  }
+
+  void _onNicknameComplete() {
+    // 프롤로그 도중(전반부 직후)이었는지, 이미 클리어한 유저의 안전망
+    // 경로였는지에 따라 다음 목적지가 다르다.
+    setState(() {
+      _step = StoryManager.instance.isPrologueCleared
+          ? _EntryStep.main
+          : _EntryStep.prologueAfterName;
+    });
+  }
 
   /// 스토리를 끝까지 보든 스킵하든 결과는 동일하다: 초반 동료를 지급하고
   /// 클리어 플래그를 저장한 뒤 메인 화면으로 전환한다. 저장 자체는
@@ -288,14 +343,21 @@ class _GameEntryScreenState extends State<GameEntryScreen> {
   void _onPrologueComplete() {
     EquipmentManager.instance.grantStarterCharacters();
     StoryManager.instance.markPrologueCleared();
-    setState(() => _showPrologue = false);
+    setState(() => _step = _EntryStep.main);
   }
 
   @override
   Widget build(BuildContext context) {
-    return _showPrologue
-        ? StoryDialogWidget(story: prologueStory, onComplete: _onPrologueComplete)
-        : const MainNavigationScreen();
+    switch (_step) {
+      case _EntryStep.prologueBeforeName:
+        return StoryDialogWidget(story: prologueBeforeName, onComplete: _advanceToNickname);
+      case _EntryStep.nickname:
+        return NicknameScreen(onComplete: _onNicknameComplete);
+      case _EntryStep.prologueAfterName:
+        return StoryDialogWidget(story: prologueAfterName, onComplete: _onPrologueComplete);
+      case _EntryStep.main:
+        return const MainNavigationScreen();
+    }
   }
 }
 

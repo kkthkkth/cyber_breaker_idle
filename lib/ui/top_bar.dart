@@ -223,8 +223,11 @@ class SpeedButton extends StatelessWidget {
     );
   }
 
-  void _onSelect(BuildContext context, int speedValue) {
-    final bool success = SpeedManager.instance.activate(speedValue);
+  Future<void> _onSelect(BuildContext context, int speedValue) async {
+    final bool success = await SpeedManager.instance.activate(speedValue);
+    if (!context.mounted) {
+      return;
+    }
     if (!success) {
       ScaffoldMessenger.of(context)
         ..clearSnackBars()

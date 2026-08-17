@@ -231,7 +231,25 @@ class _DisassembleViewState extends State<DisassembleView> {
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: GridView.builder(
+                child: inventory.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 32),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.inventory_2_outlined, color: Colors.white24, size: 48),
+                              SizedBox(height: 12),
+                              Text(
+                                '분해할 수 있는 아이템이 없어요.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : GridView.builder(
                   itemCount: inventory.length,
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 6,

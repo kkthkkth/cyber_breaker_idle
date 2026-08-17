@@ -395,6 +395,10 @@ class _CardFace extends StatelessWidget {
         return Icons.horizontal_rule;
       case EquipType.relic:
         return Icons.auto_awesome;
+      case EquipType.badge:
+        // 휘장은 가챠로 나오지 않아(길드 전쟁 승리로만 지급) 실제로는
+        // 이 분기를 타지 않는다 — switch 소진성 때문에 채워두는 값이다.
+        return Icons.military_tech;
     }
   }
 }

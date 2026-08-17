@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/mailbox_item_model.dart';
+import '../models/mission_model.dart' show RewardType, rewardTypeFromString;
 import 'game_manager.dart';
 import 'supabase_manager.dart';
 
@@ -101,15 +102,15 @@ class MailboxManager extends ChangeNotifier {
   }
 
   void _applyReward(MailboxItem item) {
-    switch (item.rewardType) {
-      case 'gem':
+    switch (rewardTypeFromString(item.rewardType)) {
+      case RewardType.gem:
         GameManager.instance.addGems(item.rewardAmount);
-      case 'gold':
-      case 'coin':
+      case RewardType.gold:
         GameManager.instance.addGold(item.rewardAmount);
-      default:
-        // 아직 정의되지 않은 재화 타입 — 신규 타입이 추가되면 이 분기만
-        // 늘리면 된다. 조용히 무시하되 로그는 남긴다.
+      case null:
+        // 아직 정의되지 않은 재화 타입 — 신규 타입이 추가되면
+        // rewardTypeFromString 쪽만 늘리면 된다. 조용히 무시하되 로그는
+        // 남긴다.
         debugPrint('[MailboxManager] 알 수 없는 보상 타입: ${item.rewardType}');
     }
   }

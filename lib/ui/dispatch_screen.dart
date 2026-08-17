@@ -53,11 +53,14 @@ class _DispatchScreenState extends State<DispatchScreen> {
         return;
       }
 
-      final bool success = _manager.startDispatch(
+      final bool success = await _manager.startDispatch(
         slotIndex: order.slotIndex,
         characterIds: order.characterIds,
         duration: order.duration,
       );
+      if (!mounted) {
+        return;
+      }
       if (!success) {
         showCenterToast(context, '파견을 시작할 수 없어요. 편성을 다시 확인해 주세요.');
         return;
@@ -78,11 +81,8 @@ class _DispatchScreenState extends State<DispatchScreen> {
     }
     setState(() => _claimingSlots.add(slotIndex));
     try {
-      final DispatchRewardResult? result = _manager.claimReward(slotIndex);
-      if (result == null) {
-        return;
-      }
-      if (!mounted) {
+      final DispatchRewardResult? result = await _manager.claimReward(slotIndex);
+      if (!mounted || result == null) {
         return;
       }
       await showDialog<void>(

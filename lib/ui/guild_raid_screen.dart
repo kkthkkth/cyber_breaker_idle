@@ -9,6 +9,7 @@ import '../managers/skill_manager.dart';
 import '../models/active_skill_model.dart';
 import '../models/guild_boss_model.dart';
 import '../utils/number_formatter.dart';
+import '../widgets/bouncy_button.dart';
 import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
 import 'top_bar.dart';
 
@@ -421,7 +422,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
               ),
               const SizedBox(height: 20),
               ElevatedButton.icon(
-                onPressed: (manager.hasAttemptsLeft && !_isEntering && boss != null) ? _enter : null,
+                onPressed: withTapHaptic(
+                  (manager.hasAttemptsLeft && !_isEntering && boss != null) ? _enter : null,
+                ),
                 icon: const Icon(Icons.sports_kabaddi),
                 label: Text(
                   !manager.hasAttemptsLeft

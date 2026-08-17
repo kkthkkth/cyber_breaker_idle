@@ -10,6 +10,8 @@ import 'guild_chat_screen.dart';
 import 'guild_dungeon_screen.dart';
 import 'guild_raid_screen.dart';
 import 'guild_shop_screen.dart';
+import 'guild_treasury_screen.dart';
+import 'guild_war_screen.dart';
 
 /// 가입 상태 전용 — 상단 헤더(엠블럼/이름/레벨/exp바/공지) + 출석체크
 /// 버튼 + 하단 4개 탭(길드원 목록/길드 버프/길드 상점/길드 던전)으로
@@ -121,7 +123,7 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
         final GuildManager manager = GuildManager.instance;
 
         return DefaultTabController(
-          length: 6,
+          length: 7,
           child: Scaffold(
             backgroundColor: const Color(0xFF14141C),
             appBar: AppBar(
@@ -170,6 +172,16 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
                     ),
                   ),
                 ),
+                // 길드장에게만 보이는 전리품 분배 진입점 — 요구사항: "길드장만
+                // 볼 수 있는 [전리품 분배] 메뉴".
+                if (manager.isMaster)
+                  IconButton(
+                    icon: const Icon(Icons.card_giftcard, color: Color(0xFFFFD54F)),
+                    tooltip: '전리품 분배',
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => const GuildTreasuryScreen()),
+                    ),
+                  ),
                 IconButton(
                   icon: const Icon(Icons.refresh, color: Colors.white70),
                   onPressed: _isRefreshing ? null : _refresh,
@@ -222,6 +234,7 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
                     Tab(text: '길드 상점'),
                     Tab(text: '길드 던전'),
                     Tab(text: '길드 레이드'),
+                    Tab(text: '길드 전쟁'),
                     Tab(text: '길드 채팅'),
                   ],
                 ),
@@ -233,6 +246,7 @@ class _GuildMainScreenState extends State<GuildMainScreen> {
                       GuildShopTab(),
                       GuildDungeonTab(),
                       GuildRaidTab(),
+                      GuildWarTab(),
                       GuildChatTab(),
                     ],
                   ),

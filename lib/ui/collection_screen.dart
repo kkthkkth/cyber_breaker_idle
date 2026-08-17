@@ -521,14 +521,14 @@ class _StoryReplayTab extends StatelessWidget {
 
   static const List<(int chapter, String title)> _chapterTitles = [
     (1, '1장. 잿빛 숲의 방어선'),
-    (2, '2장. 버섯 숲의 쾌검사'),
+    (2, '2장. 버섯 숲의 방랑 기사'),
     (3, '3장. 고대 신전의 수호자'),
     (4, '4장. 타락한 항구'),
     (5, '5장. 설원의 대검'),
     (6, '6장. 화산 지대의 대장장이'),
     (7, '7장. 대나무 숲의 암살자'),
-    (8, '8장. 타락한 스승'),
-    (9, '9장. 천문대의 별빛'),
+    (8, '8장. 타락한 기사단장'),
+    (9, '9장. 천문대의 현자'),
     (10, '10장. 차원 균열 최심부'),
   ];
 
@@ -542,6 +542,17 @@ class _StoryReplayTab extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 프롤로그 다시보기는 닉네임 입력 UI 없이 전/후반부([prologueBeforeName]
+  /// → [prologueAfterName])를 이어서 보여준다 — 다시보기 시점엔 이미 닉네임이
+  /// 정해져 있으므로({nickname} 치환도 정상 동작) 다시 물을 필요가 없다.
+  Future<void> _replayPrologue(BuildContext context) async {
+    await _replayStory(context, prologueBeforeName);
+    if (!context.mounted) {
+      return;
+    }
+    await _replayStory(context, prologueAfterName);
   }
 
   Future<void> _replayChapter(BuildContext context, ChapterStory chapterStory) async {
@@ -562,7 +573,7 @@ class _StoryReplayTab extends StatelessWidget {
         _StoryReplayTile(
           title: '프롤로그',
           isUnlocked: prologueUnlocked,
-          onTap: prologueUnlocked ? () => _replayStory(context, prologueStory) : null,
+          onTap: prologueUnlocked ? () => _replayPrologue(context) : null,
         ),
         for (final (chapter, title) in _chapterTitles)
           _StoryReplayTile(

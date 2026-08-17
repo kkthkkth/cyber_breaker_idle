@@ -114,6 +114,16 @@ class _CharacterScreenState extends State<CharacterScreen> {
                   onSlotTap: _showItemDetail,
                 ),
               ),
+              // 기존 8슬롯 그리드(EquipArea)는 손대지 않고, 그 바로 아래에
+              // 길드 전쟁 승리 휘장 전용 "특수 장비" 자리를 별도 Row로
+              // 추가한다 — EquipArea는 부모가 고정 높이(340)로 감싸고 있어
+              // 안에 슬롯을 더 끼워 넣으면 기존 좌우 4슬롯 레이아웃이
+              // 깨질 위험이 있지만, 이 화면 전체는 SingleChildScrollView라
+              // 바깥에 새 Row를 추가하는 건 완전히 안전하다.
+              _SpecialEquipRow(
+                badge: _manager.equippedItems[EquipType.badge],
+                onTap: _showItemDetail,
+              ),
               const StatPanel(),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
@@ -645,6 +655,67 @@ class _PetPreviewAvatar extends StatelessWidget {
             child: _GradeBadge(item: pet, compact: true),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 기존 8슬롯 그리드([EquipArea])와 완전히 분리된 가로로 긴 "특수 장비"
+/// 영역 — 지금은 길드 전쟁 승리 휘장([EquipType.badge]) 전용 자리 하나뿐
+/// 이지만, 이름 그대로 나중에 다른 기간제/특수 장비가 추가돼도 이 Row에
+/// 슬롯만 더 얹으면 된다. 휘장은 유저의 가장 큰 명예이자 스펙업 수단이라
+/// (요구사항) 슬롯이 차 있을 때는 금색 글로우로 항상 상시 눈에 띄게
+/// 강조한다 — [RookieAttendanceManager] 7일차 타일과 같은 "특별한 걸
+/// 손에 넣었다" 강조 관례.
+class _SpecialEquipRow extends StatelessWidget {
+  const _SpecialEquipRow({required this.badge, required this.onTap});
+
+  final Equipment? badge;
+  final ValueChanged<Equipment> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool hasBadge = badge != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF20202C),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: hasBadge ? const Color(0xFFFFD54F) : const Color(0xFF3A3A4A),
+            width: hasBadge ? 1.5 : 1,
+          ),
+          boxShadow: hasBadge
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFFFFD54F).withValues(alpha: 0.5),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.workspace_premium, color: Color(0xFFFFD54F), size: 18),
+            const SizedBox(width: 8),
+            const Text(
+              '특수 장비',
+              style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            const Spacer(),
+            EquipSlot(
+              label: '휘장',
+              icon: Icons.military_tech,
+              item: badge,
+              size: 56,
+              onTap: hasBadge ? () => onTap(badge!) : null,
+            ),
+          ],
+        ),
       ),
     );
   }

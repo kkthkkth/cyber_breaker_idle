@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/guild_boss_model.dart';
+import '../models/guild_war_model.dart';
 
 /// 닉네임 설정([SupabaseManager.setNickname]) 결과 — [NicknameScreen]이
 /// 이 값 하나로 성공/중복/기타 오류 세 갈래를 정확히 구분해 보여준다.
@@ -2323,6 +2324,215 @@ class SupabaseManager {
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 레이드 공격 RPC 실패: $error');
       return null;
+    }
+  }
+
+  // ── 길드 전쟁(GvG) + 세금 (GuildWarManager 전용) ────────────────────
+  //
+  // `guild_war_config`/`global_tax_pool`은 싱글턴 1행 테이블, `guild_wars`는
+  // (week_key, guild_id) 유니크한 길드별 전쟁 인스턴스, `guild_war_badges`는
+  // 정산 RPC가 승리 길드원 전원에게 기록하는 휘장 지급 이력이다 — 정확한
+  // SQL은 완료 보고에 함께 첨부한다.
+  static const String _guildWarConfigTable = 'guild_war_config';
+  static const String _globalTaxPoolTable = 'global_tax_pool';
+  static const String _guildWarsTable = 'guild_wars';
+  static const String _guildWarBadgesTable = 'guild_war_badges';
+
+  /// 세금 비율/최소 보장 보상/휘장 버프 수치 — LiveOps 설정. 조회 실패 시
+  /// null(호출부가 [GuildWarConfig.fallback]으로 대체).
+  Future<Map<String, dynamic>?> fetchGuildWarConfig() async {
+    try {
+      return await _client.from(_guildWarConfigTable).select().eq('id', 1).maybeSingle();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 설정 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// 서버 전체 누적 세금 풀 — 신청 화면 중앙에 실시간으로 보여준다.
+  Future<Map<String, dynamic>?> fetchGlobalTaxPool() async {
+    try {
+      return await _client.from(_globalTaxPoolTable).select().eq('id', 1).maybeSingle();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 세금 풀 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// [coinSpent]/[gemSpent](가챠·요일 던전에서 실제로 소모한 재화)의
+  /// `tax_rate`만큼을 `accrue_global_tax` RPC로 세금 풀에 원자적으로
+  /// 더한다 — 여러 유저가 동시에 소비해도 반영분이 유실되지 않는다. 이미
+  /// 로컬에서 재화 차감(예: [GameManager.spendGold])이 끝난 뒤에만
+  /// 호출하는 fire-and-forget 부가 동작이라, 실패해도 게임 진행에는
+  /// 영향이 없다.
+  Future<void> accrueGlobalTax({int coinSpent = 0, int gemSpent = 0}) async {
+    if (coinSpent <= 0 && gemSpent <= 0) {
+      return;
+    }
+    try {
+      await _client.rpc(
+        'accrue_global_tax',
+        params: {'p_coin_spent': coinSpent, 'p_gem_spent': gemSpent},
+      );
+    } catch (error) {
+      debugPrint('[SupabaseManager] 세금 적립 RPC 실패: $error');
+    }
+  }
+
+  /// [guildId]가 [weekKey] 전쟁에 신청한다 — 이미 신청한 행이 있으면
+  /// 아무것도 덮어쓰지 않는다(`ignoreDuplicates`로 최초 신청만 반영, 이미
+  /// 매칭된 이후 재신청 시도로 상태가 되돌아가는 사고를 막는다).
+  Future<bool> applyForGuildWar({required String guildId, required String weekKey}) async {
+    try {
+      await _client.from(_guildWarsTable).upsert(
+        {'guild_id': guildId, 'week_key': weekKey},
+        onConflict: 'week_key,guild_id',
+        ignoreDuplicates: true,
+      );
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 신청 실패: $error');
+      return false;
+    }
+  }
+
+  /// [guildId]의 [weekKey] 전쟁 상태 한 행 — 아직 신청 전이면 null.
+  Future<Map<String, dynamic>?> fetchMyGuildWar({
+    required String guildId,
+    required String weekKey,
+  }) async {
+    try {
+      return await _client
+          .from(_guildWarsTable)
+          .select()
+          .eq('guild_id', guildId)
+          .eq('week_key', weekKey)
+          .maybeSingle();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 상태 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// `match_guild_wars` RPC를 찔러본다 — 토요일 21:00 이전이면 RPC 내부
+  /// 시간 가드가 아무 것도 하지 않으므로, 아무 때나 호출해도 안전하다
+  /// (여러 클라이언트가 동시에 전쟁 탭을 열어 동시에 찔러도 멱등적).
+  Future<void> triggerMatchGuildWars(String weekKey) async {
+    try {
+      await _client.rpc('match_guild_wars', params: {'p_week_key': weekKey});
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 매칭 RPC 실패: $error');
+    }
+  }
+
+  /// [warId] 거점에 [damage]만큼 공격한다 — `guild_war_attack` RPC가
+  /// 방어력 감쇄/참여자 데미지 누적/거점 파괴 판정까지 원자적으로 처리한다.
+  Future<GuildWarAttackResult?> attackGuildWarBase({
+    required String warId,
+    required int damage,
+  }) async {
+    if (damage <= 0) {
+      return null;
+    }
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final dynamic response = await _client.rpc(
+        'guild_war_attack',
+        params: {'p_war_id': warId, 'p_user_id': userId, 'p_damage': damage},
+      );
+      final List<dynamic> rows = response as List<dynamic>;
+      if (rows.isEmpty) {
+        return null;
+      }
+      return GuildWarAttackResult.fromJson(rows.first as Map<String, dynamic>);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 공격 RPC 실패: $error');
+      return null;
+    }
+  }
+
+  /// `settle_guild_wars` RPC를 찔러본다 — 그 주가 아직 안 끝났거나 이미
+  /// 정산됐으면 RPC 내부에서 조용히 아무 것도 하지 않는다(멱등적).
+  Future<void> triggerSettleGuildWars(String weekKey) async {
+    try {
+      await _client.rpc('settle_guild_wars', params: {'p_week_key': weekKey});
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 전쟁 정산 RPC 실패: $error');
+    }
+  }
+
+  /// 현재 유저에게 아직 만료되지 않은 휘장 지급 기록이 있는지 — 있으면
+  /// [GuildWarManager]가 로컬 인벤토리에 그대로 구현(materialize)한다.
+  /// 만료 시각까지 조건에 넣어 이미 지난 지급 기록은 애초에 받아오지
+  /// 않는다. [now]는 반드시 [getNetworkTime](NTP)으로 받아온 시간이어야
+  /// 한다 — 기기 시계를 쓰면, 시계를 되돌려 이미(실제로는) 만료된 지급
+  /// 기록을 다시 "유효한" 것으로 조회해 재장착할 수 있다.
+  Future<Map<String, dynamic>?> fetchMyActiveWarBadge(DateTime now) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final List<dynamic> rows = await _client
+          .from(_guildWarBadgesTable)
+          .select()
+          .eq('user_id', userId)
+          .gt('expires_at', now.toUtc().toIso8601String())
+          .order('granted_at', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) {
+        return null;
+      }
+      return rows.first as Map<String, dynamic>;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 휘장 지급 기록 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// `profiles.combat_power`를 절대값으로 덮어쓴다 — [updateGold]와 같은
+  /// "로컬이 먼저 확정한 값을 그대로 push" 관례. 길드 전쟁 매칭 공식이
+  /// 이 컬럼(길드원 합산)을 직접 읽으므로, 신청 시점에 최신 전투력으로
+  /// 갱신해 둬야 매칭이 정확하다.
+  Future<void> updateCombatPower(int power) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_profilesTable).update({'combat_power': power}).eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 전투력 동기화 실패: $error');
+    }
+  }
+
+  /// 길드 금고 → [targetUserId] 개인 재화로 [coinAmount]/[gemAmount]를
+  /// 옮긴다(전리품 분배) — `transfer_guild_treasury` RPC가 호출자가
+  /// 길드장인지, 대상이 같은 길드원인지, 금고 잔액이 충분한지까지 전부
+  /// 서버에서 검증한 뒤 원자적으로 처리한다. 성공하면 true.
+  Future<bool> transferGuildTreasury({
+    required String guildId,
+    required String targetUserId,
+    required int coinAmount,
+    required int gemAmount,
+  }) async {
+    try {
+      final dynamic result = await _client.rpc(
+        'transfer_guild_treasury',
+        params: {
+          'p_guild_id': guildId,
+          'p_target_user_id': targetUserId,
+          'p_coin_amount': coinAmount,
+          'p_gem_amount': gemAmount,
+        },
+      );
+      return result == true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 금고 분배 RPC 실패: $error');
+      return false;
     }
   }
 }

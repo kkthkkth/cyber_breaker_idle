@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../game/idle_game.dart';
 import '../managers/profile_manager.dart';
 import '../models/story_model.dart';
+import 'character_face_portrait.dart';
 import 'safe_image.dart';
 
 /// story_data.dart의 `_commanderLine`이 지휘관(플레이어) 대사의 화자로 항상
@@ -86,6 +87,12 @@ class _StoryDialogWidgetState extends State<StoryDialogWidget> {
   bool get _isLastLine => _lineIndex == widget.story.lines.length - 1;
   bool get _isTyping => _visibleCharCount < _resolvedLineText.length;
 
+  /// 같은 캐릭터는 씬 내내 같은 쪽에 서 있도록(대사가 바뀔 때마다 좌우가
+  /// 뒤바뀌면 산만하다) [StoryLine.characterId]의 해시값으로 좌/우를
+  /// 결정적으로 고정한다 — 별도의 "이 캐릭터는 왼쪽" 배치표를 관리할
+  /// 필요 없이, 캐릭터가 늘어나도 자동으로 좌우에 고르게 흩어진다.
+  bool _isRightSide(String characterId) => characterId.hashCode.isEven;
+
   @override
   void initState() {
     super.initState();
@@ -162,6 +169,24 @@ class _StoryDialogWidgetState extends State<StoryDialogWidget> {
               const Positioned.fill(
                 child: DecoratedBox(decoration: BoxDecoration(color: Color(0x66000000))),
               ),
+              if (line.characterId != null)
+                Positioned(
+                  bottom: 150,
+                  left: _isRightSide(line.characterId!) ? null : -16,
+                  right: _isRightSide(line.characterId!) ? -16 : null,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    child: SizedBox(
+                      key: ValueKey<String>(line.characterId!),
+                      width: MediaQuery.of(context).size.width * 0.5,
+                      height: MediaQuery.of(context).size.height * 0.55,
+                      child: CharacterFacePortrait(
+                        characterId: line.characterId!,
+                        isFullBody: true,
+                      ),
+                    ),
+                  ),
+                ),
               Positioned(
                 top: 12,
                 right: 12,

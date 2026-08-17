@@ -57,7 +57,8 @@ class _DungeonScreenState extends State<DungeonScreen> {
       GameMode.worldBoss ||
       GameMode.guildDungeon ||
       GameMode.weekdayDungeon ||
-      GameMode.guildRaid => null,
+      GameMode.guildRaid ||
+      GameMode.guildWar => null,
     };
 
     if (ticketType != null) {
@@ -884,6 +885,10 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
         // worldBoss와 같은 이유 — 전용 GuildRaidScreen이 따로 있어
         // 실제로 이 값이 쓰이지 않는다.
         return '길드 레이드';
+      case GameMode.guildWar:
+        // worldBoss와 같은 이유 — 전용 GuildWarScreen이 따로 있어
+        // 실제로 이 값이 쓰이지 않는다.
+        return '길드 전쟁';
       case GameMode.weekdayDungeon:
         return WeekdayDungeonManager.instance.todayConfig.name;
       case GameMode.mainStage:

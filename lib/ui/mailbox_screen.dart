@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../managers/mailbox_manager.dart';
 import '../models/mailbox_item_model.dart';
+import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 
 /// 앱 전역 상단 AppBar([main.dart]의 actions)에서 쓰는 우편함 진입 버튼 —
@@ -155,7 +156,7 @@ class _MailboxScreenState extends State<MailboxScreen> {
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: (unclaimed.isEmpty || _isClaimingAll) ? null : _claimAll,
+                      onPressed: withTapHaptic((unclaimed.isEmpty || _isClaimingAll) ? null : _claimAll),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF6C4FCE),
                         foregroundColor: Colors.white,
@@ -245,7 +246,7 @@ class _MailTile extends StatelessWidget {
           ),
           if (onClaim != null)
             ElevatedButton(
-              onPressed: onClaim,
+              onPressed: withTapHaptic(onClaim),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF6C4FCE),
                 foregroundColor: Colors.white,

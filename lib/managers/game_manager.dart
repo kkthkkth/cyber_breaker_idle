@@ -20,6 +20,7 @@ import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'equipment_set_manager.dart';
 import 'guild_manager.dart';
+import 'guild_war_manager.dart';
 import 'monster_drop_manager.dart';
 import 'prestige_manager.dart';
 import 'quest_manager.dart';
@@ -86,7 +87,10 @@ class GameManager extends ChangeNotifier {
       EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalDamage) +
       EquipmentSetManager.instance
           .totalBonus(EquipmentSetStat.criticalDamagePercent, _equippedSetCounts) +
-      RuneManager.instance.totalBonus(RuneStat.criticalDamagePercent);
+      RuneManager.instance.totalBonus(RuneStat.criticalDamagePercent) +
+      // 길드 전쟁 승리 휘장("승리자의 기운") — 만료되지 않은 휘장이 없으면
+      // GuildWarManager.badgeCritDamageBonus가 0이라 영향이 없다.
+      GuildWarManager.instance.badgeCritDamageBonus;
 
   int attackLevel = 1;
   int attackSpeedLevel = 1;
@@ -339,6 +343,9 @@ class GameManager extends ChangeNotifier {
     // 0이라 곱산에 영향이 없다.
     goldReward =
         (goldReward * (1 + RuneManager.instance.totalBonus(RuneStat.goldGainPercent))).round();
+    // 길드 전쟁 승리 휘장("승리자의 기운") — 만료되지 않은 휘장이 없으면
+    // GuildWarManager.badgeGoldRateBonus가 0이라 곱산에 영향이 없다.
+    goldReward = (goldReward * (1 + GuildWarManager.instance.badgeGoldRateBonus)).round();
     return goldReward;
   }
 
@@ -354,19 +361,66 @@ class GameManager extends ChangeNotifier {
     return goldPerKill * estimatedKillsPerHour / 60;
   }
 
-  int get attackUpgradeCost => (50 * pow(1.15, attackLevel - 1)).round();
+  // ── 골드 업그레이드 비용 공식 ────────────────────────────────────
+  // 전부 `base * growthRate^(level-1)` 형태의 지수 비용 곡선을 쓴다.
+  // 예전엔 이 (base, growthRate) 쌍이 7개 getter에 리터럴로 각각
+  // 흩어져 있었다 — 공격력/방어력처럼 원래도 같은 값을 쓰던 두 스탯이
+  // "우연히 같다"인지 "같아야 한다"인지 코드만 봐서는 알 수 없었고,
+  // 방어율/회피율/크리 방어율 세 스탯도 마찬가지였다. 이제 이름 있는
+  // 상수 하나씩으로 묶어서, 밸런스를 바꿀 때 그 스탯 계열 전체가 함께
+  // 바뀌어야 하는지 한눈에 보이게 했다(정확한 밸런스 데이터가 없어
+  // 임의로 정한 값인 건 그대로다).
+  static const double _attackAndDefenseCostBase = 50;
+  static const double _attackAndDefenseCostGrowth = 1.15;
 
-  int get speedUpgradeCost => (80 * pow(1.2, attackSpeedLevel - 1)).round();
+  static const double _speedCostBase = 80;
+  static const double _speedCostGrowth = 1.2;
 
-  int get criticalUpgradeCost => (100 * pow(1.18, criticalRateLevel - 1)).round();
+  static const double _criticalCostBase = 100;
+  static const double _criticalCostGrowth = 1.18;
 
-  int get defenseUpgradeCost => (50 * pow(1.15, defenseLevel - 1)).round();
+  /// 방어율/회피율/크리티컬 방어율 — 세 스탯 모두 같은 비용 곡선을 공유.
+  static const double _defensiveRateCostBase = 90;
+  static const double _defensiveRateCostGrowth = 1.2;
 
-  int get defenseRateUpgradeCost => (90 * pow(1.2, defenseRateLevel - 1)).round();
+  static int _upgradeCost({required double base, required double growth, required int level}) =>
+      (base * pow(growth, level - 1)).round();
 
-  int get evasionRateUpgradeCost => (90 * pow(1.2, evasionRateLevel - 1)).round();
+  int get attackUpgradeCost => _upgradeCost(
+    base: _attackAndDefenseCostBase,
+    growth: _attackAndDefenseCostGrowth,
+    level: attackLevel,
+  );
 
-  int get critDefenseRateUpgradeCost => (90 * pow(1.2, critDefenseRateLevel - 1)).round();
+  int get speedUpgradeCost =>
+      _upgradeCost(base: _speedCostBase, growth: _speedCostGrowth, level: attackSpeedLevel);
+
+  int get criticalUpgradeCost =>
+      _upgradeCost(base: _criticalCostBase, growth: _criticalCostGrowth, level: criticalRateLevel);
+
+  int get defenseUpgradeCost => _upgradeCost(
+    base: _attackAndDefenseCostBase,
+    growth: _attackAndDefenseCostGrowth,
+    level: defenseLevel,
+  );
+
+  int get defenseRateUpgradeCost => _upgradeCost(
+    base: _defensiveRateCostBase,
+    growth: _defensiveRateCostGrowth,
+    level: defenseRateLevel,
+  );
+
+  int get evasionRateUpgradeCost => _upgradeCost(
+    base: _defensiveRateCostBase,
+    growth: _defensiveRateCostGrowth,
+    level: evasionRateLevel,
+  );
+
+  int get critDefenseRateUpgradeCost => _upgradeCost(
+    base: _defensiveRateCostBase,
+    growth: _defensiveRateCostGrowth,
+    level: critDefenseRateLevel,
+  );
 
   void _resetMonsterHp() {
     const double base = 50.0;

@@ -1,16 +1,25 @@
 import 'package:flutter/material.dart';
 
-import '../main.dart';
 import '../managers/profile_manager.dart';
 import '../managers/supabase_manager.dart';
 
-/// 로그인 직후, 아직 `profiles.nickname`이 없는 유저에게 닉네임을 받는
-/// 화면 — [LoginScreen]의 `_routeAfterAuth`가 게스트/구글 로그인 성공
-/// 직후 닉네임이 없을 때만 이 화면으로 보낸다. 뒤로 가기로 건너뛸 수 없게
-/// (닉네임 없이 게임에 들어가면 [StoryDialogWidget]의 "지휘관" 치환이
-/// 전부 깨진다) `PopScope`로 뒤로 가기를 막는다.
+/// 아직 `profiles.nickname`이 없는 유저에게 닉네임을 받는 화면.
+///
+/// 신규 유저는 프롤로그 중 N1이 이름을 묻는 장면([prologueBeforeName]의
+/// 마지막 대사) 직후 [GameEntryScreen]이 이 화면을 끼워 넣어 보여준다 —
+/// 그래서 이 화면 자체는 독립된 안내 문구 대신 "방금 그 질문에 답한다"는
+/// 톤을 유지한다. 이미 프롤로그를 마쳤지만 어떤 이유로든 닉네임이 없는
+/// 드문 경우(구버전 계정 등)에는 같은 화면을 안전망으로 재사용한다.
+///
+/// 닉네임 설정에 성공하면 화면이 스스로 네비게이션하지 않고 [onComplete]를
+/// 호출한다 — 호출부([GameEntryScreen], 프롤로그 흐름 안에서 쓰일 수도
+/// 있고 안전망으로 단독으로 쓰일 수도 있음)가 다음 화면을 결정한다. 뒤로
+/// 가기로 건너뛸 수 없게(닉네임 없이 게임에 들어가면 [StoryDialogWidget]의
+/// "지휘관" 치환이 전부 깨진다) `PopScope`로 뒤로 가기를 막는다.
 class NicknameScreen extends StatefulWidget {
-  const NicknameScreen({super.key});
+  const NicknameScreen({super.key, required this.onComplete});
+
+  final VoidCallback onComplete;
 
   @override
   State<NicknameScreen> createState() => _NicknameScreenState();
@@ -50,9 +59,7 @@ class _NicknameScreenState extends State<NicknameScreen> {
       switch (result) {
         case NicknameUpdateResult.success:
           ProfileManager.instance.setNickname(nickname);
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute<void>(builder: (_) => const GameEntryScreen()),
-          );
+          widget.onComplete();
         case NicknameUpdateResult.duplicate:
           setState(() => _errorText = '이미 사용 중인 닉네임입니다.');
         case NicknameUpdateResult.error:
@@ -79,7 +86,7 @@ class _NicknameScreenState extends State<NicknameScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text(
-                    '닉네임을 정해주세요',
+                    '부디, 당신의 존함을...',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -88,7 +95,7 @@ class _NicknameScreenState extends State<NicknameScreen> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    '스토리에서 지휘관 대신 이 이름으로 불려요.',
+                    'N1이 당신의 이름을 기다리고 있어요. 앞으로 동료들도 이 이름으로 당신을 부를 거예요.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.white54, fontSize: 13),
                   ),

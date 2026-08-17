@@ -54,11 +54,17 @@ class BattlePassSeason {
   final DateTime startDate;
   final DateTime endDate;
 
-  bool get isActive {
-    final DateTime now = DateTime.now();
-    return !now.isBefore(startDate) && now.isBefore(endDate);
-  }
+  /// [now]가 이 시즌 기간 안에 있는지 — 호출부([BattlePassManager
+  /// .loadData])가 반드시 NTP로 받아온 시간을 넘겨야 한다. 기기 시계
+  /// (DateTime.now())로 판정하면, 시계를 시즌 시작 전/종료 후로 돌려서
+  /// 아직 열리지 않은 시즌의 보상을 미리 받거나 이미 끝난 시즌의
+  /// 프리미엄 패스(보석 결제)를 계속 열어 두고 파밍할 수 있었다.
+  bool isActiveAt(DateTime now) => !now.isBefore(startDate) && now.isBefore(endDate);
 
+  /// "시즌 종료까지 D-N" 같은 순수 표시용 남은 기간 — 초 단위로 정확할
+  /// 필요가 없는 카운트다운 라벨이라 기기 시계를 그대로 써도 안전하다
+  /// (이 값 자체가 무언가를 지급/해금하지 않는다 — 실제 활성 여부 판정은
+  /// 항상 [isActiveAt]을 거친다).
   Duration get remaining => endDate.difference(DateTime.now());
 
   factory BattlePassSeason.fromJson(Map<String, dynamic> json) => BattlePassSeason(

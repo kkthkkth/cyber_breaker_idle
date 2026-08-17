@@ -207,6 +207,21 @@ class AdManager extends ChangeNotifier {
     if (!canWatchAd) {
       return false;
     }
+    // [canWatchAd]/[cooldownRemaining]은 기기 시계(DateTime.now()) 기준의
+    // 빠른 낙관적 판정이라(매초 UI를 다시 그리기 위한 용도), 기기 시계를
+    // 앞으로 돌리면 쿨타임이 실제로는 안 지났는데도 지난 것처럼 보일 수
+    // 있다 — 광고를 실제로 띄우기 직전에 서버(NTP) 시간으로 한 번 더
+    // 확인한다([GuildManager.checkIn]의 "낙관적 로컬 판정 + 실제 처리는
+    // NTP로 재확인" 관례와 동일).
+    final DateTime now = await getNetworkTime();
+    await _checkAndResetDaily(now);
+    final DateTime? last = lastAdViewedAt;
+    final bool stillOnCooldown = last != null && now.difference(last) < cooldown;
+    if (!hasDailyViewsLeft || stillOnCooldown) {
+      notifyListeners();
+      return false;
+    }
+
     final RewardedAd ad = _rewardedAd!;
     _rewardedAd = null;
 

@@ -31,7 +31,10 @@ extension SynthesisCategoryX on SynthesisCategory {
       case SynthesisCategory.pet:
         return type == EquipType.pet;
       case SynthesisCategory.equipment:
-        return type != EquipType.character && type != EquipType.pet;
+        // 휘장(EquipType.badge)은 길드 전쟁 승리로만 지급되는 기간제
+        // 아이템이라 강화/분해/합성이 전부 불가능해야 한다 — "그 외 전부"
+        // 캐치올에 걸려 들어오지 않도록 명시적으로 제외한다.
+        return type != EquipType.character && type != EquipType.pet && type != EquipType.badge;
     }
   }
 }

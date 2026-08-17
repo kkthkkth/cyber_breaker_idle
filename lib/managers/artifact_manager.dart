@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/artifact_model.dart';
 import 'game_manager.dart';
+import 'guild_war_manager.dart';
 import 'supabase_manager.dart';
 
 /// 보석 가챠로 조각을 모아 레벨업하는 "유물" 시스템을 관장하는 싱글턴.
@@ -62,6 +63,7 @@ class ArtifactManager extends ChangeNotifier {
     if (!GameManager.instance.spendGems(pullCost)) {
       return null;
     }
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: pullCost);
 
     final int index = _random.nextInt(_artifacts.length);
     final int fragmentsGained =

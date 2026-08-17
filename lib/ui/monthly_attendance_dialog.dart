@@ -17,6 +17,12 @@ class MonthlyAttendanceView extends StatefulWidget {
 class _MonthlyAttendanceViewState extends State<MonthlyAttendanceView> {
   final MonthlyAttendanceManager _manager = MonthlyAttendanceManager.instance;
 
+  @override
+  void initState() {
+    super.initState();
+    _manager.refreshToday();
+  }
+
   Future<void> _claimDay(int day) async {
     await _manager.claimDay(day);
   }

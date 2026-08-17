@@ -39,6 +39,51 @@ class EquipmentManager extends ChangeNotifier {
   /// [EquipmentManager] 하나로 소스가 통합됐다.
   Equipment? get equippedPet => equippedItems[EquipType.pet];
 
+  /// 현재 장착 중인 휘장(`EquipType.badge`) — [GameManager]가 골드 획득량/
+  /// 크리티컬 데미지 버프를 읽는 진입점([GuildWarManager.badgeGoldRateBonus]
+  /// 등은 이 값의 [Equipment.isExpired] 여부까지 함께 확인한다).
+  Equipment? get equippedBadge => equippedItems[EquipType.badge];
+
+  /// [GuildWarManager]가 길드 전쟁 승리 정산 직후 호출 — 기존에 남아있던
+  /// 휘장(정상적으로는 만료 후 이미 회수됐어야 하므로 거의 없다)을 먼저
+  /// 지우고, [expiresAt]에 만료되는 새 휘장 1개를 인벤토리에 추가한 뒤
+  /// 즉시 장착한다. 이름/등급은 전부 고정값 — 가챠 풀과 완전히 분리된
+  /// 특수 지급 경로라 [EquipmentFactory]를 거치지 않는다.
+  void grantWarBadge({required DateTime expiresAt}) {
+    inventory.removeWhere((item) => item.type == EquipType.badge);
+    final Equipment badge = Equipment(
+      id: _uuid.v4(),
+      name: '승리자의 휘장',
+      type: EquipType.badge,
+      grade: ItemGrade.lr,
+      statMultiplier: 1.0,
+      isEquipped: true,
+      expiresAt: expiresAt,
+    );
+    inventory.add(badge);
+    equippedItems[EquipType.badge] = badge;
+    notifyListeners();
+    saveEquipment();
+  }
+
+  /// 매 자정([MidnightResetManager])마다 [GuildWarManager]가 호출 — 만료된
+  /// 휘장이 있으면 인벤토리/장착 슬롯에서 조용히 회수한다. 만료된 휘장이
+  /// 없으면 아무 일도 하지 않는다(매일 불려도 대부분 no-op).
+  ///
+  /// [now]는 반드시 [getNetworkTime](NTP)으로 받아온 시간이어야 한다 —
+  /// 호출부가 기기 시계를 넘기면, 시계를 만료 시각 이전으로 되돌려서
+  /// 회수를 영구히 피하고 전투 버프를 계속 받을 수 있다.
+  void removeExpiredBadge(DateTime now) {
+    final Equipment? badge = equippedBadge;
+    if (badge == null || !badge.isExpiredAt(now)) {
+      return;
+    }
+    inventory.removeWhere((item) => item.id == badge.id);
+    equippedItems[EquipType.badge] = null;
+    notifyListeners();
+    saveEquipment();
+  }
+
   /// 지금 장착 중인 장비를 [Equipment.setId]별로 몇 부위 장착했는지 센
   /// 맵(setId가 없는 장비는 집계에서 빠진다) — [EquipmentSetManager]가
   /// 이 맵 하나로 2부위/4부위 세트 효과 발동 여부를 판정한다.
@@ -104,7 +149,7 @@ class EquipmentManager extends ChangeNotifier {
     }
 
     final Equipment item = inventory[index];
-    if (item.isMaxLevel) {
+    if (item.isMaxLevel || item.type == EquipType.badge) {
       return false;
     }
     if (!GameManager.instance.spendGold(item.levelUpCost)) {
@@ -124,6 +169,9 @@ class EquipmentManager extends ChangeNotifier {
   static const Set<EquipType> autoEquipExcludedTypes = {
     EquipType.pet,
     EquipType.character,
+    // 휘장은 길드 전쟁 승리 시 GuildWarManager가 직접 지급/장착하는 단일
+    // 아이템이라 "가장 강한 아이템 자동 장착" 스윕 대상이 아니다.
+    EquipType.badge,
   };
 
   /// For every gear slot (excluding [autoEquipExcludedTypes]), equips the
@@ -524,8 +572,8 @@ class EquipmentManager extends ChangeNotifier {
   }
 
   /// 프롤로그 클리어 시 1회 지급되는 초반 동료 — N1은 항상 확정 지급하고
-  /// 곧바로 장착까지 해준다(에스텔은 [prologueStory]의 연출과 맞춰 R등급
-  /// 후보 중 하나로 지급되되, 장착은 하지 않고 인벤토리에만 추가된다).
+  /// 곧바로 장착까지 해준다(두 번째 동료는 N/R등급 후보 중 하나로 지급되되,
+  /// 장착은 하지 않고 인벤토리에만 추가된다).
   /// [StoryManager.markPrologueCleared]와 짝을 이루는 1회성 호출이라
   /// 호출부([MyApp])가 직접 중복 호출 여부를 관리한다.
   List<Equipment> grantStarterCharacters() {
@@ -618,7 +666,13 @@ class EquipmentManager extends ChangeNotifier {
   };
 
   /// Pawprint granted per grade when disassembling *pet* gear — same shape
-  /// as [dustRewardByGrade], just a separate pet-only currency.
+  /// as [dustRewardByGrade], just a separate pet-only currency. [주의] 지금
+  /// 두 테이블의 값이 등급별로 완전히 똑같은 건 우연이다(둘 다 아직 실제
+  /// 밸런스 데이터가 없어 같은 자리표시 수치를 임시로 썼을 뿐) — 서로
+  /// 참조하도록 합쳐두지 않은 이유는 실제 DB 연동 시 가루/발바닥 지급량이
+  /// 독립적으로 달라질 걸로 예상하기 때문이다. 그 전까지 한쪽만 바꾸고
+  /// 다른 쪽을 깜빡하면 "왜 둘이 갑자기 달라졌지"로 헷갈릴 수 있으니,
+  /// 둘 중 하나를 의도적으로 바꿀 땐 이 주석을 지우고 그 사실을 남겨둘 것.
   Map<ItemGrade, int> pawprintRewardByGrade = const {
     ItemGrade.n: 1,
     ItemGrade.r: 5,
@@ -636,7 +690,9 @@ class EquipmentManager extends ChangeNotifier {
     int totalDust = 0;
     int totalPawprints = 0;
     inventory.removeWhere((item) {
-      if (item.isEquipped || !equipmentIds.contains(item.id)) {
+      // 휘장은 장착 여부와 무관하게 절대 분해할 수 없다(길드 전쟁 승리
+      // 전용 기간제 아이템 — 요구사항: "강화 및 분해가 불가능").
+      if (item.isEquipped || item.type == EquipType.badge || !equipmentIds.contains(item.id)) {
         return false;
       }
       if (item.type == EquipType.pet) {
@@ -680,7 +736,9 @@ class EquipmentManager extends ChangeNotifier {
   Map<String, List<Equipment>> groupSynthesizableEquipment() {
     final Map<String, List<Equipment>> groups = {};
     for (final Equipment item in inventory) {
-      if (!item.isMaxLevel) {
+      // 휘장은 강화/합성이 불가능해야 한다 — 만렙(레벨 0으로 생성되지만
+      // isMaxLevel 여부와 무관하게) 조건과 별개로 항상 후보에서 제외한다.
+      if (!item.isMaxLevel || item.type == EquipType.badge) {
         continue;
       }
       final String key = '${item.type.name}_${item.grade.name}_${item.subId}_${item.star}';

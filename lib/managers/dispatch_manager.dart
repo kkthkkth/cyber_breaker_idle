@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/consumable_item_model.dart';
 import '../models/dispatch_model.dart';
+import '../utils/time_util.dart';
 import 'affection_manager.dart';
 import 'consumable_manager.dart';
 import 'game_manager.dart';
@@ -75,11 +76,11 @@ class DispatchManager extends ChangeNotifier {
   /// [slotIndex]에 [characterIds]를 편성해 [duration]짜리 파견을 시작한다.
   /// 슬롯이 이미 사용 중이거나, 인원수가 범위를 벗어나거나, 이미 다른
   /// 슬롯에 편성된 캐릭터가 섞여 있으면 아무것도 바꾸지 않고 false.
-  bool startDispatch({
+  Future<bool> startDispatch({
     required int slotIndex,
     required List<String> characterIds,
     required DispatchDuration duration,
-  }) {
+  }) async {
     if (slotIndex < 0 || slotIndex >= maxSlots || isSlotBusy(slotIndex)) {
       return false;
     }
@@ -93,11 +94,15 @@ class DispatchManager extends ChangeNotifier {
       return false;
     }
 
+    // [주의] 반드시 NTP를 써야 한다 — 기기 시계로 시작 시각을 찍으면,
+    // 시작 직후 시계를 [duration]만큼 앞당겨 바로 완료 처리할 수 있다
+    // ([DispatchMission.isCompleteAt] 문서 참고).
+    final DateTime now = await getNetworkTime();
     _missions[slotIndex] = DispatchMission(
       slotIndex: slotIndex,
       characterIds: List.unmodifiable(characterIds),
       duration: duration,
-      startTime: DateTime.now(),
+      startTime: now,
     );
     _updateTicking();
     _saveData();
@@ -161,12 +166,19 @@ class DispatchManager extends ChangeNotifier {
 
   /// [slotIndex]의 파견을 정산하고 슬롯을 비운다. 슬롯이 비어 있거나
   /// 아직 완료 전이면(=[DispatchMission.isComplete]가 false) null.
-  DispatchRewardResult? claimReward(int slotIndex) {
+  Future<DispatchRewardResult?> claimReward(int slotIndex) async {
     if (slotIndex < 0 || slotIndex >= maxSlots) {
       return null;
     }
     final DispatchMission? mission = _missions[slotIndex];
-    if (mission == null || !mission.isComplete) {
+    if (mission == null) {
+      return null;
+    }
+    // 로컬(기기 시계) [DispatchMission.isComplete]는 버튼 활성/비활성을
+    // 미리 보여주는 낙관적 판정일 뿐이다 — 실제 지급 직전에 NTP로 한 번 더
+    // 확인한다.
+    final DateTime now = await getNetworkTime();
+    if (!mission.isCompleteAt(now)) {
       return null;
     }
 
