@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../managers/dungeon_manager.dart';
 import '../managers/equipment_manager.dart';
-import '../managers/gacha_manager.dart';
 import '../managers/game_manager.dart';
 
 void showSettingsDialog(BuildContext context) {
@@ -99,7 +98,6 @@ class _SettingsDialog extends StatelessWidget {
     await GameManager.instance.saveGame();
     await EquipmentManager.instance.saveEquipment();
     await DungeonManager.instance.saveDungeonData();
-    await GachaManager.instance.saveGachaInventory();
     if (context.mounted) {
       Navigator.of(context).pop();
     }

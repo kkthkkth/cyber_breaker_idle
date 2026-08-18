@@ -160,6 +160,7 @@ class _StoryDialogWidgetState extends State<StoryDialogWidget> {
               Positioned.fill(
                 child: CustomSafeImage(
                   path: widget.story.backgroundUrl,
+                  fallbackPath: widget.story.fallbackBackgroundUrl,
                   fit: BoxFit.cover,
                 ),
               ),

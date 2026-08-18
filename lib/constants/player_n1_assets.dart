@@ -6,11 +6,11 @@ import 'asset_paths.dart';
 /// 부위별로 쪼갠 파츠 이미지들을 체계적으로 관리하기 위해 만들었다.
 ///
 /// [주의] 이 프로젝트의 게임 아트는 로컬 `pubspec.yaml` assets가 아니라
-/// 전부 원격 GitHub 레포(cyber_breaker_idle_images)에서
+/// 전부 원격 Supabase Storage 버킷([AssetPaths.bucketName])에서
 /// [RemoteSpriteLoader]가 런타임에 직접 내려받는다([AppImages] 상단 문서
 /// 참고). 여기 상수들도 실제 파일이 아니라 그 원격 URL 문자열이다 —
 /// `pubspec.yaml`에 등록하거나 로컬 `assets/` 폴더에 파일을 복사해 둘
-/// 필요가 전혀 없고, 이미 GitHub에 올려둔 것으로 충분하다.
+/// 필요가 전혀 없고, 이미 그 버킷에 올려둔 것으로 충분하다.
 class PlayerN1Assets {
   const PlayerN1Assets._();
 

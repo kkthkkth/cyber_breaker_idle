@@ -4,7 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 /// Common image renderer (this project's "CustomImageWidget"): draws from a
-/// local `assets/` path or a GitHub-hosted network URL (see
+/// local `assets/` path or a Supabase Storage-hosted network URL (see
 /// lib/constants/asset_paths.dart / app_images.dart) — falling back to a
 /// placeholder instead of crashing when the asset/URL is unreachable, and
 /// showing a small loading indicator while a network image downloads.
@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 /// is used is decided automatically. Network paths go through
 /// [CachedNetworkImage] so repeat loads (re-opening the same dialog, scrolling
 /// a grid back into view, ...) reuse the on-disk cache instead of
-/// re-downloading from GitHub every time.
+/// re-downloading from Supabase Storage every time.
 ///
 /// Animated `.webp` is special-cased to bypass [CachedNetworkImage]
 /// entirely: `cached_network_image` renders through the `octo_image`
@@ -38,6 +38,12 @@ import 'package:flutter/material.dart';
 /// 특히 체감된다). 그래서 이 위젯은 [_networkTimeout] 안에 성공/실패 어느
 /// 쪽으로도 결론이 안 나면 강제로 실패 처리해 [fallbackPath]/placeholder로
 /// 넘어간다([_CustomSafeImageState] 참고).
+///
+/// 한 번 실패가 확인된 URL은 [_CustomSafeImageState._brokenUrls]에 세션
+/// 동안 기록돼, 같은 URL을 쓰는 다른 인스턴스(다른 화면/그리드 셀 등)는
+/// 재시도 없이 곧바로 대체 화면으로 넘어간다 — Git LFS 텍스트 포인터나
+/// 레이트리밋 응답처럼 디코딩 자체가 애초에 불가능한 URL을 여러 위젯이
+/// 각자 반복 요청+실패 로그를 쌓는 것을 막는다.
 class CustomSafeImage extends StatefulWidget {
   CustomSafeImage({
     Key? key,
@@ -79,6 +85,17 @@ class CustomSafeImage extends StatefulWidget {
 }
 
 class _CustomSafeImageState extends State<CustomSafeImage> {
+  /// 한 번이라도 로드에 실패한 것으로 확인된 네트워크 URL — 세션 동안 다시
+  /// 시도하지 않는다([RemoteSpriteLoader]/[SoundManager]의 `_brokenFiles`와
+  /// 같은 회로 차단기 관례). 같은 깨진 썸네일이 그리드/리스트 여러 곳에
+  /// 동시에 쓰이면(예: 캐릭터 목록에 같은 캐릭터가 여러 번 등장) 각
+  /// 인스턴스가 독립적으로 네트워크 요청 + 디코딩 실패 + 에러 로그를
+  /// 반복했던 것을, 한 번 실패가 확인된 URL은 이후 어떤 인스턴스도 즉시
+  /// 대체 화면으로 넘어가게 해서 막는다 — 그 자체로 로그도 URL당 한 번만
+  /// 찍히게 된다(반복 인스턴스는 애초에 [errorBuilder]/[errorWidget]까지
+  /// 도달하지 않으므로).
+  static final Set<String> _brokenUrls = {};
+
   /// 네트워크 요청이 이 시간 안에 성공도 실패도 아닌 채로 멈춰 있으면
   /// 강제로 실패 처리한다 — 로컬 asset은 디스크에서 즉시 성공/실패가
   /// 갈리므로(무한정 멈출 이유가 없다) 네트워크 경로에만 적용한다. 위젯의
@@ -182,7 +199,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_timedOut) {
+    if (_timedOut || (widget.isNetwork && _brokenUrls.contains(widget.path))) {
       return _buildFallbackOrPlaceholder(context);
     }
 
@@ -203,6 +220,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
           },
           errorBuilder: (context, error, stackTrace) {
             _markSettled();
+            _brokenUrls.add(widget.path);
             debugPrint(
               '[AssetLoadError] Failed to load: ${widget.path}, exception: $error, stack: $stackTrace',
             );
@@ -229,6 +247,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
         },
         errorWidget: (context, url, error) {
           _markSettled();
+          _brokenUrls.add(widget.path);
           debugPrint(
             '[AssetLoadError] Failed to load: $url, exception: $error, stack: null',
           );

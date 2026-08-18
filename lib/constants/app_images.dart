@@ -2,9 +2,10 @@ import '../models/equipment.dart' show ItemGrade;
 import 'asset_paths.dart';
 
 /// Central registry of image paths — 전부 [AssetPaths.baseUrl] 아래의
-/// GitHub 원격 URL을 가리킨다(더 이상 로컬 assets가 아니다). 참조는 항상
-/// 이 클래스를 통해서 하고(원시 문자열 금지), 항상 [CustomSafeImage]로
-/// 불러온다 — 네트워크 실패 시 자동으로 placeholder로 대체된다.
+/// Supabase Storage 원격 URL을 가리킨다(더 이상 로컬 assets가 아니다).
+/// 참조는 항상 이 클래스를 통해서 하고(원시 문자열 금지), 항상
+/// [CustomSafeImage]로 불러온다 — 네트워크 실패 시 자동으로 placeholder로
+/// 대체된다.
 class AppImages {
   const AppImages._();
 
@@ -71,6 +72,16 @@ class AppImages {
         '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_$action$frameIndex.png',
       );
 
+  /// [action]("run"/"attack"/"wait") 애니메이션 WebP — 번호가 매겨진 정지
+  /// 프레임 여러 장([playerActionFrame])을 하나하나 이어 붙이는 대신,
+  /// 애니메이션 파일 하나를 통째로 재생하고 싶을 때 최우선으로 시도하는
+  /// 경로. `player_{id}_{action}.webp`. 아직 없는(404) 캐릭터/액션 조합은
+  /// [PlayerAnimationComponent]가 기존 [playerActionFrame] 프레임 시퀀스로
+  /// 조용히 대체한다 — 호출부에서 존재 여부를 따로 확인할 필요는 없다.
+  static String playerActionAnimation(String characterId, String action) => AssetPaths.resolve(
+    '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_$action.webp',
+  );
+
   /// 뼈대 애니메이션(Skeletal Animation)/스킨 교체용으로 부위별로 쪼갠
   /// 파츠 이미지 — `assets/images/player/{GRADE}/{characterId}/part/`
   /// 아래에 놓인다. [partFileName]은 확장자를 포함한 실제 파일명
@@ -87,6 +98,25 @@ class AppImages {
     '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_thumbnail.png',
   );
 
+  /// 캐릭터 전용 원거리 공격 투사체 이미지 — `assets/images/player/{GRADE}/
+  /// {characterId}/` 아래, 다른 캐릭터 전용 파일들과 같은 폴더에 놓인다.
+  /// [fileName]은 확장자를 포함한 실제 파일명 그대로 넘긴다(예: 마법사는
+  /// "magic_orb.png", 궁수는 "arrow.png" — 어떤 파일명을 쓸지는
+  /// [character_class_config.dart]의 [visualFor]가 직업별로 정한다). 이
+  /// 클래스는 그 파일이 실제로 존재하는지 모르고 경로만 조립한다 —
+  /// 캐릭터가 아직 자기 전용 투사체 아트를 안 올렸으면(404)
+  /// [ProjectileComponent]가 [defaultProjectile]로, 그마저 없으면 그려진
+  /// 도형으로 자동 대체한다.
+  static String playerProjectile(String characterId, String fileName) =>
+      AssetPaths.resolve('${_playerDir(characterId)}/$fileName');
+
+  /// 직업 공용 기본 투사체 이미지 — `assets/images/projectile/` 아래,
+  /// 특정 캐릭터에 속하지 않는 공유 아트. [playerProjectile](캐릭터 전용)이
+  /// 아직 없는 캐릭터도 최소한 이 기본 스프라이트로는 날아가는 모습을 볼 수
+  /// 있게 하는 2단계 폴백이다([ProjectileComponent.onLoad] 참고).
+  static String defaultProjectile(String fileName) =>
+      AssetPaths.resolve('assets/images/projectile/$fileName');
+
   // Pet art — assets/images/pet/{GRADE}/{petId}/ 아래 정면 이미지가
   // 들어간다. [petId]는 [playerFront]의 characterId와 동일한 형식
   // (Equipment.gradeBadgeLabel, 예: "N1")이고, 등급 폴더도 같은 규칙
@@ -96,6 +126,14 @@ class AppImages {
 
   static String petFront(String petId) =>
       AssetPaths.resolve('${_petDir(petId)}/pet_${petId.toLowerCase()}_front.png');
+
+  /// 액티브 스킬(광역기) 발동 시 [Meteor]가 우선 시도하는 이펙트 스프라이트
+  /// — `assets/images/skill/{skillId}/effect.png`. [skillId]는
+  /// `ActiveSkill.id`(skill_metadata의 PK)를 그대로 넘긴다. 아직 해당
+  /// 스킬 전용 아트가 없으면(404) [Meteor]가 기존처럼 그려진 원형
+  /// 이펙트로 대체한다 — 호출부에서 존재 여부를 따로 확인할 필요는 없다.
+  static String skillEffect(String skillId) =>
+      AssetPaths.resolve('assets/images/skill/$skillId/effect.png');
 
   /// 성급(★0~5) 해금 일러스트 — Live2D풍으로 움직이는 애니메이션(.webp)이
   /// 우선 시도된다. 아직 애니메이션 작업이 안 된 캐릭터는 이 경로가 404로
@@ -167,10 +205,10 @@ class AppImages {
   /// 폴더 밑에 `bg_chapter{N}_ground.png` 이름으로 올려야 한다.
   ///
   /// [주의] 이 프로젝트의 인게임 이미지는 로컬 pubspec.yaml assets가 아니라
-  /// **원격 GitHub 레포**(https://github.com/kkthkkth/cyber_breaker_idle_images)
-  /// 에서 [RemoteSpriteLoader]가 직접 내려받는다 — 로컬 프로젝트의
+  /// **Supabase Storage `${AssetPaths.bucketName}` 버킷**에서
+  /// [RemoteSpriteLoader]가 직접 내려받는다 — 로컬 프로젝트의
   /// `assets/images/` 폴더에 파일을 넣는 것만으로는 아무 효과가 없고,
-  /// 반드시 그 원격 레포의 같은 경로에 파일을 올려야 한다. 아직 해당
+  /// 반드시 그 버킷의 같은 경로에 파일을 올려야 한다. 아직 해당
   /// 챕터의 전용 바닥 아트가 준비되지 않았다면(404) [RemoteSpriteLoader]가
   /// 조용히 이전 타일을 유지하므로([IdleGame._loadGroundTile] 참고) 갑자기
   /// 화면이 깨지지는 않는다 — 다만 시각적으로는 이전 챕터 바닥이 그대로

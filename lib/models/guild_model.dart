@@ -141,18 +141,35 @@ class GuildMember {
     return DateTime.now().difference(seen) <= onlineThreshold;
   }
 
+  /// 이 앱에서는 닉네임 입력이 필수라(프롤로그 중 [NicknameScreen]을 거치지
+  /// 않고는 게임에 진입할 수 없다) 실제 활성 유저의 닉네임이 진짜로
+  /// 비어있는 경우는 없다 — 이 플레이스홀더가 보이면 100% `profiles`
+  /// 조인이 실패했다는 뜻이다. [GuildManager.refreshMembers]가 이 값을
+  /// 그대로 "재조회가 필요한 행" 판정 기준으로 재사용한다.
+  static const String unresolvedNicknamePlaceholder = '익명의 모험가';
+
   factory GuildMember.fromJson(Map<String, dynamic> json) {
     final Map<String, dynamic>? profile = json['profiles'] as Map<String, dynamic>?;
     final String? nickname = profile?['nickname'] as String?;
     final String? lastSeenRaw = profile?['last_seen'] as String?;
     return GuildMember(
       userId: json['user_id'] as String,
-      nickname: (nickname == null || nickname.trim().isEmpty) ? '익명의 모험가' : nickname,
+      nickname: (nickname == null || nickname.trim().isEmpty)
+          ? unresolvedNicknamePlaceholder
+          : nickname,
       role: guildRoleFromString(json['role'] as String?),
       contribution: (json['contribution'] as num?)?.toInt() ?? 0,
       lastSeen: lastSeenRaw == null ? null : DateTime.tryParse(lastSeenRaw)?.toLocal(),
     );
   }
+
+  GuildMember copyWith({String? nickname}) => GuildMember(
+    userId: userId,
+    nickname: nickname ?? this.nickname,
+    role: role,
+    contribution: contribution,
+    lastSeen: lastSeen,
+  );
 }
 
 /// `guild_messages` + `profiles(nickname)` 임베드 조회(초기 히스토리) 또는

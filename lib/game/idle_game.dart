@@ -75,6 +75,13 @@ class IdleGame extends FlameGame {
   /// (단순 bool이라) 매번 다시 계산해도 비용이 없어 따로 캐시하지 않는다.
   String? _lastKnownCharacterId;
 
+  /// [_onEquipmentChanged]가 펫 스프라이트를 매번(다른 이유의 알림에도)
+  /// 다시 로드하지 않도록, 마지막으로 실제 반영한 펫 ID를 기억해 둔다 —
+  /// [_lastKnownCharacterId]와 같은 이유의 같은 패턴. 펫을 해제하면(null)
+  /// 다음에 다른 펫을 장착할 때 확실히 새로 로드되도록 함께 null로
+  /// 되돌린다.
+  String? _lastKnownPetId;
+
   /// 다중 레이어 패럴랙스 — [_backLayer](먼 배경, 완전 정지)가 [_groundLayer]
   /// (바닥/땅, 빠르게 스크롤)보다 먼저 add되어 뒤에 깔린다.
   late ParallaxBackLayer _backLayer;
@@ -434,17 +441,28 @@ class IdleGame extends FlameGame {
       CharacterClass.warrior;
 
   /// EquipmentManager 알림 하나로 캐릭터 교체(로그인/장착 화면)와 펫
-  /// 착용/해제 둘 다 반영한다 — 장비 강화 등 다른 이유로도 자주
-  /// notifyListeners()가 오므로, 캐릭터는 실제로 바뀌었을 때만 [_player]를
-  /// 다시 로드하고, 펫은 매번 [_pet.visible]만 가볍게 다시 계산한다(단순
-  /// bool 비교라 캐시할 이유가 없다).
+  /// 착용/해제/교체 셋 다 반영한다 — 장비 강화 등 다른 이유로도 자주
+  /// notifyListeners()가 오므로, 캐릭터/펫 스프라이트는 실제로 바뀌었을
+  /// 때만([_lastKnownCharacterId]/[_lastKnownPetId]) 다시 로드한다. 반면
+  /// [_pet.visible]은 단순 bool 비교라 캐시할 이유 없이 매번 다시 계산한다.
   void _onEquipmentChanged() {
-    _pet.visible = EquipmentManager.instance.equippedItems[EquipType.pet] != null;
+    final Equipment? equippedPet = EquipmentManager.instance.equippedItems[EquipType.pet];
+    _pet.visible = equippedPet != null;
+
+    final String? petId = equippedPet?.gradeBadgeLabel;
+    if (petId != _lastKnownPetId) {
+      debugPrint('[IdleGame] 장착 펫 변경 감지 — $_lastKnownPetId → $petId, 스프라이트 재로드');
+      _lastKnownPetId = petId;
+      if (petId != null) {
+        _pet.loadPet(petId);
+      }
+    }
 
     final String characterId = _equippedCharacterId;
     if (characterId == _lastKnownCharacterId) {
       return;
     }
+    debugPrint('[IdleGame] 장착 캐릭터 변경 감지 — $_lastKnownCharacterId → $characterId, 스프라이트 재로드');
     _lastKnownCharacterId = characterId;
     _player.loadCharacter(characterId);
   }
@@ -979,11 +997,21 @@ class IdleGame extends FlameGame {
           ),
         );
       case AttackType.ranged:
+        final String characterId = _equippedCharacterId;
+        final ProjectileVisual visual = visualFor(classType, characterId);
+        // 진단용 로그 — 투사체 이미지가 엉뚱한 캐릭터 폴더에서 로드
+        // 시도되는 건 아닌지(예: 마법사를 장착했는데 characterId가 실제로는
+        // 다른 캐릭터를 가리키는 경우) 확인용이다. 문제를 찾은 뒤에는
+        // 지워도 된다.
+        debugPrint(
+          '[IdleGame] 원거리 공격 발사 — characterId=$characterId, classType=$classType, '
+          'primary=${visual.spriteAssetPath}, fallback=${visual.fallbackSpriteAssetPath}',
+        );
         add(
           ProjectileComponent(
             startPosition: _playerCenter,
             getTargetPosition: () => _monsterCenter,
-            visual: visualFor(classType),
+            visual: visual,
             onHit: () => _resolveHit(result.damage, result.isCritical),
           ),
         );
@@ -1286,6 +1314,7 @@ class IdleGame extends FlameGame {
         spawnPosition: Vector2(_monster.position.x, -60),
         targetPosition: _monsterCenter,
         onImpact: () => _resolveSkillHit(damage),
+        skillId: skill.id,
       ),
     );
   }
@@ -1585,15 +1614,19 @@ class ParallaxGroundLayer extends Component {
 /// 동안만 쓰인다([IdleGame._startDefeatSequence]).
 enum PlayerState { running, attacking, idle, defeat }
 
-/// 장착 캐릭터의 달리기/공격 프레임 시퀀스(각 5장,
-/// `player_{id}_run1~5.png` / `player_{id}_attack1~5.png`)를 내려받아
-/// 부드러운 프레임 애니메이션으로 재생하는 컴포넌트 — 예전엔 이 자리에
-/// 아무것도 그리지 않는 RectangleComponent를 좌표 기준점으로만 쓰고 실제
-/// 캐릭터는 Flutter 오버레이(PlayerHitFlashOverlay)가 단일 이미지를
-/// 스왑해 그렸지만, 이제 실제 프레임 그림이 있는 캐릭터는 Flame이 직접
-/// 애니메이션으로 그린다(더 이상 코드로 위아래 바운스/회전을 흉내 낼
-/// 필요가 없다). 아직 프레임 시퀀스가 없는(404) 캐릭터는 [loadCharacter]
-/// 가 기존 단일 포즈 이미지로 조용히 대체한다.
+/// 장착 캐릭터의 달리기/공격 애니메이션을 내려받아 부드러운 프레임
+/// 애니메이션으로 재생하는 컴포넌트 — 예전엔 이 자리에 아무것도 그리지
+/// 않는 RectangleComponent를 좌표 기준점으로만 쓰고 실제 캐릭터는 Flutter
+/// 오버레이(PlayerHitFlashOverlay)가 단일 이미지를 스왑해 그렸지만, 이제
+/// 실제 프레임 그림이 있는 캐릭터는 Flame이 직접 애니메이션으로 그린다
+/// (더 이상 코드로 위아래 바운스/회전을 흉내 낼 필요가 없다).
+///
+/// run/attack/wait 세 액션 전부 애니메이션 WebP 파일 하나
+/// (`player_{id}_{action}.webp`)가 최우선이고, 없으면(404) 번호 매김 정지
+/// 프레임 시퀀스(`player_{id}_{action}1~5.png`)로 대체한다
+/// ([_loadActionPreferringWebP] 참고). 프레임 시퀀스조차 없는(404) 캐릭터는
+/// [loadCharacter]가 기존 단일 포즈 이미지로, 그마저 실패하면 도형으로
+/// 조용히 대체한다.
 class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState> {
   PlayerAnimationComponent({required Vector2 position})
       : super(
@@ -1624,29 +1657,79 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
         );
 
   /// 컴포넌트 노출 상자의 한 변 — 512x512 캔버스 여백(약 41.4%)을 감안해
-  /// 실제 캐릭터가 화면에서 적절히 큼직하게(대략 세로 100px 안팎) 보이도록
-  /// 잡은 값이다. 기존 56은 여백 없는 옛날 캔버스 기준이라, 새 512x512
-  /// 캔버스에 그대로 쓰면 캐릭터가 실제보다 훨씬 작게 보였다([IdleGame
-  /// .groundYRatio] 등 다른 반응형 배치는 이 값과 무관하게 그대로 동작한다
-  /// — 화면 크기 비율이 아니라 고정 픽셀 상자이기 때문).
-  static const double boxSize = 180;
+  /// 실제 캐릭터가 화면에서 적절히 큼직하게 보이도록 잡은 값이다. 기존
+  /// 56은 여백 없는 옛날 캔버스 기준이라, 새 512x512 캔버스에 그대로
+  /// 쓰면 캐릭터가 실제보다 훨씬 작게 보였다(그래서 한 차례 180까지
+  /// 키웠었다).
+  ///
+  /// 이후 실제 전투 화면에서 180이 오히려 너무 크다는 피드백으로 120으로
+  /// 축소했고(180 대비 약 66.7%), 그래도 여전히 크다는 후속 피드백으로
+  /// 다시 그 절반인 60으로 축소했다(120 대비 정확히 50%). [render]가
+  /// 매번 [_renderScale]을 이 [size](=box 한 변) 기준으로 다시 계산하고
+  /// (`computeRenderScale(referenceSrcSize, size)`), 그 결과를 상자 안에서
+  /// 항상 가로 중앙·세로 하단([offset] 계산, `size.y - fittedSize.y`)으로
+  /// 배치하므로, 이 상수 하나만 바꿔도 발밑 위치는 자동으로 따라온다 —
+  /// 이 컴포넌트가 [Anchor.bottomCenter]로 고정돼 있어서, "상자 하단"은
+  /// 상자 크기와 무관하게 항상 [position](=[IdleGame._groundY]) 그대로이기
+  /// 때문이다. 별도로 Y좌표를 보정할 필요가 없다. 다만 [home_screen.dart]
+  /// 의 플레이어 체력바 오버레이는 이 값을 직접 참조해 머리 위 여백을
+  /// 계산하므로(`top: playerY - spriteSize - 30`), 그쪽도 이 상수가
+  /// 바뀌면 자동으로 같이 따라간다([IdleGame.groundYRatio] 등 다른
+  /// 반응형 배치는 이 값과 무관하게 그대로 동작한다 — 화면 크기 비율이
+  /// 아니라 고정 픽셀 상자이기 때문).
+  ///
+  /// [주의] 캐릭터 탭의 "장착 캐릭터 미리보기 카드"(character_screen.dart)
+  /// 도 "인게임 전투 스케일과 동일하게"라는 의도로 이 상수를 그대로
+  /// 재사용한다(펫 미리보기 아바타는 그 0.65배) — 그래서 이 값을 줄이면
+  /// 전투 필드뿐 아니라 그 미리보기 카드/펫 아바타도 함께 작아진다.
+  /// 이건 의도된 동작이다(둘을 서로 다른 스케일로 분리해 달라는 요청이
+  /// 아니었다).
+  static const double boxSize = 60;
 
-  /// 512x512 캔버스 세로 길이 중 실제 캐릭터 콘텐츠(투명하지 않은 픽셀)가
-  /// 차지하는 비율 — player_n1_wait1.png/attack1.png/front.png 실측 결과
-  /// 셋 다 약 58.6%(하단 여백 0%, 상단 여백 약 41.4%)였다. [CharacterIdlePreview]
-  /// 가 이 값의 역수를 확대 배율로 써서 캐릭터 상세창 프리뷰에서도 여백을
-  /// 잘라내고 캐릭터 알맹이가 상자를 꽉 채우도록 한다. 다른 캐릭터도 같은
-  /// 512x512 내보내기 규칙(발밑 = 캔버스 하단)을 따른다는 전제이며, 특정
-  /// 캐릭터의 여백 비율이 크게 다르면 이 상수를 다시 실측해 조정해야 한다.
-  static const double contentHeightRatio = 0.586;
+  /// 캐릭터 모션/공격 이펙트 표준 규격(2026-08 결정) — 원본 캔버스는
+  /// 가로 800 x 세로 720px, 그 안에서 실제 캐릭터 콘텐츠는 가로/세로 모두
+  /// 정확히 50%(400x360)만 차지하고 캔버스 하단 중앙에 정렬된다(좌우
+  /// 중앙, 하단 여백 0%) — 나머지 절반은 공격 이펙트(검기 등)가 캐릭터
+  /// 바깥으로 뻗어나갈 여유 공간이다. 예전 512x512(콘텐츠 58.6%) 규격을
+  /// 대체한다.
+  static const double referenceCanvasWidth = 800;
+  static const double referenceCanvasHeight = 720;
 
-  /// [size] 안에서 실제 캐릭터 몸통 중심이 발밑(캔버스 하단, 여백 0%)으로
-  /// 부터 얼마나 위에 있는지를 [size] 대비 비율로 나타낸 값 —
-  /// [IdleGame._playerCenter](투사체 시작 위치/데미지 텍스트 기준점)가
-  /// 상자 전체 절반(0.5, 즉 캔버스 정중앙)이 아니라 실제 몸통 위치를
-  /// 가리키도록 쓴다. 몸통 수직 중심은 발밑에서 [contentHeightRatio]의
-  /// 절반만큼 위다.
-  static const double bodyCenterHeightRatio = contentHeightRatio / 2;
+  /// 위 표준 규격에서 콘텐츠가 캔버스 대비 차지하는 비율(가로/세로 공통,
+  /// 정확히 50%) — [loadCharacter]가 [computeRenderScale]에 넘기는 기준
+  /// 크기를 "캔버스 전체(800x720)"가 아니라 "콘텐츠(400x360)"로 축소해
+  /// 넘길 때 쓴다. 원본 전체를 기준으로 맞추면 캐릭터 주변의 투명 여백
+  /// (이펙트 공간)까지 상자에 맞추려 들어서 정작 캐릭터 알맹이가 상자보다
+  /// 훨씬 작게 그려진다 — 이 비율로 먼저 "콘텐츠만" 크기를 계산해야
+  /// 알맹이가 상자를 꽉 채운다.
+  static const double contentRatio = 0.5;
+
+  /// [size] 상자 하단(발밑, 지면)에서 콘텐츠 상단(대략 캐릭터 머리 꼭대기)
+  /// 까지의 거리를 [size] 대비 비율로 나타낸 값 — [home_screen.dart]의
+  /// 플레이어 체력바가 이 값을 참고해 머리 바로 위에(캔버스의 텅 빈 상단
+  /// 여백 위가 아니라) 뜨도록 여백을 계산한다.
+  ///
+  /// 유도: 콘텐츠(400x360, 가로가 더 넓다)를 정사각형 상자에 맞추면 항상
+  /// 가로 기준으로 맞춰진다(`min(B/400, B/360)`은 항상 `B/400`— 세로가
+  /// 더 좁으니 그 배율이 더 크다). 그 배율로 원본 캔버스(800x720) 전체를
+  /// 그대로 그리면(콘텐츠뿐 아니라 이펙트 여백까지) 세로 길이는
+  /// `720 * (B/400)`가 되고, 콘텐츠는 그 캔버스의 하단 `contentRatio`
+  /// 비율만큼(=세로로 `360 * (B/400)`)을 차지한다. 캔버스와 콘텐츠 모두
+  /// 하단이 상자 하단(발밑)에 맞춰지므로, 콘텐츠 상단이 상자 하단으로부터
+  /// 떨어진 거리는 정확히 콘텐츠의 그려진 세로 길이(`360*(B/400)`)와
+  /// 같다 — 상자 크기(B)로 나누면 `360/400 = 0.9`. [contentRatio](50%)는
+  /// 분자/분모 양쪽에 똑같이 곱해져 있어 계산에서 사라지므로, 실제로는
+  /// 캔버스 원본 가로세로비(`referenceCanvasHeight /
+  /// referenceCanvasWidth`)만 남는다.
+  static const double contentTopHeightRatio = referenceCanvasHeight / referenceCanvasWidth;
+
+  /// [size] 안에서 실제 캐릭터 몸통 중심이 발밑(상자 하단)으로부터 얼마나
+  /// 위에 있는지를 [size] 대비 비율로 나타낸 값 — [IdleGame._playerCenter]
+  /// (투사체 시작 위치/데미지 텍스트 기준점)가 상자 전체 절반(0.5, 즉
+  /// 상자 정중앙)이 아니라 실제 몸통 위치를 가리키도록 쓴다. 콘텐츠는
+  /// 발밑(0)부터 [contentTopHeightRatio](머리 꼭대기)까지 걸쳐 있으므로,
+  /// 그 수직 중심은 정확히 절반이다.
+  static const double bodyCenterHeightRatio = contentTopHeightRatio / 2;
 
   /// 프레임 존재 여부를 확인할 때 시도해 볼 상한 — 실제 프레임 수는
   /// 캐릭터/액션마다 다르고(N1 run=3장, attack=5장, 앞으로 추가될 다른
@@ -1830,8 +1913,8 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   Future<void> loadCharacter(String characterId) async {
     try {
       final List<SpriteAnimation> results = await Future.wait([
-        _loadAction(characterId, 'run'),
-        _loadAction(
+        _loadActionPreferringWebP(characterId, 'run'),
+        _loadActionPreferringWebP(
           characterId,
           'attack',
           stepTimeForFrameCount: (frameCount) => computeAttackStepTime(
@@ -1839,15 +1922,22 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
             frameCount: frameCount,
           ),
         ),
-        _loadAction(characterId, 'wait', stepTime: _idleFrameStepTime),
+        _loadActionPreferringWebP(characterId, 'wait', stepTime: _idleFrameStepTime),
         _loadDefeatPose(characterId),
       ]);
       // 대기(wait) 모션 첫 프레임을 "이 캐릭터의 표준 몸집" 기준으로 삼아
       // 배율을 한 번만 계산해 둔다 — 공격 프레임은 검기 이펙트 때문에
       // 캔버스 자체가 훨씬 크지만, 이후 [render]가 프레임마다 다시
       // 맞추지 않고 이 값을 그대로 재사용하므로 캐릭터 몸집이 그대로
-      // 유지된다([render] 문서 참고).
-      _renderScale = computeRenderScale(results[2].frames.first.sprite.srcSize, size);
+      // 유지된다([render] 문서 참고). [computeRenderScale]에는 원본 캔버스
+      // 전체(800x720)가 아니라 [contentRatio]만큼 축소한 "콘텐츠" 크기
+      // (400x360)를 넘긴다 — 캔버스 전체를 기준으로 맞추면 이펙트용 여백
+      // 까지 상자에 맞추려 들어서 정작 캐릭터 알맹이가 상자보다 훨씬
+      // 작게 그려진다([render]의 offset 계산이 원본 전체를 그 배율로
+      // 그리고 발밑 기준 정렬만 하므로, 그려지는 원본 자체가 상자보다
+      // 커져도 발 위치는 여전히 정확히 지면에 맞는다).
+      final Vector2 referenceFrameSize = results[2].frames.first.sprite.srcSize;
+      _renderScale = computeRenderScale(referenceFrameSize * contentRatio, size);
       animations = {
         PlayerState.running: results[0],
         PlayerState.attacking: results[1],
@@ -1866,15 +1956,53 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   /// "애니메이션"으로 감싼다. 다른 액션과 달리 5프레임 시퀀스가 아니라
   /// 아파하는 정지 표정 한 장이면 충분하다. 실패하면(아직 그림이 없는
   /// 캐릭터) [_loadAction]의 다른 액션들과 같은 관례로 [AppImages.playerSide]
-  /// 단일 이미지로 조용히 대체한다.
+  /// 단일 이미지로 대체하고, 그마저 실패하면(네트워크 완전 두절, 그
+  /// 캐릭터의 아트가 전부 깨져 있는 경우 등) [RemoteSpriteLoader
+  /// .placeholderSprite]로 최종 대체한다 — 이 함수는 절대 예외를 던지지
+  /// 않는다([loadCharacter]의 `Future.wait`가 이 캐릭터 하나의 아트 문제
+  /// 때문에 통째로 실패해, 장착을 바꿔도 화면이 이전 캐릭터에 멈춰 있는
+  /// 것처럼 보이는 일을 막기 위함).
   static Future<SpriteAnimation> _loadDefeatPose(String characterId) async {
     try {
       final Sprite sprite = await RemoteSpriteLoader.loadSprite(AppImages.playerHit(characterId));
       return SpriteAnimation.spriteList([sprite], stepTime: 1, loop: true);
     } catch (_) {
-      final Sprite fallbackSprite =
-          await RemoteSpriteLoader.loadSprite(AppImages.playerSide(characterId));
+      final Sprite fallbackSprite = await _loadSpriteOrPlaceholder(AppImages.playerSide(characterId));
       return SpriteAnimation.spriteList([fallbackSprite], stepTime: 1, loop: true);
+    }
+  }
+
+  /// [action]("run"/"attack"/"wait") 공용 진입점 — 애니메이션 WebP 파일
+  /// 하나([AppImages.playerActionAnimation], 예: `player_n1_attack.webp`)가
+  /// 있으면 최우선으로 그걸 재생하고, 없거나(404) 디코딩에 실패하면 기존
+  /// 번호 매김 PNG 프레임 시퀀스 경로([_loadAction])로 조용히 대체한다.
+  /// run에서 검증된 패턴을 attack/wait에도 그대로 넓힌 것 — 캐릭터가
+  /// 액션별로 웹피를 하나씩만 올려도, 나머지는 자동으로 기존 PNG 시퀀스가
+  /// 채운다.
+  ///
+  /// [stepTime]/[stepTimeForFrameCount]는 PNG 시퀀스 폴백([_loadAction])에만
+  /// 쓰인다 — WebP 경로가 성공하면 그 파일 자체가 담고 있는 프레임별
+  /// 타이밍을 그대로 쓴다(다만 attack은 [PlayerAnimationComponent
+  /// .updateAttackStepTime]이 공속이 바뀔 때마다 모든 프레임의 stepTime을
+  /// 다시 균등하게 덮어쓰므로, WebP로 로드했더라도 실제 재생 속도는 결국
+  /// 공속에 맞춰진다 — 이건 의도된 동작이다).
+  static Future<SpriteAnimation> _loadActionPreferringWebP(
+    String characterId,
+    String action, {
+    double stepTime = _frameStepTime,
+    double Function(int frameCount)? stepTimeForFrameCount,
+  }) async {
+    try {
+      return await RemoteSpriteLoader.loadAnimatedWebP(
+        AppImages.playerActionAnimation(characterId, action),
+      );
+    } catch (_) {
+      return _loadAction(
+        characterId,
+        action,
+        stepTime: stepTime,
+        stepTimeForFrameCount: stepTimeForFrameCount,
+      );
     }
   }
 
@@ -1885,8 +2013,10 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   /// 업로드된 프레임 개수가 달라도(N1 run=3장, attack=5장 등) 하드코딩
   /// 없이 정확히 그만큼만 로드된다. 1번 프레임조차 없으면(프레임 시퀀스가
   /// 아예 없는 캐릭터) 기존 단일 포즈 이미지 한 장을 1프레임짜리
-  /// "애니메이션"으로 감싸 그대로 대체 표시한다 — 호출부에서 캐릭터별로
-  /// 프레임 존재 여부를 따로 확인할 필요가 없다.
+  /// "애니메이션"으로 감싸 그대로 대체 표시하고, 그 단일 이미지마저
+  /// 실패하면 [_loadSpriteOrPlaceholder]가 도형으로 대체한다 — 이 함수는
+  /// 절대 예외를 던지지 않는다. 호출부에서 캐릭터별로 프레임 존재 여부를
+  /// 따로 확인할 필요가 없다.
   ///
   /// [stepTime]은 프레임 개수와 무관하게 고정된 프레임당 시간이 필요할
   /// 때(run/wait) 쓰고, [stepTimeForFrameCount]는 실제 프레임 개수를 알아야
@@ -1910,13 +2040,32 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
         'wait' => AppImages.playerFront(characterId),
         _ => AppImages.playerSide(characterId),
       };
-      final Sprite fallbackSprite = await RemoteSpriteLoader.loadSprite(fallbackUrl);
+      final Sprite fallbackSprite = await _loadSpriteOrPlaceholder(fallbackUrl);
       return SpriteAnimation.spriteList([fallbackSprite], stepTime: 1, loop: true);
     }
 
     final List<Sprite> frames = probed.sublist(0, frameCount).cast<Sprite>();
     final double resolvedStepTime = stepTimeForFrameCount?.call(frameCount) ?? stepTime;
     return SpriteAnimation.spriteList(frames, stepTime: resolvedStepTime, loop: true);
+  }
+
+  /// [url] 로드를 시도하고, 실패하면(네트워크 두절, Git LFS 포인터, 디코딩
+  /// 오류 등 [RemoteSpriteLoader]가 이미 안전하게 잡아낸 모든 경우)
+  /// [RemoteSpriteLoader.placeholderSprite]로 대체한다 — 이 함수 자체는
+  /// 어떤 경우에도 예외를 던지지 않는다. [_loadAction]/[_loadDefeatPose]의
+  /// "단일 이미지 폴백" 단계가 공유하는 최종 안전망이다.
+  static Future<Sprite> _loadSpriteOrPlaceholder(String url) async {
+    try {
+      return await RemoteSpriteLoader.loadSprite(url);
+    } catch (error) {
+      // RemoteAssetBlocked(이미 회로 차단기가 확인한 실패)는 새로운 정보가
+      // 아니므로 로그를 생략한다 — 레이트리밋 중 여러 캐릭터/액션이 동시에
+      // 이 경로를 타면서 매번 찍히면 터미널이 도배된다.
+      if (error is! RemoteAssetBlocked) {
+        debugPrint('[PlayerAnimationComponent] 폴백 이미지도 로드 실패($url): $error — 도형으로 대체합니다.');
+      }
+      return RemoteSpriteLoader.placeholderSprite();
+    }
   }
 
   /// 프레임 하나를 시도해 보고, 실패(404 등)하면 예외를 던지는 대신
@@ -1947,17 +2096,20 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
 /// 착용한 펫(EquipmentManager.equippedItems[EquipType.pet])이 있을 때만
 /// 캐릭터([PlayerAnimationComponent]) 바로 좌측 뒤쪽을 따라다니며 함께
 /// 달리거나 대기하는 컴포넌트 — [IdleGame._onEquipmentChanged]가
-/// [visible]을 갱신한다. 아직 펫 전용 스프라이트 아트가 없어([ItemPoolConfig]
-/// 참고, 프로젝트 전체가 펫을 아이콘/텍스트로만 표시하는 관례) 등급색 대신
-/// 고정 오렌지 톤의 원형 배지 + paw 이모지로 표현한다 — 캐릭터 탭 프리뷰의
-/// `_PetPreviewAvatar`와 같은 시각 언어.
+/// [visible]을 갱신하고, 펫이 실제로 바뀌면 [loadPet]도 호출한다.
+/// [AppImages.petFront] 원격 스프라이트를 우선 시도하고([loadPet]),
+/// 아직 해당 펫 전용 아트가 없거나(404) 로드에 실패하면([_sprite]가 계속
+/// null로 남는다) 기존처럼 고정 오렌지 톤의 원형 배지 + paw 이모지로
+/// 대체한다([render]) — 캐릭터 탭 프리뷰의 `_PetPreviewAvatar`와 같은
+/// "스프라이트 우선, 실패 시 그려진 배지" 폴백 철학([ProjectileComponent]
+/// 참고).
 class PetComponent extends PositionComponent {
   PetComponent({required this.getPlayerPosition})
       : super(size: Vector2.all(_size), anchor: Anchor.bottomCenter);
 
-  /// 아직 실제 펫 스프라이트가 없어(위 클래스 문서 참고) 플레이어 상자
-  /// 크기([PlayerAnimationComponent.boxSize])와 직접 연동하지 않고 고정값을
-  /// 쓴다 — "캐릭터보다 살짝 작은 귀여운 원형 배지" 정도로 고정.
+  /// 실제 펫 스프라이트가 준비된 등급/펫도, 아직 안 된 등급/펫도 같은
+  /// 박스 크기 안에서 자연스럽게 보이도록 스프라이트/배지 공통으로 고정값을
+  /// 쓴다 — "캐릭터보다 살짝 작은" 크기.
   static const double _size = 36;
 
   /// 항상 플레이어의 왼쪽(뒤쪽) [_followOffsetX]만큼, 같은 Y(바닥 길)에
@@ -1976,10 +2128,44 @@ class PetComponent extends PositionComponent {
   /// 갱신 — false면 [render]가 아무것도 그리지 않는다.
   bool visible = false;
 
+  /// [loadPet] 로드에 성공하면 이걸 그리고, null이면(아직 로드 전이거나
+  /// 원격 아트가 없어 실패했을 때) 원형 배지+paw 이모지로 대체한다
+  /// ([render] 참고).
+  Sprite? _sprite;
+
+  /// 매 프레임 새로 만들지 않도록 캐싱 — 픽셀 아트가 확대돼도 뭉개지지
+  /// 않게 필터링을 끈 Paint.
+  final Paint _pixelArtPaint = RemoteSpriteLoader.pixelArtPaint();
+
+  /// [loadPet]이 겹쳐 호출될 때(펫을 빠르게 연속으로 갈아탄 경우), 늦게
+  /// 시작했지만 먼저 끝난 이전 요청이 최신 결과를 덮어쓰지 않도록 막는
+  /// 가드 — 항상 "가장 최근에 요청한 펫 ID"만 [_sprite]에 반영된다.
+  String? _pendingPetId;
+
   static final TextPainter _pawPainter = TextPainter(
     text: const TextSpan(text: '🐾', style: TextStyle(fontSize: 16)),
     textDirection: TextDirection.ltr,
   )..layout();
+
+  /// [petId](예: "N1")의 정면 스프라이트([AppImages.petFront])를 불러와
+  /// [_sprite]에 반영한다 — 실패해도 예외를 던지지 않고 [_sprite]가 계속
+  /// null로 남아 [render]가 기존 배지로 자연스럽게 대체한다.
+  Future<void> loadPet(String petId) async {
+    _pendingPetId = petId;
+    _sprite = null;
+    Sprite? sprite;
+    try {
+      sprite = await RemoteSpriteLoader.loadSprite(AppImages.petFront(petId));
+    } catch (error) {
+      if (error is! RemoteAssetBlocked) {
+        debugPrint('[PetComponent] 펫 스프라이트 로드 실패($petId): $error — 배지로 대체합니다.');
+      }
+    }
+    if (_pendingPetId != petId) {
+      return;
+    }
+    _sprite = sprite;
+  }
 
   @override
   void update(double dt) {
@@ -1993,6 +2179,13 @@ class PetComponent extends PositionComponent {
     if (!visible) {
       return;
     }
+
+    final Sprite? sprite = _sprite;
+    if (sprite != null) {
+      sprite.render(canvas, size: size, overridePaint: _pixelArtPaint);
+      return;
+    }
+
     final Offset center = Offset(size.x / 2, size.y / 2);
     final double radius = size.x / 2;
     canvas.drawCircle(center, radius, Paint()..color = _bodyColor.withValues(alpha: 0.85));
@@ -2109,14 +2302,26 @@ class ProjectileComponent extends PositionComponent {
   Future<void> onLoad() async {
     await super.onLoad();
 
-    final String? path = visual.spriteAssetPath;
-    if (path == null) {
-      return;
-    }
-    try {
-      _sprite = await RemoteSpriteLoader.loadSprite(path);
-    } catch (_) {
-      // 조용히 무시 — _sprite가 null로 남아 fallback 도형이 계속 그려진다.
+    // 1순위: 캐릭터 전용 투사체 아트. 없거나(null) 로드 실패(404 등)하면
+    // 2순위: 직업 공용 기본 아트. 그마저 없으면 _sprite가 계속 null로
+    // 남아 render()가 fallback 도형을 그린다 — 어떤 경우에도 깨진 이미지
+    // 아이콘이 화면에 보이는 일은 없다([ProjectileVisual] 문서 참고).
+    //
+    // 진단 로그는 "새로 알아낸" 실패에만 남긴다 — [RemoteAssetBlocked]는
+    // 이미 회로 차단기가 확인해 둔 실패(영구 차단 또는 429 쿨다운)라서
+    // 매번 찍으면 레이트리밋 중 터미널이 도배된다.
+    for (final String? path in [visual.spriteAssetPath, visual.fallbackSpriteAssetPath]) {
+      if (path == null) {
+        continue;
+      }
+      try {
+        _sprite = await RemoteSpriteLoader.loadSprite(path);
+        return;
+      } catch (error) {
+        if (error is! RemoteAssetBlocked) {
+          debugPrint('[ProjectileComponent] 로드 실패($path): $error');
+        }
+      }
     }
   }
 
@@ -2198,11 +2403,18 @@ class ProjectileImpactEffect extends CircleComponent {
   }
 }
 
+/// 광역 액티브 스킬([SkillManager.onActiveSkillCast]/[IdleGame.castActiveSkill])
+/// 발동 시 하늘에서 떨어지는 이펙트. [skillId]가 주어지면
+/// [AppImages.skillEffect] 전용 스프라이트를 우선 시도하고([onLoad]), 아직
+/// 해당 스킬 전용 아트가 없거나(404) [skillId] 자체가 없으면 기존처럼
+/// 그려진 오렌지색 원으로 대체한다([render]) — [ProjectileComponent]와
+/// 같은 "스프라이트 우선, 실패 시 도형" 폴백 철학.
 class Meteor extends CircleComponent {
   Meteor({
     required Vector2 spawnPosition,
     required Vector2 targetPosition,
     required this.onImpact,
+    this.skillId,
   })  : _targetPosition = targetPosition,
         super(
           radius: 28,
@@ -2214,9 +2426,30 @@ class Meteor extends CircleComponent {
   final Vector2 _targetPosition;
   final VoidCallback onImpact;
 
+  /// 발동한 액티브 스킬의 ID([ActiveSkill.id]) — [AppImages.skillEffect]로
+  /// 전용 이펙트 스프라이트를 찾을 때 쓴다.
+  final String? skillId;
+
+  /// 로드에 성공하면 이걸 그리고, null이면(스킬 ID 없음/아직 아트 없음/
+  /// 로드 실패) 기존 원형 이펙트로 대체한다([render] 참고).
+  Sprite? _sprite;
+
+  final Paint _pixelArtPaint = RemoteSpriteLoader.pixelArtPaint();
+
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+
+    final String? id = skillId;
+    if (id != null) {
+      try {
+        _sprite = await RemoteSpriteLoader.loadSprite(AppImages.skillEffect(id));
+      } catch (error) {
+        if (error is! RemoteAssetBlocked) {
+          debugPrint('[Meteor] 스킬 이펙트 스프라이트 로드 실패($id): $error — 도형으로 대체합니다.');
+        }
+      }
+    }
 
     add(
       MoveEffect.to(
@@ -2228,6 +2461,16 @@ class Meteor extends CircleComponent {
         },
       ),
     );
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final Sprite? sprite = _sprite;
+    if (sprite != null) {
+      sprite.render(canvas, size: size, overridePaint: _pixelArtPaint);
+      return;
+    }
+    super.render(canvas);
   }
 }
 

@@ -41,14 +41,29 @@ class SoundManager {
 
   String? _currentBgmFile;
 
+  /// 한 번이라도 재생/프리로드에 실패한 파일명(SFX든 BGM이든 공용) —
+  /// 웹에서 특정 wav 인코딩이 `MEDIA_ERR_SRC_NOT_SUPPORTED`(Format error
+  /// Code 4)처럼 디코딩 자체가 불가능한 경우, 매번 다시 시도해봐야 항상
+  /// 같은 이유로 또 실패할 뿐이다 — 한 번 실패를 확인한 파일은 이후
+  /// 호출에서 아예 건드리지 않고 조용히 넘어가서, 전투 중 반복 재생되는
+  /// SFX(타격음 등) 때문에 매 프레임 같은 에러 로그가 도배되거나 불필요한
+  /// 재생 시도가 반복되는 것을 막는다.
+  final Set<String> _brokenFiles = {};
+
   /// main()이 앱 시작 시 한 번 호출 — SFX를 미리 캐시에 올려 첫 재생
-  /// 지연(디스크/네트워크 로드)을 없앤다. 실패해도(파일 없음 등) 조용히
-  /// 넘어간다 — 이후 개별 재생 호출들도 각자 try/catch로 보호돼 있다.
+  /// 지연(디스크/네트워크 로드)을 없앤다. 파일 하나씩 개별 try/catch로
+  /// 로드한다 — [FlameAudio.audioCache.loadAll]에 통째로 맡기면 그중
+  /// 하나라도 포맷이 깨져 있을 때 나머지 정상 파일까지 프리로드가
+  /// 통째로 실패할 수 있다(배치 Future 하나가 통째로 reject). 실패한
+  /// 파일은 [_brokenFiles]에 바로 등록해 첫 재생 시도조차 하지 않는다.
   Future<void> init() async {
-    try {
-      await FlameAudio.audioCache.loadAll(_sfxFiles);
-    } catch (error) {
-      debugPrint('[SoundManager] SFX 프리로드 실패(assets/audio/ 파일을 확인하세요): $error');
+    for (final String file in _sfxFiles) {
+      try {
+        await FlameAudio.audioCache.load(file);
+      } catch (error) {
+        _brokenFiles.add(file);
+        debugPrint('[SoundManager] SFX 프리로드 실패($file, 이후 재생 생략): $error');
+      }
     }
   }
 
@@ -57,14 +72,15 @@ class SoundManager {
   Future<void> playDungeonBgm() => _playBgm('dungeon_bgm.mp3');
 
   Future<void> _playBgm(String file) async {
-    if (!bgmEnabled || _currentBgmFile == file) {
+    if (!bgmEnabled || _currentBgmFile == file || _brokenFiles.contains(file)) {
       return;
     }
     try {
       await FlameAudio.bgm.play(file, volume: 0.5);
       _currentBgmFile = file;
     } catch (error) {
-      debugPrint('[SoundManager] BGM 재생 실패($file): $error');
+      _brokenFiles.add(file);
+      debugPrint('[SoundManager] BGM 재생 실패($file, 이후 재생 생략): $error');
     }
   }
 
@@ -90,13 +106,17 @@ class SoundManager {
   Future<void> playGachaReveal() => _playSfx('gacha_reveal.wav');
 
   Future<void> _playSfx(String file) async {
-    if (!sfxEnabled) {
+    if (!sfxEnabled || _brokenFiles.contains(file)) {
       return;
     }
     try {
       await FlameAudio.play(file);
     } catch (error) {
-      debugPrint('[SoundManager] SFX 재생 실패($file): $error');
+      // 웹 오디오 포맷 비호환 등으로 재생 자체가 불가능한 파일은 여기서
+      // 회로를 끊는다 — 전투 중 초당 여러 번 호출되는 타격음이 매번
+      // 똑같은 이유로 실패하며 로그를 도배하는 것을 막는다.
+      _brokenFiles.add(file);
+      debugPrint('[SoundManager] SFX 재생 실패($file, 이후 재생 생략): $error');
     }
   }
 }

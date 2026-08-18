@@ -152,6 +152,14 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     _hasRoutedAfterAuth = true;
     ProfileManager.instance.setNickname(nickname);
+    // 광고 제거 구매 여부(profiles.is_ad_free)를 로그인 직후 서버와 맞춘다
+    // — 다른 기기에서 구매했거나 재설치로 로컬 캐시가 사라진 경우를
+    // 대비한다. 화면 전환을 막지 않도록 await하되, 실패해도(오프라인 등)
+    // ProfileManager.loadData 내부에서 이미 로컬 캐시로 안전하게 폴백한다.
+    await ProfileManager.instance.loadData();
+    if (!mounted) {
+      return;
+    }
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const GameEntryScreen()),

@@ -17,6 +17,11 @@ class TutorialOverlay extends StatefulWidget {
 }
 
 class _TutorialOverlayState extends State<TutorialOverlay> {
+  /// [_targetRect]가 이번 프레임엔 아직 레이아웃이 안 끝난 타겟을 만나
+  /// null을 반환했을 때, 다음 프레임에 한 번 더 재시도를 예약했는지 —
+  /// 매 build마다 새 콜백을 쌓지 않도록 막는 플래그.
+  bool _retryScheduled = false;
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +44,24 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     });
   }
 
+  /// build() 시점에 곧바로 재시도를 예약(다음 프레임에 setState)한다 —
+  /// 타겟 위젯이 이번 프레임엔 아직 레이아웃을 마치지 못한 경우(예:
+  /// 진입 애니메이션 중인 위젯이라 RenderBox가 NEEDS-LAYOUT 상태)를 위한
+  /// 것. [_onTutorialChanged]는 "다음 단계로 넘어갈 때"만 반응하므로,
+  /// 같은 단계 안에서 레이아웃이 늦게 끝나는 경우까지는 커버하지 못한다.
+  void _scheduleRetry() {
+    if (_retryScheduled) {
+      return;
+    }
+    _retryScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _retryScheduled = false;
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
   Rect? _targetRect() {
     final GlobalKey? key = TutorialManager.instance.currentTargetKey;
     final BuildContext? ctx = key?.currentContext;
@@ -46,11 +69,25 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       return null;
     }
     final RenderObject? renderObject = ctx.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.attached) {
+    // hasSize가 false면(=이번 프레임엔 아직 레이아웃을 거치지 않은
+    // RenderBox) `.size`를 읽는 순간 "RenderBox was not laid out" 단언이
+    // 터진다 — 진입 애니메이션(FractionalTranslation 등)이 걸린 타겟
+    // 위젯이 막 나타난 프레임에 특히 자주 일어난다. 이번 프레임은 그냥
+    // 스포트라이트 없이 넘어가고, 다음 프레임에 다시 시도한다.
+    if (renderObject is! RenderBox || !renderObject.attached || !renderObject.hasSize) {
+      _scheduleRetry();
       return null;
     }
-    final Offset topLeft = renderObject.localToGlobal(Offset.zero);
-    return (topLeft & renderObject.size).inflate(6);
+    try {
+      final Offset topLeft = renderObject.localToGlobal(Offset.zero);
+      return (topLeft & renderObject.size).inflate(6);
+    } catch (_) {
+      // hasSize 체크로 걸러지지 않는 드문 엣지 케이스(레이아웃 트리에서
+      // 막 분리되는 중 등)에 대한 마지막 방어선 — 튜토리얼 오버레이
+      // 하나 때문에 화면 전체가 크래시하는 일은 없어야 한다.
+      _scheduleRetry();
+      return null;
+    }
   }
 
   @override

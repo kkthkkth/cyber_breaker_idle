@@ -1,4 +1,4 @@
-package com.example.idle_rpg
+package com.company.cyberbreaker
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
 import '../managers/ad_manager.dart';
 import '../managers/artifact_manager.dart';
 import '../managers/equipment_manager.dart';
-import '../managers/gacha_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/guild_war_manager.dart';
+import '../managers/iap_manager.dart';
 import '../managers/pity_manager.dart';
 import '../managers/potion_manager.dart';
+import '../managers/profile_manager.dart';
 import '../managers/tutorial_manager.dart';
 import '../models/artifact_model.dart';
 import '../models/equipment.dart';
-import '../models/item_model.dart';
 import '../models/shop_consumable_model.dart';
 import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
@@ -57,13 +58,17 @@ class ShopScreen extends StatefulWidget {
 class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateMixin {
   final GameManager _gameManager = GameManager.instance;
   final EquipmentManager _equipmentManager = EquipmentManager.instance;
-  final GachaManager _gachaManager = GachaManager.instance;
+
+  /// 프리미엄(보석) 소환 1회의 표준 비용 — 예전엔 지금은 제거된 더미
+  /// `_premiumSinglePullCost`를 참조했다. 실제 캐릭터/펫/장비를
+  /// 만들어내는 진짜 가챠 로직과는 무관한, 순수 가격 표시용 상수다.
+  static const int _premiumSinglePullCost = 100;
 
   /// [DefaultTabController] 대신 직접 들고 있는 이유: 온보딩 튜토리얼
   /// 3단계가 시작되면 "캐릭터" 탭(가챠 버튼이 있는 곳)으로 프로그램적으로
   /// 강제 전환해야 하는데([_onTutorialChanged]), DefaultTabController는
   /// 이 위젯의 build() 안에서 만들어져 State의 context로는 접근할 수 없다.
-  late final TabController _tabController = TabController(length: 6, vsync: this);
+  late final TabController _tabController = TabController(length: 7, vsync: this);
 
   @override
   void initState() {
@@ -110,12 +115,12 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
     _PremiumOffer(
       title: '1회 소환',
       pullCount: 1,
-      cost: GachaManager.singlePullCost,
+      cost: _premiumSinglePullCost,
     ),
     _PremiumOffer(
       title: '10회 소환',
       pullCount: 10,
-      cost: GachaManager.singlePullCost * 10,
+      cost: _premiumSinglePullCost * 10,
     ),
   ];
 
@@ -142,12 +147,12 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
     _PremiumOffer(
       title: '1회 소환',
       pullCount: 1,
-      cost: GachaManager.singlePullCost,
+      cost: _premiumSinglePullCost,
     ),
     _PremiumOffer(
       title: '10회 소환',
       pullCount: 10,
-      cost: GachaManager.singlePullCost * 10,
+      cost: _premiumSinglePullCost * 10,
     ),
   ];
 
@@ -175,12 +180,12 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
     _PremiumOffer(
       title: '1회 소환',
       pullCount: 1,
-      cost: GachaManager.singlePullCost,
+      cost: _premiumSinglePullCost,
     ),
     _PremiumOffer(
       title: '10회 소환',
       pullCount: 10,
-      cost: GachaManager.singlePullCost * 10,
+      cost: _premiumSinglePullCost * 10,
     ),
   ];
 
@@ -198,21 +203,33 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
     );
   }
 
+  // 기존 장비 뽑기 로직(EquipmentManager)을 재활용하되 등급을 R 이상으로
+  // 제한한다 — 펫/캐릭터 프리미엄 소환과 동일한 패턴. 예전엔 더미
+  // GachaManager/Item(가상의 "노멀~신화" 등급) 시스템을 썼는데, 실제로
+  // 인벤토리에 들어가지도 않고 코인 장비 가챠와도 완전히 무관한 별개의
+  // 가짜 결과물이었다 — 이제 진짜 장비가 나온다.
   Future<void> _drawPremium(int times) async {
-    final List<Item> results = _gachaManager.drawPremiumGacha(times);
-    if (results.isEmpty) {
+    if (!_gameManager.spendGems(times * _premiumSinglePullCost)) {
       _showSnackBar('보석이 부족합니다');
       return;
     }
-    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * _premiumSinglePullCost);
 
-    final Item best = results.reduce(
-      (Item a, Item b) => b.rarity.index > a.rarity.index ? b : a,
+    final List<Equipment> results = List.generate(
+      times,
+      (_) => _equipmentManager.generateGuaranteedLoot(
+        const [
+          ItemGrade.r,
+          ItemGrade.sr,
+          ItemGrade.ssr,
+          ItemGrade.sssr,
+          ItemGrade.ur,
+        ],
+      ),
     );
-
     await showBoxShakingDialog(
       context,
-      onFinished: () => _showPremiumResultDialog(best),
+      onFinished: () => _showResultDialog(results, title: '프리미엄 장비 소환 결과'),
     );
   }
 
@@ -235,11 +252,11 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _petDrawPremium(int times) async {
-    if (!_gameManager.spendGems(times * GachaManager.singlePullCost)) {
+    if (!_gameManager.spendGems(times * _premiumSinglePullCost)) {
       _showSnackBar('보석이 부족합니다');
       return;
     }
-    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * _premiumSinglePullCost);
 
     final List<Equipment> results = List.generate(
       times,
@@ -286,11 +303,11 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _characterDrawPremium(int times) async {
-    if (!_gameManager.spendGems(times * GachaManager.singlePullCost)) {
+    if (!_gameManager.spendGems(times * _premiumSinglePullCost)) {
       _showSnackBar('보석이 부족합니다');
       return;
     }
-    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * GachaManager.singlePullCost);
+    GuildWarManager.instance.reportTaxableSpend(gemSpent: times * _premiumSinglePullCost);
 
     final List<Equipment> results = List.generate(
       times,
@@ -330,42 +347,10 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _showPremiumResultDialog(Item best) {
-    showDialog<void>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Text(
-            '프리미엄 소환 결과',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Text(
-            '${best.name} 획득!',
-            style: TextStyle(
-              color: getRarityColor(best.rarity),
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('확인'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_gameManager, _gachaManager, PotionManager.instance]),
+      animation: Listenable.merge([_gameManager, PotionManager.instance]),
       builder: (context, _) {
         return Scaffold(
           backgroundColor: const Color(0xFF14141C),
@@ -396,6 +381,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
                 Tab(text: '펫'),
                 Tab(text: '소모품'),
                 Tab(text: '유물'),
+                Tab(text: '충전'),
               ],
             ),
           ),
@@ -445,6 +431,7 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
               // 뿐이다).
               _ConsumablesShopTab(),
               const _ArtifactTab(),
+              const _IAPShopTab(),
             ],
           ),
         );
@@ -1820,6 +1807,228 @@ class _ArtifactCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 상점 마지막 탭 — 인앱 결제(IAP)로 파는 진짜 유료 상품 2종: 광고 제거
+/// 영구 패스(non-consumable)와 보석 패키지(consumable) 두 사이즈.
+/// [IAPManager]가 스토어에서 받아온 실제 가격/통화([ProductDetails.price])
+/// 를 그대로 보여준다 — 가격은 이 화면이 임의로 정하지 않는다.
+class _IAPShopTab extends StatefulWidget {
+  const _IAPShopTab();
+
+  @override
+  State<_IAPShopTab> createState() => _IAPShopTabState();
+}
+
+class _IAPShopTabState extends State<_IAPShopTab> {
+  /// 마지막으로 토스트를 띄운 에러 메시지 — [IAPManager.lastErrorMessage]는
+  /// 값이 바뀔 때만 알림을 새로 띄우기 위한 기준선("한 번 보여준 에러를
+  /// rebuild마다 다시 띄우지 않는다"). null이면 아직 없거나 이미 보여준 뒤.
+  String? _shownErrorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    IAPManager.instance.addListener(_onIapChanged);
+  }
+
+  @override
+  void dispose() {
+    IAPManager.instance.removeListener(_onIapChanged);
+    super.dispose();
+  }
+
+  void _onIapChanged() {
+    final String? error = IAPManager.instance.lastErrorMessage;
+    if (error == null || error == _shownErrorMessage || !mounted) {
+      return;
+    }
+    _shownErrorMessage = error;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text('결제 실패: $error')));
+  }
+
+  ProductDetails? _detailsFor(String productId) {
+    for (final ProductDetails details in IAPManager.instance.products) {
+      if (details.id == productId) {
+        return details;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([IAPManager.instance, ProfileManager.instance]),
+      builder: (context, _) {
+        final IAPManager iap = IAPManager.instance;
+
+        if (!iap.isAvailable) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                '이 기기에서는 인앱 결제를 사용할 수 없어요.\n(에뮬레이터이거나 스토어에 로그인돼 있지 않을 수 있어요)',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54),
+              ),
+            ),
+          );
+        }
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const _SectionTitle(title: '충전', color: Colors.amberAccent),
+            const SizedBox(height: 4),
+            const Text(
+              '결제는 앱스토어/구글플레이 계정으로 처리돼요.',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+            const SizedBox(height: 16),
+            _IAPProductCard(
+              icon: Icons.block,
+              iconColor: Colors.tealAccent,
+              title: '광고 제거 영구 패스',
+              subtitle: '모든 광고 시청 버튼을 더 이상 보지 않아요 (평생 1회)',
+              details: _detailsFor(IAPManager.removeAdsProductId),
+              owned: ProfileManager.instance.isAdFree,
+              busy: iap.isPending(IAPManager.removeAdsProductId),
+              onBuy: () => iap.buy(IAPManager.removeAdsProductId),
+            ),
+            const SizedBox(height: 12),
+            _IAPProductCard(
+              icon: Icons.diamond,
+              iconColor: Colors.cyanAccent,
+              title: '보석 1,000개',
+              subtitle: '즉시 보석 1,000개 지급',
+              details: _detailsFor(IAPManager.gemPack1000ProductId),
+              owned: false,
+              busy: iap.isPending(IAPManager.gemPack1000ProductId),
+              onBuy: () => iap.buy(IAPManager.gemPack1000ProductId),
+            ),
+            const SizedBox(height: 12),
+            _IAPProductCard(
+              icon: Icons.diamond,
+              iconColor: Colors.purpleAccent,
+              title: '보석 5,000개',
+              subtitle: '즉시 보석 5,000개 지급',
+              details: _detailsFor(IAPManager.gemPack5000ProductId),
+              owned: false,
+              busy: iap.isPending(IAPManager.gemPack5000ProductId),
+              onBuy: () => iap.buy(IAPManager.gemPack5000ProductId),
+            ),
+            const SizedBox(height: 20),
+            Center(
+              child: TextButton.icon(
+                onPressed: iap.restorePurchases,
+                icon: const Icon(Icons.restore, size: 16, color: Colors.white54),
+                label: const Text('구매 복원', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// IAP 상품 카드 하나 — [details]가 아직 안 왔으면(스토어 미등록/조회 중)
+/// 가격 대신 "확인 중"을 보여주고 버튼을 비활성화한다. [owned]면(광고 제거
+/// 패스를 이미 산 경우) 가격 버튼 대신 "보유 중" 배지로 바뀐다.
+class _IAPProductCard extends StatelessWidget {
+  const _IAPProductCard({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.details,
+    required this.owned,
+    required this.busy,
+    required this.onBuy,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final ProductDetails? details;
+  final bool owned;
+  final bool busy;
+  final VoidCallback onBuy;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool canBuy = !owned && !busy && details != null;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B1B26),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: iconColor.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: iconColor),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: iconColor, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (owned)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: iconColor),
+              ),
+              child: Text('보유 중', style: TextStyle(color: iconColor, fontSize: 11, fontWeight: FontWeight.bold)),
+            )
+          else
+            ElevatedButton(
+              onPressed: withTapHaptic(canBuy ? onBuy : null),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: iconColor,
+                foregroundColor: Colors.black,
+                disabledBackgroundColor: const Color(0xFF3A3A4A),
+                disabledForegroundColor: Colors.white38,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              ),
+              child: busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : Text(
+                      details?.price ?? '확인 중',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+            ),
+        ],
       ),
     );
   }

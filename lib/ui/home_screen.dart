@@ -140,15 +140,45 @@ class _BattleView extends StatelessWidget {
               final double playerX = constraints.maxWidth * IdleGame.playerXRatio;
               final double playerY = constraints.maxHeight * IdleGame.groundYRatio;
               // PlayerAnimationComponent.boxSize와 반드시 같은 값을 써야
-              // 한다 — 상자 크기가 바뀌면(예전 56 → 180) 이 HP 바 위치도
-              // 함께 따라가지 않으면 캐릭터 머리와 겹쳐 보인다.
+              // 한다 — 상자 크기가 바뀌면(56 → 180 → 120 → 60으로 조정돼
+              // 온 이력) 이 HP 바 위치도 함께 따라가지 않으면 캐릭터
+              // 머리와 겹쳐 보인다. 상수를 직접 참조하므로(하드코딩된
+              // 숫자가 아니라) boxSize가 바뀌는 순간 이 위치도 자동으로
+              // 따라간다.
               const double spriteSize = PlayerAnimationComponent.boxSize;
+              // 머리 꼭대기(발밑에서 얼마나 위인지)는 상자 전체 높이가
+              // 아니라 표준 캔버스 규격(800x720, 콘텐츠 50%)에서 유도한
+              // [contentTopHeightRatio]로 계산해야 한다 — 상자 전체
+              // (spriteSize)를 그대로 쓰면 공격 이펙트용 여백까지 캐릭터
+              // 키에 포함시켜, 실제 머리보다 훨씬 위(텅 빈 여백 위)에
+              // 체력바가 뜬다.
+              final double headTopY =
+                  playerY - spriteSize * PlayerAnimationComponent.contentTopHeightRatio;
+              // 머리에 딱 붙지 않도록 살짝 여유를 둔다.
+              const double playerHpBarBreathingRoom = 12;
+              // 체력바 블록 자체의 높이(진행바 8 + 간격 2 + "200/200" 텍스트
+              // 한 줄 약 13, 아래 Column 구성과 맞춘 값) — Positioned.top은
+              // 이 블록의 "위쪽 끝"을 가리키고 블록은 거기서부터 아래로
+              // 그려지므로, top을 머리 바로 위 선에만 맞추면 블록 자체가
+              // 아래로 자라나며 머리와 겹친다. 블록 높이만큼 한 번 더
+              // 끌어올려야 블록 전체(진행바+텍스트)가 머리 위 여백에 뜬다.
+              const double playerHpBarBlockHeight = 8 + 2 + 13;
+              // 위 계산(contentTopHeightRatio 기반 이론값)만으로는 실제
+              // 화면에서 여전히 머리와 겹쳐 보인다는 피드백을 받아, 눈으로
+              // 확인 가능한 여유가 생기도록 추가로 더 끌어올리는 보정치 —
+              // 이론적으로 유도한 값이 아니라 실측 피드백에 따라 수동으로
+              // 얹은 값이다.
+              const double playerHpBarExtraLift = 24;
 
               // 몬스터는 항상 화면 가로 중앙(전투 위치)에서 싸운다 — 몬스터
               // HP 바를 그 머리 위, 몬스터 폭의 1.2배 너비로만 짧게 띄운다.
               final double monsterCenterX = constraints.maxWidth / 2;
               final double monsterTopY = playerY - IdleGame.monsterSize;
               final double monsterHpBarWidth = IdleGame.monsterSize * 1.2;
+
+              // 기존 80px는 캐릭터 체형(60px 상자) 대비 길어 보인다는
+              // 피드백으로 약 19% 줄였다.
+              const double playerHpBarWidth = 65;
 
               return Stack(
                 children: [
@@ -161,12 +191,20 @@ class _BattleView extends StatelessWidget {
                   const Positioned.fill(child: SkillEffectOverlay()),
                   Positioned.fill(child: PlayerHitFlashOverlay(game: game)),
                   Positioned(
-                    left: (playerX - 40).clamp(0, constraints.maxWidth - 80),
+                    left: (playerX - playerHpBarWidth / 2)
+                        .clamp(0, constraints.maxWidth - playerHpBarWidth),
                     // 캐릭터가 바닥에 서 있으므로 HP 바는 발밑이 아니라
-                    // 머리 위에 띄운다.
-                    top: playerY - spriteSize - 30,
+                    // 머리 위에 띄운다 — 블록 높이(playerHpBarBlockHeight)
+                    // 만큼 더 끌어올려야 블록의 "아래쪽 끝"이 머리 위
+                    // 여유선에 맞고, 그 위에 [playerHpBarExtraLift]만큼
+                    // 한 번 더 끌어올려 시원한 여백을 확보한다(위 주석
+                    // 참고).
+                    top: headTopY -
+                        playerHpBarBreathingRoom -
+                        playerHpBarBlockHeight -
+                        playerHpBarExtraLift,
                     child: SizedBox(
-                      width: 80,
+                      width: playerHpBarWidth,
                       child: Column(
                         children: [
                           ClipRRect(

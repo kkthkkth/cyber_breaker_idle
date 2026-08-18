@@ -140,6 +140,43 @@ class SupabaseManager {
     }
   }
 
+  /// `profiles.is_ad_free` — [IAPManager]가 광고 제거 영구 패스
+  /// (`remove_ads_permanent`) 구매를 확인하면 [upsertIsAdFree]로 반영해
+  /// 둔 값을, [ProfileManager.loadData]가 로그인 시 다시 읽어 다른
+  /// 기기/재설치에서도 구매 상태를 복원한다. 아직 로그인 전이거나 조회
+  /// 실패 시 null(호출부가 로컬 캐시를 그대로 유지).
+  Future<bool?> fetchIsAdFree() async {
+    final String? userId = currentUserId;
+    if (userId == null) {
+      return null;
+    }
+    try {
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('is_ad_free')
+          .eq('id', userId)
+          .maybeSingle();
+      return row?['is_ad_free'] as bool?;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 광고 제거 상태 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// `profiles.is_ad_free`를 절대값으로 덮어쓴다 — [GameManager.updateGold]
+  /// 와 같은 "로컬이 먼저 확정한 값을 그대로 push" 관례.
+  Future<void> upsertIsAdFree(bool value) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_profilesTable).update({'is_ad_free': value}).eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 광고 제거 상태 동기화 실패: $error');
+    }
+  }
+
   /// 접속 상태([GuildMember.isOnline]) 판정용 하트비트 주기 — 이 간격마다
   /// [updateLastSeen]이 자동으로 다시 불린다([startLastSeenHeartbeat]).
   /// [GuildMember.onlineThreshold](5분)보다 충분히 짧게 잡아, 하트비트
@@ -1071,6 +1108,33 @@ class SupabaseManager {
     }
   }
 
+  // ── 캐릭터 기본 스탯/성장률 (CharacterMetadataManager 전용) ────────
+  //
+  // 위 `characters`(공격 타입 하나만 담던 기존 테이블)와는 별개의 새
+  // 테이블이다 — 컬럼명은 유저가 알려준 계산식(최종 = 기본 * (1 +
+  // (level-1)*level_growth_rate) * (1 + star*star_growth_rate), ASPD는
+  // 예외로 base_aspd 그대로)에 나온 변수명을 그대로 컬럼명으로 가정했다:
+  // character_id(text, PK — Equipment.gradeBadgeLabel과 동일한 형식, 예:
+  // 'N1'), base_hp/base_atk/base_def/base_aspd(numeric), level_growth_rate/
+  // star_growth_rate(numeric). 실제 컬럼명이 다르면 이 섹션과
+  // [CharacterMetadata].fromJson만 고치면 된다.
+  static const String _characterMetadataTable = 'character_metadata';
+
+  /// 캐릭터 기본 스탯/성장률 테이블 전체를 내려받는다 — 로그인 여부와
+  /// 무관한 공개 데이터라 `currentUserId` 체크 없이 그대로 조회한다
+  /// ([fetchCharacterMeta]와 같은 성격). 실패하면(오프라인 등) 빈 리스트 —
+  /// 호출부([CharacterMetadataManager])가 이전에 캐시해 둔 값을 그대로
+  /// 유지한다.
+  Future<List<Map<String, dynamic>>> fetchCharacterMetadata() async {
+    try {
+      final List<dynamic> rows = await _client.from(_characterMetadataTable).select();
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 캐릭터 기본 스탯/성장률 조회 실패: $error');
+      return const [];
+    }
+  }
+
   // ── 물약/호감도 상점 (PotionManager 전용) ─────────────────────────
   //
   // consumable_items/user_consumables/user_daily_shop_limits 컬럼은 전부
@@ -1666,6 +1730,37 @@ class SupabaseManager {
     }
   }
 
+  /// [fetchGuildMembers]의 `profiles(...)` 임베드가 특정 행에서 비어
+  /// 오는 경우(PostgREST가 `guild_members.user_id → profiles.id` 관계를
+  /// 못 찾거나, 임베드 자체가 일시적으로 실패하는 등)를 위한 직접 재조회 —
+  /// `profiles` 테이블을 `id`로 바로 필터링해 조인을 거치지 않는다. RLS가
+  /// `profiles` 전체 읽기를 허용해 뒀다는 전제라 로그인 상태면 항상 값을
+  /// 받아올 수 있어야 한다. [GuildManager.refreshMembers]가 1차 조인 결과
+  /// 중 닉네임 해석에 실패한 행만 골라 이걸로 보충한다.
+  Future<Map<String, String>> fetchNicknamesByUserIds(List<String> userIds) async {
+    if (userIds.isEmpty) {
+      return const {};
+    }
+    try {
+      final List<dynamic> rows = await _client
+          .from(_profilesTable)
+          .select('id, nickname')
+          .inFilter('id', userIds);
+      final Map<String, String> result = {};
+      for (final dynamic row in rows) {
+        final Map<String, dynamic> map = row as Map<String, dynamic>;
+        final String? nickname = map['nickname'] as String?;
+        if (nickname != null && nickname.trim().isNotEmpty) {
+          result[map['id'] as String] = nickname;
+        }
+      }
+      return result;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 닉네임 재조회 실패: $error');
+      return const {};
+    }
+  }
+
   // ── 길드 채팅 (GuildChatManager 전용) ────────────────────────────
   //
   // `guild_messages` 컬럼도 위 guilds/guild_members와 같은 관례로 가정한다:
@@ -1695,25 +1790,39 @@ class SupabaseManager {
     }
   }
 
-  /// [guildId]에 채팅 메시지 한 건을 보낸다 — 실제 화면 반영은 이 insert가
-  /// 트리거하는 Realtime `postgres_changes` 이벤트([subscribeToGuildMessages])
-  /// 가 처리하므로, 여기서는 성공 여부만 돌려주고 로컬 리스트에 낙관적으로
-  /// 추가하지 않는다(같은 메시지가 두 번 보이는 것을 방지).
-  Future<bool> sendGuildMessage({required String guildId, required String message}) async {
+  /// [guildId]에 채팅 메시지 한 건을 보내고, 서버가 채번한 실제 행(id/
+  /// created_at 포함)을 그대로 돌려준다 — 실패하면 null.
+  ///
+  /// 예전엔 성공 여부(bool)만 돌려주고, 화면 반영은 오직 이 insert가
+  /// 트리거하는 Realtime `postgres_changes` 에코([subscribeToGuildMessages])
+  /// 에만 의존했다 — 그래서 전송 버튼을 누른 뒤 내 메시지가 화면에 뜨기까지
+  /// 왕복 지연(서버 처리 + Realtime 브로드캐스트)만큼 체감 딜레이가 있었다.
+  /// 이제 insert 자체가 실제 행을 즉시 돌려주므로, 호출부([GuildChatManager
+  /// .sendMessage])가 그 값으로 곧바로(낙관적으로) 로컬 리스트를 갱신할 수
+  /// 있다 — 나중에 같은 id로 Realtime 에코가 도착해도 기존 dedup 로직이
+  /// 그대로 걸러준다.
+  Future<Map<String, dynamic>?> sendGuildMessage({
+    required String guildId,
+    required String message,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
-        return false;
+        return null;
       }
-      await _client.from(_guildMessagesTable).insert({
-        'guild_id': guildId,
-        'user_id': userId,
-        'message': message,
-      });
-      return true;
+      final Map<String, dynamic> row = await _client
+          .from(_guildMessagesTable)
+          .insert({
+            'guild_id': guildId,
+            'user_id': userId,
+            'message': message,
+          })
+          .select('id, guild_id, user_id, message, created_at')
+          .single();
+      return row;
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 채팅 전송 실패: $error');
-      return false;
+      return null;
     }
   }
 
@@ -2170,6 +2279,16 @@ class SupabaseManager {
   /// [seasonId] 시즌의 배틀패스 상태(전부 절대값)를 갱신한다 — 몬스터
   /// 처치/오프라인 보상/퀘스트 보상으로 exp가 오를 때, 보상을 수령할 때,
   /// 프리미엄 패스를 해금할 때 전부 이 메서드 하나로 동기화한다.
+  ///
+  /// [seasonId]는 `battle_pass_seasons.id`를 그대로 문자열화한 값이라
+  /// 길이가 고정돼 있지 않다 — `user_battle_pass.season_id` 컬럼은 반드시
+  /// `text`(또는 충분히 넉넉한 varchar)여야 한다. `varchar(20)`처럼 좁게
+  /// 잡혀 있으면 시즌 id가 길 때 "value too long for type character
+  /// varying(20)"로 upsert가 통째로 실패한다 — season_id는 이 테이블의
+  /// 복합 PK 절반을 이루는 식별자라 클라이언트에서 임의로 잘라내거나
+  /// 해시로 바꿔 보내면 안 된다(다른 시즌과 충돌하거나
+  /// `battle_pass_seasons.id`를 참조하는 FK가 깨진다) — 컬럼 타입을
+  /// 넓히는 것이 유일하게 안전한 수정이다.
   Future<void> upsertUserBattlePass({
     required String seasonId,
     required int bpExp,
@@ -2192,6 +2311,62 @@ class SupabaseManager {
       }, onConflict: 'user_id,season_id');
     } catch (error) {
       debugPrint('[SupabaseManager] 배틀패스 상태 동기화 실패: $error');
+    }
+  }
+
+  // ── 마스터 캐릭터 (CharacterManifestManager 전용) ─────────────────────
+  //
+  // `master_characters`(`sub_id` text PK — "N1"/"SR2"처럼 등급 접두어+
+  // 넘버링을 합친 문자열, `name`, `grade`, `job`, `is_active` bool,
+  // `gacha_weight` int, `image_path` text)로 실제 존재하는 캐릭터 목록과
+  // 가챠 당첨 가중치를 앱 재배포 없이 원격 제어한다. `is_active = false`인
+  // 행은 서버 쿼리 단계에서부터 제외해, 클라이언트가 실수로라도 비활성
+  // 캐릭터를 읽어들일 여지를 없앤다.
+  static const String _masterCharactersTable = 'master_characters';
+
+  /// 활성(`is_active = true`) 캐릭터 전체 — [CharacterManifestManager]가
+  /// 도감/가챠 풀을 구성하는 유일한 원천. 실패해도(오프라인 등) 빈 리스트를
+  /// 돌려주며, 호출부가 로컬 캐시로 폴백한다.
+  Future<List<Map<String, dynamic>>> fetchMasterCharacters() async {
+    try {
+      final List<dynamic> rows = await _client
+          .from(_masterCharactersTable)
+          .select()
+          .eq('is_active', true);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 마스터 캐릭터 목록 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  // ── 마스터 컬렉션 (CollectionManager 전용) ────────────────────────────
+  //
+  // `master_collections`(`id` text PK, `category` text 'character'|
+  // 'equipment'|'pet', `title` text, `required_items` jsonb —
+  // [RequiredCollectionItem.toJson]과 동일한 키(type/grade/subId/
+  // requiredLevel/count)를 쓰는 배열, `reward_stat` jsonb —
+  // [CollectionRewardStat.toJson]과 동일한 키(type/value), `is_active`
+  // bool, `sort_order` int)로 세트 수집 정의를 원격 제어한다. JSONB 컬럼이
+  // 기존 모델의 `toJson`/`fromJson`과 키를 맞춰 쓰도록 설계해, 새로운
+  // 파싱 로직 없이 [CollectionModel.fromJson]을 거의 그대로 재사용할 수
+  // 있다.
+  static const String _masterCollectionsTable = 'master_collections';
+
+  /// 활성(`is_active = true`) 컬렉션 세트 정의 전체(`sort_order` 오름차순) —
+  /// [CollectionManager]가 세트 목록을 구성하는 유일한 원천. 실패해도
+  /// 빈 리스트를 돌려주며, 호출부가 로컬 캐시로 폴백한다.
+  Future<List<Map<String, dynamic>>> fetchMasterCollections() async {
+    try {
+      final List<dynamic> rows = await _client
+          .from(_masterCollectionsTable)
+          .select()
+          .eq('is_active', true)
+          .order('sort_order', ascending: true);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 마스터 컬렉션 목록 조회 실패: $error');
+      return const [];
     }
   }
 

@@ -81,13 +81,65 @@ class GuildChatManager extends ChangeNotifier {
   }
 
   /// [guildId]에 [text]를 보낸다 — 빈 문자열/공백만 있으면 서버 호출 없이
-  /// false. 성공하면 [subscribeToGuildMessages]의 Realtime 에코가 곧
-  /// [messages]에 추가하므로, 여기서 직접 리스트에 넣지 않는다.
+  /// false.
+  ///
+  /// 낙관적 업데이트: 서버 응답을 기다리지 않고 임시 id(`pending_...`)를 붙인
+  /// 메시지를 즉시 [messages]에 추가해 전송 버튼을 누르자마자 화면에 보이게
+  /// 한다. 서버가 성공 응답을 주면 그 임시 항목을 서버가 채번한 진짜 id로
+  /// 교체하고, 실패하면 임시 항목을 되돌린다(실패 토스트 등은 호출부
+  /// 몫이라 여기선 리스트 정리만 한다).
+  ///
+  /// Realtime 에코([openChat]의 구독 콜백)가 insert 응답보다 먼저 도착해
+  /// 같은 메시지를 진짜 id로 이미 추가해 놨을 수도 있다(레이스) —
+  /// [_reconcile]이 임시 id와 확정 id 둘 다 정리한 뒤 확정 메시지를 한 번만
+  /// 남기므로 어느 순서로 도착하든 중복이 생기지 않는다.
   Future<bool> sendMessage(String guildId, String text) async {
     final String trimmed = text.trim();
     if (trimmed.isEmpty) {
       return false;
     }
-    return SupabaseManager.instance.sendGuildMessage(guildId: guildId, message: trimmed);
+    final String? myUserId = SupabaseManager.instance.currentUserId;
+    if (myUserId == null) {
+      return false;
+    }
+
+    final String tempId = 'pending_${DateTime.now().microsecondsSinceEpoch}';
+    final GuildMessage optimistic = GuildMessage(
+      id: tempId,
+      guildId: guildId,
+      userId: myUserId,
+      nickname: _resolveNickname(myUserId),
+      message: trimmed,
+      createdAt: DateTime.now(),
+    );
+    messages = [...messages, optimistic];
+    notifyListeners();
+
+    final Map<String, dynamic>? row =
+        await SupabaseManager.instance.sendGuildMessage(guildId: guildId, message: trimmed);
+    if (row == null) {
+      messages = messages.where((existing) => existing.id != tempId).toList();
+      notifyListeners();
+      return false;
+    }
+
+    final GuildMessage confirmed = GuildMessage.fromJson(row, resolveNickname: _resolveNickname);
+    _reconcile(tempId: tempId, confirmed: confirmed);
+    return true;
+  }
+
+  /// [tempId](낙관적 임시 메시지)와 [confirmed.id](서버 확정 메시지)를 둘 다
+  /// 리스트에서 제거한 뒤 [confirmed]를 한 번만 다시 넣는다 — 어느 쪽이
+  /// 이미 없어도(예: 임시 항목만 있고 확정 id는 아직 없는 보통의 경우)
+  /// 안전하다.
+  @visibleForTesting
+  void reconcileForTest({required String tempId, required GuildMessage confirmed}) =>
+      _reconcile(tempId: tempId, confirmed: confirmed);
+
+  void _reconcile({required String tempId, required GuildMessage confirmed}) {
+    final List<GuildMessage> deduped =
+        messages.where((existing) => existing.id != tempId && existing.id != confirmed.id).toList();
+    messages = [...deduped, confirmed]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    notifyListeners();
   }
 }

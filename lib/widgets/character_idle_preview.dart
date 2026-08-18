@@ -7,11 +7,17 @@ import '../game/idle_game.dart';
 import 'safe_image.dart';
 
 /// 캐릭터 탭 중앙 카드에서 장착 캐릭터를 대기(wait) 모션으로 부드럽게
-/// 반복 재생하는 위젯 — [CharacterFacePortrait]의 정적 정면 이미지 대신,
-/// `player_{id}_wait1~5.png` 5프레임을 stepTime 0.15초 간격으로 순환한다
-/// ([PlayerAnimationComponent]의 인게임 대기 모션과 동일한 프레임/속도).
-/// 아직 대기 프레임이 없는(404) 캐릭터는 [CustomSafeImage]가 알아서
-/// placeholder로 대체하므로 호출부에서 존재 여부를 따로 확인할 필요가 없다.
+/// 반복 재생하는 위젯 — [CharacterFacePortrait]의 정적 정면 이미지 대신
+/// 움직이는 모션을 보여준다.
+///
+/// [AppImages.playerActionAnimation](`player_{id}_wait.webp`, 예:
+/// N1은 `player_n1_wait.webp`)을 최우선으로 시도한다 — 애니메이션 파일
+/// 하나가 자체적으로 프레임/타이밍을 담고 있어([PlayerAnimationComponent]
+/// 의 인게임 대기 모션이 쓰는 것과 같은 파일), [Image]가 별도 타이머 없이
+/// 알아서 반복 재생한다. 아직 그 캐릭터의 webp가 없는(404) 경우에만 예전
+/// 방식(`player_{id}_wait1~5.png` 5프레임을 [_timer]로 stepTime 0.15초
+/// 간격 순환)으로 조용히 대체된다 — [CustomSafeImage.fallbackPath]가 이
+/// 전환을 처리하므로 호출부는 어느 쪽이 성공했는지 신경 쓸 필요가 없다.
 class CharacterIdlePreview extends StatefulWidget {
   const CharacterIdlePreview({
     super.key,
@@ -60,36 +66,53 @@ class _CharacterIdlePreviewState extends State<CharacterIdlePreview> {
     super.dispose();
   }
 
-  /// 512x512 캔버스 안에서 캐릭터가 차지하는 세로 비율(약 58.6%, 발밑은
-  /// 캔버스 최하단에 붙어 있음 — [PlayerAnimationComponent.contentHeightRatio]
-  /// 실측 참고)의 역수. 정사각형 이미지를 정사각형 상자에 [BoxFit.cover]로
-  /// 맞추기만 하면 크롭이 전혀 일어나지 않아(둘 다 1:1 비율) 캔버스 전체,
-  /// 즉 위쪽 여백까지 고스란히 다 보여서 캐릭터가 상자 안에서 작게
-  /// 보인다. 이 배율만큼 이미지를 확대한 뒤 발밑(하단) 기준으로 잘라내면
-  /// 위쪽 여백이 상자 밖으로 밀려나 잘리고, 캐릭터 알맹이가 상자를 꽉
-  /// 채운다.
-  static const double _zoom = 1 / PlayerAnimationComponent.contentHeightRatio;
+  /// 캔버스 안에서 캐릭터 콘텐츠가 차지하는 비율(표준 규격 기준 가로/세로
+  /// 모두 50% — [PlayerAnimationComponent.contentRatio] 참고)의 역수.
+  /// [build]가 원본 캔버스(800x720) 전체를 잘림 없이 상자 안에 발밑 기준
+  /// (bottomCenter)으로 맞춰 넣어 둔 다음, 이 배율만큼 다시 발밑을 축으로
+  /// 확대하면 위쪽/좌우 이펙트 여백이 상자 밖으로 밀려나 잘리고 캐릭터
+  /// 콘텐츠만(가로/세로 각각 정확히 상자를 꽉 채우며) 남는다 — 가로/세로
+  /// 콘텐츠 비율이 똑같이 50%라 이 배율 하나로 양쪽 축 모두 정확히
+  /// 들어맞는다.
+  static const double _zoom = 1 / PlayerAnimationComponent.contentRatio;
 
   @override
   Widget build(BuildContext context) {
-    final String path =
+    // 우선 시도: 애니메이션 webp 한 장(자체 반복 재생, [_timer]가 필요
+    // 없다). 실패하면(404 등) [CustomSafeImage.fallbackPath]가 예전 방식인
+    // 번호 매김 PNG 프레임([_frameIndex], 이 위젯의 [_timer]가 150ms마다
+    // 순환)으로 자동 전환한다.
+    final String path = AppImages.playerActionAnimation(widget.characterId, 'wait');
+    final String fallbackPath =
         AppImages.playerActionFrame(widget.characterId, 'wait', _frameIndex);
 
-    // SizedBox.expand로 먼저 상자를 꽉 채운 뒤(Align은 자식에게 loose
-    // constraints를 넘겨서 이미지가 상자보다 작게 레이아웃될 수 있으므로
-    // 쓰지 않는다), Transform.scale(레이아웃 크기는 그대로 두고 그리기만
-    // 확대)로 발밑(bottomCenter, 캔버스 최하단 = 여백 0%)을 축으로
-    // 확대한다 — 발 위치는 그대로 고정된 채 위쪽 여백만 상자 밖으로
-    // 밀려나 ClipRect에 잘려나간다.
+    // 원본 캔버스(800x720)는 정사각형이 아니다 — 예전처럼 BoxFit.cover로
+    // 정사각형 상자에 곧바로 맞추면 그 단계에서 이미 좌우가 잘려 나가고,
+    // 그 위에 다시 [_zoom]만큼 확대하면 캐릭터 콘텐츠 가장자리(어깨 등)
+    // 까지 이중으로 잘려 나간다 — 정수리가 위쪽 테두리에 잘려 보이던
+    // 버그의 원인이었다(실측 확인됨). FittedBox(BoxFit.contain +
+    // Alignment.bottomCenter)로 원본 비율을 유지한 채 "잘림 없이" 발밑
+    // 기준으로 상자에 맞춰 넣은 뒤에만 [_zoom] 확대를 적용해야 한다 —
+    // contain은 잘라내지 않고 레터박스(여백)로만 맞추므로, 이 단계에서는
+    // 캐릭터가 항상 통째로 보인다.
     final Widget zoomed = ClipRect(
       child: Transform.scale(
         scale: _zoom,
         alignment: Alignment.bottomCenter,
         child: SizedBox.expand(
-          child: CustomSafeImage(
-            path: path,
-            fit: BoxFit.cover,
-            filterQuality: FilterQuality.none,
+          child: FittedBox(
+            fit: BoxFit.contain,
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              width: PlayerAnimationComponent.referenceCanvasWidth,
+              height: PlayerAnimationComponent.referenceCanvasHeight,
+              child: CustomSafeImage(
+                path: path,
+                fallbackPath: fallbackPath,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.none,
+              ),
+            ),
           ),
         ),
       ),

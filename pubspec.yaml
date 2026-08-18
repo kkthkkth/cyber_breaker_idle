@@ -46,6 +46,7 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   timezone: ^0.9.4
   flutter_timezone: ^4.1.1
+  in_app_purchase: ^3.2.3
 
 dev_dependencies:
   flutter_test:
@@ -57,6 +58,50 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+
+  # 스토어 출시용 브랜딩 도구 — 둘 다 "설치돼 있기만" 하면 저절로 실행되지
+  # 않는다(직접 `dart run <패키지>:main`으로 실행해야 함). 아래
+  # flutter_launcher_icons/flutter_native_splash 섹션의 설정을 읽어 각
+  # 플랫폼(android/ios/macos/windows/web)의 실제 아이콘·스플래시 리소스를
+  # 생성한다.
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.6
+
+# ── 앱 아이콘 생성 설정 (flutter_launcher_icons) ────────────────────────
+# 실행: `dart run flutter_launcher_icons`
+# assets/icons/app_icon.png는 지금 임시 플레이스홀더 아트(보라 배지 +
+# 번개 아이콘, 앱 팔레트 색상)로 채워 뒀다 — 실제 디자인이 나오면 같은
+# 경로의 파일만 교체하고 다시 실행하면 된다.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  macos:
+    generate: true
+  image_path: "assets/icons/app_icon.png"
+  # Android 12+ 적응형 아이콘 — 배경은 앱 다크 테마 배경색, 전경은 배경이
+  # 투명한 별도 이미지를 써야 마스크(원형/둥근사각 등 런처별 모양)가
+  # 안전 영역을 넘어가지 않는다.
+  adaptive_icon_background: "#14141C"
+  adaptive_icon_foreground: "assets/icons/app_icon_foreground.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+
+# ── 스플래시 스크린 생성 설정 (flutter_native_splash) ───────────────────
+# 실행: `dart run flutter_native_splash:create`
+# 앱 실행 파일들이 로드되는 동안(엔진 초기화 ~ 첫 프레임) 네이티브
+# 레이어에서 보여주는 화면 — Flutter 위젯이 전혀 그려지기 전이라
+# 순수 정적 이미지 + 단색 배경만 가능하다.
+flutter_native_splash:
+  color: "#14141C"
+  image: "assets/icons/splash_logo.png"
+  color_dark: "#14141C"
+  image_dark: "assets/icons/splash_logo.png"
+  android_12:
+    color: "#14141C"
+    image: "assets/icons/splash_logo.png"
+    color_dark: "#14141C"
+    image_dark: "assets/icons/splash_logo.png"
+  web: false
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

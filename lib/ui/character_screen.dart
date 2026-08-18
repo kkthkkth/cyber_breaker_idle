@@ -517,8 +517,10 @@ class _EquipAreaState extends State<EquipArea> {
                                         children: [
                                           // 인게임 전투 스케일과 동일하게
                                           // [PlayerAnimationComponent.boxSize]를
-                                          // 그대로 재사용한다(기존 128 →
-                                          // 180). CharacterIdlePreview가
+                                          // 그대로 재사용한다(128 → 180 →
+                                          // 120 → 60으로 조정돼 왔다 — 전투
+                                          // 화면과 항상 같은 값을 쓰도록
+                                          // 상수를 직접 참조한다). CharacterIdlePreview가
                                           // 내부적으로 FilterQuality.none을
                                           // 이미 적용하므로 픽셀 아트가
                                           // 흐려지지 않고, 512x512 캔버스

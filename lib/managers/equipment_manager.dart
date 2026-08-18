@@ -10,6 +10,7 @@ import '../constants/item_pool_config.dart';
 import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
 import 'achievement_manager.dart';
+import 'character_manifest_manager.dart';
 import 'consumable_manager.dart';
 import 'game_manager.dart';
 import 'pet_stat_metadata_manager.dart';
@@ -863,21 +864,34 @@ class EquipmentManager extends ChangeNotifier {
     return double.parse(value.toStringAsFixed(2));
   }
 
-  /// [allowedGrades] 중 [type]에 실제 콘텐츠가 있는(=[ItemPoolConfig.maxCount] >
-  /// 0인) 등급만 후보로 남겨 그중 하나를 무작위로 뽑는다. 그중 하나도 없으면
-  /// (예: 프리미엄 캐릭터 소환처럼 상위 등급만 허용했는데 그 등급들엔 아직
-  /// 캐릭터 아트가 하나도 없는 경우) 등급 제한 자체를 풀고 이 타입에
-  /// 콘텐츠가 있는 가장 낮은 등급으로 안전하게 대체한다 — 이래도 하나도
-  /// 없으면(타입 자체에 설정이 전혀 없으면) 마지막 방어선으로 N을 반환한다.
+  /// [type]에 [grade] 등급의 콘텐츠가 실제로 있는지 — 캐릭터
+  /// (EquipType.character)는 [CharacterManifestManager](Supabase
+  /// `master_characters`, 가챠 가중치 > 0인 캐릭터가 있는지)를 유일한
+  /// 출처로 삼고, 그 외(펫/장비)는 여전히 하드코딩 표 [ItemPoolConfig]를
+  /// 따른다. [_pickAvailableGrade]/[_topAvailableGrade]가 공유하는 판정
+  /// 하나라, 캐릭터 가챠 풀을 DB로 옮기고 싶을 때 이 한 곳만 갈아끼우면
+  /// 됐다(실제로 캐릭터 쪽은 이미 갈아끼워진 상태).
+  bool _hasGachaContent(EquipType type, ItemGrade grade) {
+    return type == EquipType.character
+        ? CharacterManifestManager.instance.hasGachaPoolFor(grade)
+        : ItemPoolConfig.maxCount(type, grade) > 0;
+  }
+
+  /// [allowedGrades] 중 [type]에 실제 콘텐츠가 있는 등급만 후보로 남겨
+  /// 그중 하나를 무작위로 뽑는다. 그중 하나도 없으면(예: 프리미엄 캐릭터
+  /// 소환처럼 상위 등급만 허용했는데 그 등급들엔 아직 캐릭터가 하나도
+  /// 없는 경우) 등급 제한 자체를 풀고 이 타입에 콘텐츠가 있는 가장 낮은
+  /// 등급으로 안전하게 대체한다 — 이래도 하나도 없으면(타입 자체에 설정이
+  /// 전혀 없으면) 마지막 방어선으로 N을 반환한다.
   ItemGrade _pickAvailableGrade(EquipType type, List<ItemGrade> allowedGrades, Random random) {
     final List<ItemGrade> valid =
-        allowedGrades.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+        allowedGrades.where((grade) => _hasGachaContent(type, grade)).toList();
     if (valid.isNotEmpty) {
       return valid[random.nextInt(valid.length)];
     }
 
     final List<ItemGrade> anyValid =
-        ItemGrade.values.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+        ItemGrade.values.where((grade) => _hasGachaContent(type, grade)).toList();
     if (anyValid.isNotEmpty) {
       return anyValid.first;
     }
@@ -892,21 +906,38 @@ class EquipmentManager extends ChangeNotifier {
   /// 선언돼 있어, 필터링된 리스트의 마지막 원소가 항상 최고 등급이다.
   ItemGrade _topAvailableGrade(EquipType type, List<ItemGrade> allowedGrades) {
     final List<ItemGrade> valid =
-        allowedGrades.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+        allowedGrades.where((grade) => _hasGachaContent(type, grade)).toList();
     if (valid.isNotEmpty) {
       return valid.last;
     }
 
     final List<ItemGrade> anyValid =
-        ItemGrade.values.where((grade) => ItemPoolConfig.maxCount(type, grade) > 0).toList();
+        ItemGrade.values.where((grade) => _hasGachaContent(type, grade)).toList();
     return anyValid.isNotEmpty ? anyValid.last : ItemGrade.n;
   }
 
-  /// [type] + [grade] 조합에 실제로 존재하는 개수([ItemPoolConfig.maxCount])
-  /// 범위 안에서 하나를 무작위로 뽑는다 — 모든 생성 경로(가챠/필드 드랍/
-  /// 테스트 인벤토리)가 이걸 거친다. 개수가 0이면(설정에 없는 조합) 안전하게
-  /// 1을 반환한다.
+  /// [type] + [grade] 조합 안에서 실제로 뽑힐 subId 하나를 정한다 — 모든
+  /// 생성 경로(가챠/필드 드랍/테스트 인벤토리)가 이걸 거친다.
+  ///
+  /// 캐릭터는 [CharacterManifestManager.rollGachaSubId]로 DB의
+  /// `gacha_weight` 기반 가중 추첨을 한다 — 가중치를 가진 캐릭터가
+  /// 없으면(설정 누락) 활성 캐릭터 중 균등 추첨으로, 그마저 없으면(이
+  /// 등급에 캐릭터가 하나도 없음) 최후 방어선으로 subId 1을 반환한다.
+  /// 그 외(펫/장비)는 여전히 [ItemPoolConfig.maxCount] 범위 안에서 균등
+  /// 추첨한다.
   int _rollSubId(EquipType type, ItemGrade grade, Random random) {
+    if (type == EquipType.character) {
+      final int? weighted = CharacterManifestManager.instance.rollGachaSubId(grade, random);
+      if (weighted != null) {
+        return weighted;
+      }
+      final List<int> anyActive = CharacterManifestManager.instance.subIdsFor(grade);
+      if (anyActive.isNotEmpty) {
+        return anyActive[random.nextInt(anyActive.length)];
+      }
+      return 1;
+    }
+
     final int maxCount = ItemPoolConfig.maxCount(type, grade);
     return maxCount > 0 ? random.nextInt(maxCount) + 1 : 1;
   }

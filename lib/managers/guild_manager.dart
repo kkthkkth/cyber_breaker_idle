@@ -188,6 +188,14 @@ class GuildManager extends ChangeNotifier {
 
   /// 길드원 로스터를 서버에서 다시 받아온다 — [GuildMainScreen]의
   /// "길드원 목록" 탭이 열릴 때 호출한다.
+  ///
+  /// 1차로 `guild_members` + `profiles(nickname, last_seen)` 임베드 조인
+  /// 한 번으로 끝내려 시도하고([SupabaseManager.fetchGuildMembers]), 그중
+  /// 닉네임 해석에 실패한 행([GuildMember.unresolvedNicknamePlaceholder]로
+  /// 표시된 행 — 이 앱은 닉네임이 필수라 진짜로 비어있을 수 없다)이 있으면
+  /// 그 user_id들만 모아 `profiles`를 직접 재조회해 보충한다. 이 앱에서는
+  /// 닉네임 입력이 필수라 임베드가 정상 동작했다면 애초에 재조회할 행이
+  /// 없어야 하므로, 평소엔 이 2차 조회 자체가 실행되지 않는다.
   Future<void> refreshMembers() async {
     final String? id = guildId;
     if (id == null) {
@@ -197,6 +205,26 @@ class GuildManager extends ChangeNotifier {
     }
     final List<Map<String, dynamic>> rows = await SupabaseManager.instance.fetchGuildMembers(id);
     members = rows.map(GuildMember.fromJson).toList();
+    notifyListeners();
+
+    final List<String> unresolvedUserIds = members
+        .where((member) => member.nickname == GuildMember.unresolvedNicknamePlaceholder)
+        .map((member) => member.userId)
+        .toList();
+    if (unresolvedUserIds.isEmpty) {
+      return;
+    }
+
+    final Map<String, String> resolved =
+        await SupabaseManager.instance.fetchNicknamesByUserIds(unresolvedUserIds);
+    if (resolved.isEmpty) {
+      return;
+    }
+    members = members
+        .map((member) => resolved.containsKey(member.userId)
+            ? member.copyWith(nickname: resolved[member.userId])
+            : member)
+        .toList();
     notifyListeners();
   }
 

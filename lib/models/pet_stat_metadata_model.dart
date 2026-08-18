@@ -13,6 +13,13 @@ class PetSpecialStat {
   static const String skillCooldownReduction = 'skillCooldownReduction';
   static const String criticalDamageBoost = 'criticalDamageBoost';
 
+  /// 회피율 증가 — [GameManager.effectiveEvasionRate]에 가산으로 반영된다.
+  static const String evasionBoost = 'evasionBoost';
+
+  /// 크리티컬 피해 방어(받는 크리티컬 데미지 배율 감소) 증가 —
+  /// [GameManager.effectiveCritDefenseRate]에 가산으로 반영된다.
+  static const String critDefenseBoost = 'critDefenseBoost';
+
   static const List<String> values = [
     goldGain,
     dropRateBoost,
@@ -20,6 +27,8 @@ class PetSpecialStat {
     finalAttackBoost,
     skillCooldownReduction,
     criticalDamageBoost,
+    evasionBoost,
+    critDefenseBoost,
   ];
 
   static String displayName(String key) => switch (key) {
@@ -29,6 +38,8 @@ class PetSpecialStat {
     finalAttackBoost => '최종 공격력 증폭',
     skillCooldownReduction => '스킬 쿨타임 감소',
     criticalDamageBoost => '크리티컬 데미지 증폭',
+    evasionBoost => '회피율 증가',
+    critDefenseBoost => '크리티컬 피해 방어 증가',
     _ => key,
   };
 }

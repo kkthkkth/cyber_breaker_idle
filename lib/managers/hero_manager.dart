@@ -6,11 +6,11 @@ import 'package:flutter/material.dart';
 ///
 /// [주의] 이 프로젝트의 인게임 캐릭터 아트(챕터/스테이지에서 실제로
 /// 그려지는 플레이어 스프라이트)는 로컬 pubspec.yaml assets가 아니라
-/// 원격 GitHub 레포([AppImages]/`RemoteSpriteLoader` 참고)에서 내려받는
-/// 별도 파이프라인이다. 이 매니저가 관리하는 `hero.png`는 그것과 무관한,
-/// pubspec.yaml에 이미 등록되어 있는 `assets/images/` 디렉터리를 통해
-/// 앱 번들에 직접 포함되는 순수 로컬 정적 에셋이다 — 원격 캐릭터 아트
-/// 시스템에 편입하고 싶다면 그 GitHub 레포의 같은 경로에도 파일을 올려야
+/// 원격 Supabase Storage 버킷([AppImages]/`RemoteSpriteLoader` 참고)에서
+/// 내려받는 별도 파이프라인이다. 이 매니저가 관리하는 `hero.png`는 그것과
+/// 무관한, pubspec.yaml에 이미 등록되어 있는 `assets/images/` 디렉터리를
+/// 통해 앱 번들에 직접 포함되는 순수 로컬 정적 에셋이다 — 원격 캐릭터 아트
+/// 시스템에 편입하고 싶다면 그 Storage 버킷의 같은 경로에도 파일을 올려야
 /// 한다(이 매니저만으로는 안 된다).
 class HeroManager {
   HeroManager._internal();

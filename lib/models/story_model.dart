@@ -29,15 +29,27 @@ class StoryLine {
 }
 
 /// 대사([lines]) 목록으로 이루어진 스토리 한 편(프롤로그, 시즌1 메인
-/// 스토리 각 챕터 등). [backgroundUrl]은 대화창 뒤에 까는 배경 맵 이미지 —
-/// 아직 그려지지 않은 챕터라도 [CustomSafeImage]가 알아서 placeholder로
-/// 대체하므로 호출부에서 존재 여부를 따로 확인할 필요는 없다.
+/// 스토리 각 챕터 등). [backgroundUrl]은 대화창 뒤에 까는 배경 맵 이미지.
+///
+/// [fallbackBackgroundUrl]은 전용 스토리 일러스트가 아직 원격 레포에 없는
+/// 챕터를 위한 임시 대체 배경(예: 그 챕터의 인게임 스테이지 배경,
+/// [AppImages.chapterBackgroundBack])이다 — [CustomSafeImage]가 [backgroundUrl]
+/// 로드에 실패하면 자동으로 이걸 시도하고, 그마저 없으면(null이거나 그것도
+/// 실패하면) 회색 placeholder로 넘어간다. 전용 일러스트가 이미 있는
+/// 챕터는 null로 둔다 — 성공하는 [backgroundUrl]이 있으면 [fallbackBackgroundUrl]
+/// 은 애초에 시도되지 않는다.
 class StoryModel {
-  const StoryModel({required this.id, required this.backgroundUrl, required this.lines});
+  const StoryModel({
+    required this.id,
+    required this.backgroundUrl,
+    required this.lines,
+    this.fallbackBackgroundUrl,
+  });
 
   final String id;
   final String backgroundUrl;
   final List<StoryLine> lines;
+  final String? fallbackBackgroundUrl;
 }
 
 /// 최초 실행 시 보여주는 프롤로그 — "게임 개발자가 자신이 만들던 게임
@@ -57,6 +69,10 @@ class StoryModel {
 final StoryModel prologueBeforeName = StoryModel(
   id: 'prologue_before_name',
   backgroundUrl: AppImages.storyBackground('prologue'),
+  // 전용 프롤로그 배경(story/prologue/background.png)이 아직 원격 레포에
+  // 없다(에셋 스캔으로 확인됨) — 임시로 1장 인게임 스테이지 배경을 대신
+  // 보여준다. 전용 배경이 올라오면 자동으로 그쪽이 우선된다.
+  fallbackBackgroundUrl: AppImages.chapterBackgroundBack(1),
   lines: [
     StoryLine(
       speaker: '???',
@@ -116,6 +132,9 @@ final StoryModel prologueBeforeName = StoryModel(
 final StoryModel prologueAfterName = StoryModel(
   id: 'prologue_after_name',
   backgroundUrl: AppImages.storyBackground('prologue'),
+  // prologueBeforeName과 동일한 이유(전용 배경 미등록) — 같은 1장 스테이지
+  // 배경으로 대체한다.
+  fallbackBackgroundUrl: AppImages.chapterBackgroundBack(1),
   lines: [
     StoryLine(
       speaker: 'N1',

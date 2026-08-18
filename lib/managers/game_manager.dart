@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/artifact_model.dart';
+import '../models/character_metadata_model.dart';
 import '../models/collection_model.dart';
 import '../models/equipment.dart';
 import '../models/equipment_set_model.dart';
@@ -16,6 +17,7 @@ import '../models/skill_model.dart';
 import 'achievement_manager.dart';
 import 'artifact_manager.dart';
 import 'battle_pass_manager.dart';
+import 'character_metadata_manager.dart';
 import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'equipment_set_manager.dart';
@@ -126,12 +128,13 @@ class GameManager extends ChangeNotifier {
   // ── 플레이어 HP ─────────────────────────────────────────────────
   double baseMaxHp = 200;
 
-  /// 유물(Artifact)의 [ArtifactStat.maxHpPercent] 패시브가 곱산으로 반영된
-  /// 실제 최대 체력 — 기존 필드명 `maxHp`를 그대로 getter로 남겨서 게임
-  /// 내/외부의 모든 기존 호출부(전투 로직, HP바 UI 등)가 수정 없이 자동으로
-  /// 유물 보너스를 받는다.
+  /// 장착 캐릭터의 character_metadata 기반 체력([_equippedCharacterStats.hp],
+  /// [attackPower] 문서와 같은 "추가되는 소스" 취급)과 유물(Artifact)의
+  /// [ArtifactStat.maxHpPercent] 패시브가 곱산으로 반영된 실제 최대 체력 —
+  /// 기존 필드명 `maxHp`를 그대로 getter로 남겨서 게임 내/외부의 모든 기존
+  /// 호출부(전투 로직, HP바 UI 등)가 수정 없이 자동으로 두 보너스를 받는다.
   double get maxHp =>
-      baseMaxHp *
+      (baseMaxHp + _equippedCharacterStats.hp) *
       (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
       (1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.maxHpPercent, _equippedSetCounts)) *
       (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent));
@@ -200,8 +203,37 @@ class GameManager extends ChangeNotifier {
   double _petSpecialStat(String key) =>
       EquipmentManager.instance.equippedPet?.specialStats[key] ?? 0;
 
+  /// 장착된 캐릭터(EquipType.character)의 `character_metadata` 기반 최종
+  /// 스탯 — [CharacterMetadataManager]에 아직 그 캐릭터 행이 없거나
+  /// (마이그레이션 전 등) 장착된 캐릭터 자체가 없으면 안전하게
+  /// [CharacterFinalStats.zero]를 반환한다(기존 계정 단위 스탯 체인 —
+  /// [baseAttackPower]/[baseDefense]/[baseMaxHp]/[attackSpeed] 골드 강화
+  /// 등 — 에 아무 영향도 주지 않는다). 캐릭터 탭 상세 화면
+  /// ([CharacterDetailScreen])이 같은 방식으로 계산한 값을 표시하므로,
+  /// 전투에 실제로 반영되는 수치와 화면에 보이는 수치가 항상 일치한다.
+  CharacterFinalStats get _equippedCharacterStats {
+    final Equipment? character = EquipmentManager.instance.equippedItems[EquipType.character];
+    if (character == null) {
+      return CharacterFinalStats.zero;
+    }
+    final CharacterMetadata? metadata =
+        CharacterMetadataManager.instance.byId(character.gradeBadgeLabel);
+    if (metadata == null) {
+      return CharacterFinalStats.zero;
+    }
+    // Equipment.level은 0-indexed("Lv.0"=미강화)라 요청받은 공식의
+    // (level-1)과 정확히 같다 — CharacterMetadata.computeFinalStats 문서
+    // 참고. 별도 변환 없이 그대로 넘긴다.
+    return metadata.computeFinalStats(level: character.level, star: character.star);
+  }
+
   double get attackPower {
-    double power = baseAttackPower *
+    // 장착 캐릭터의 character_metadata 기반 공격력([_equippedCharacterStats])을
+    // 골드 강화([baseAttackPower])와 같은 "기초 수치" 층에 더한 뒤, 기존
+    // 장비/펫/도감 등 곱산 체인을 그 합계에 그대로 적용한다 — 이 프로젝트의
+    // 다른 모든 스탯 소스(펫 specialStats, 유물, 세트, 룬 등)와 동일하게
+    // "추가되는 소스"로 취급하며, 기존 골드 강화 진행도를 무효화하지 않는다.
+    double power = (baseAttackPower + _equippedCharacterStats.attack) *
         (1 + EquipmentManager.instance.getTotalEquipmentMultiplier());
     if (_hasPetEquipped) {
       power *= 1 + SkillManager.instance.petPassiveBonus(PetPassiveType.attackPower);
@@ -234,14 +266,25 @@ class GameManager extends ChangeNotifier {
     return power;
   }
 
-  /// 장착 중인 실제 공격 속도 — 골드로 올린 기본치([attackSpeed])에 장비
+  /// 장착 중인 실제 공격 속도. HP/ATK/DEF와 달리 ASPD는 요청받은 예외
+  /// 규칙("레벨/별 등급의 영향을 받지 않고 base_aspd를 그대로 사용")이
+  /// 있어서 이 프로젝트의 다른 스탯들처럼 "더해지는 보너스"가 아니라
+  /// "그 자체가 기초 수치"로 취급한다 — 장착 캐릭터에
+  /// character_metadata 행이 있으면([_equippedCharacterStats.attackSpeed]
+  /// > 0) 그 base_aspd가 골드로 올린 기존 기본치([attackSpeed])를 대체한다.
+  /// 아직 메타데이터가 없는 캐릭터(마이그레이션 전 등)나 캐릭터 자체가
+  /// 없으면 기존처럼 [attackSpeed]로 안전하게 대체된다. 어느 쪽이든 장비
   /// 서브 옵션(EquipmentStatType.attackSpeed)의 % 보너스와 액티브 버프
-  /// 스킬의 일시적 공격 속도 증폭을 곱해 반영한다. 전투 루프(IdleGame)와
-  /// 스킬 데미지 계산은 반드시 이 값을 써야 한다.
-  double get effectiveAttackSpeed =>
-      attackSpeed *
-      (1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attackSpeed)) *
-      (1 + SkillManager.instance.activeBuffAttackSpeedBonus);
+  /// 스킬의 일시적 공격 속도 증폭은 그대로 곱해 반영한다. 전투 루프
+  /// (IdleGame)와 스킬 데미지 계산은 반드시 이 값을 써야 한다.
+  double get effectiveAttackSpeed {
+    final double baseSpeed = _equippedCharacterStats.attackSpeed > 0
+        ? _equippedCharacterStats.attackSpeed
+        : attackSpeed;
+    return baseSpeed *
+        (1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attackSpeed)) *
+        (1 + SkillManager.instance.activeBuffAttackSpeedBonus);
+  }
 
   /// 스킬 크리티컬 판정에 실제로 쓰이는 확률 — 업그레이드로 쌓인 [criticalRate]에
   /// 펫이 장착돼 있을 때만 크리티컬 확률 증가 패시브를, 도감 보너스와 장비
@@ -259,9 +302,13 @@ class GameManager extends ChangeNotifier {
     return rate.clamp(0.0, _maxCriticalRate);
   }
 
-  /// 장비 옵션 + 도감 보너스까지 합산된 최종 방어력(고정 수치).
+  /// 장비 옵션 + 도감 보너스 + 장착 캐릭터의 character_metadata 기반
+  /// 방어력([_equippedCharacterStats.defense], [attackPower] 문서와 같은
+  /// "추가되는 소스" 취급)까지 합산된 최종 방어력(고정 수치).
   double get defensePower {
-    double value = baseDefense + EquipmentManager.instance.getTotalDefenseBonus();
+    double value = baseDefense +
+        _equippedCharacterStats.defense +
+        EquipmentManager.instance.getTotalDefenseBonus();
     value += collectionBonuses[CollectionStatType.defense] ?? 0;
     // 유물(Artifact) 누적 패시브 — 여기까지의 가산 방어력 합계에 곱산으로
     // 적용한다(공격력 곱산 체인과 같은 방식).
@@ -286,7 +333,8 @@ class GameManager extends ChangeNotifier {
     final double rate = evasionRate +
         EquipmentManager.instance.getTotalEvasionRateBonus() +
         (collectionBonuses[CollectionStatType.evasionRate] ?? 0) +
-        RuneManager.instance.totalBonus(RuneStat.evasionRatePercent);
+        RuneManager.instance.totalBonus(RuneStat.evasionRatePercent) +
+        _petSpecialStat(PetSpecialStat.evasionBoost);
     return rate.clamp(0.0, _maxEvasionRate);
   }
 
@@ -295,7 +343,8 @@ class GameManager extends ChangeNotifier {
   double get effectiveCritDefenseRate {
     final double rate = critDefenseRate +
         EquipmentManager.instance.getTotalCritDefenseRateBonus() +
-        (collectionBonuses[CollectionStatType.critDefenseRate] ?? 0);
+        (collectionBonuses[CollectionStatType.critDefenseRate] ?? 0) +
+        _petSpecialStat(PetSpecialStat.critDefenseBoost);
     return rate.clamp(0.0, _maxCritDefenseRate);
   }
 

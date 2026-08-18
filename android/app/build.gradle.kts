@@ -6,13 +6,17 @@ plugins {
 }
 
 android {
-    namespace = "com.example.idle_rpg"
+    namespace = "com.company.cyberbreaker"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // flutter_local_notifications가 요구하는 설정 — 이게 없으면
+        // ":app:checkDebugAarMetadata"에서 곧바로 빌드가 실패한다(브랜딩/IAP
+        // 작업과는 무관한, 원래 있던 별개의 누락이었다).
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -20,8 +24,10 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.idle_rpg"
+        // 스토어 등록 전, com.company를 실제 보유한 도메인/개발자 계정 이름으로
+        // 교체해야 한다(예: com.yourstudio.cyberbreaker) — Google Play/App
+        // Store 둘 다 앱 등록 후에는 패키지명/번들 ID를 바꿀 수 없다.
+        applicationId = "com.company.cyberbreaker"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -41,4 +47,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

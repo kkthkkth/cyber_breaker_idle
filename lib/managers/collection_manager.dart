@@ -7,15 +7,20 @@ import '../models/collection_model.dart';
 import '../models/equipment.dart';
 import 'equipment_manager.dart';
 import 'game_manager.dart';
+import 'supabase_manager.dart';
 
+/// 세트 수집(컬렉션) 정의와 진행 상태를 관장하는 싱글턴.
+///
+/// 정의(title/requiredItems/rewardStat)는 Supabase `master_collections`
+/// 테이블에서 온다([SupabaseManager.fetchMasterCollections]) — 앱 재배포
+/// 없이 세트를 추가/삭제(비활성)/보상 조정을 할 수 있다. 진행 상태
+/// (isCompleted)만 플레이어별 로컬 저장값이다.
 class CollectionManager extends ChangeNotifier {
-  CollectionManager._internal() {
-    collections = _defaultCollections();
-  }
+  CollectionManager._internal();
 
   static final CollectionManager instance = CollectionManager._internal();
 
-  late final List<CollectionModel> collections;
+  List<CollectionModel> collections = [];
 
   List<CollectionModel> byCategory(CollectionCategory category) =>
       collections.where((collection) => collection.category == category).toList();
@@ -87,9 +92,14 @@ class CollectionManager extends ChangeNotifier {
 
   static const String _saveKey = 'collection_manager_save';
 
-  /// 정의(title/requiredItems/rewardStat)는 매번 [_defaultCollections]로
-  /// 다시 생성되므로(서버 연동 시 정의는 서버가 내려줌), 여기서는 완료된
-  /// id 목록만 플레이어 진행 상태로 저장한다.
+  /// 정의 자체(=[collections])의 로컬 캐시 — Supabase가 실패했을 때(오프라인
+  /// 등) 지난번에 받아 둔 세트 목록으로 폴백한다. 진행 상태([_saveKey])와
+  /// 별개의 키다 — 정의는 서버가 언제든 바꿀 수 있는 데이터, 진행 상태는
+  /// 순수 로컬 플레이어 데이터라 저장 주기와 무효화 조건이 다르다.
+  static const String _definitionCacheKey = 'collection_manager_definitions_cache';
+
+  /// 완료 여부(isCompleted)만 저장한다 — 정의는 매번 [loadData]가 서버/캐시
+  /// 에서 다시 받아오므로 여기 포함할 필요가 없다.
   Future<void> saveData() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final List<String> completedIds = collections
@@ -99,137 +109,88 @@ class CollectionManager extends ChangeNotifier {
     await prefs.setString(_saveKey, jsonEncode({'completedIds': completedIds}));
   }
 
+  /// 1) 세트 정의를 로컬 캐시로 먼저 채우고(있다면), 2) Supabase
+  /// `master_collections`에서 최신 정의를 받아와 덮어쓴다(실패하거나 빈
+  /// 결과가 오면 — 네트워크 실패와 "정말로 활성 세트가 없음"을 구분할 수
+  /// 없으므로 — 캐시가 이미 있는 한 그 캐시를 유지한다). 3) 마지막으로
+  /// 로컬에 저장된 완료 여부를 그 정의 목록 위에 얹는다.
   Future<void> loadData() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
-    final String? raw = prefs.getString(_saveKey);
-    if (raw == null) {
-      return;
+
+    final String? cachedDefinitions = prefs.getString(_definitionCacheKey);
+    if (cachedDefinitions != null) {
+      try {
+        final List<dynamic> decoded = jsonDecode(cachedDefinitions) as List<dynamic>;
+        collections = decoded
+            .map((entry) => CollectionModel.fromJson(entry as Map<String, dynamic>))
+            .toList();
+      } catch (error) {
+        debugPrint('[CollectionManager] 로컬 정의 캐시가 손상되어 건너뜁니다: $error');
+      }
     }
 
-    try {
-      final Map<String, dynamic> data = jsonDecode(raw) as Map<String, dynamic>;
-      final List<dynamic> completedIds = data['completedIds'] as List<dynamic>? ?? [];
-      for (final CollectionModel collection in collections) {
-        if (completedIds.contains(collection.id)) {
-          collection.isCompleted = true;
+    final List<Map<String, dynamic>> rows = await SupabaseManager.instance.fetchMasterCollections();
+    if (rows.isNotEmpty) {
+      collections = parseRows(rows);
+      await prefs.setString(
+        _definitionCacheKey,
+        jsonEncode(collections.map((collection) => collection.toJson()).toList()),
+      );
+    } else if (collections.isEmpty) {
+      debugPrint(
+        '[CollectionManager] master_collections 조회 결과가 비어 있습니다 '
+        '(네트워크 실패 또는 실제로 활성 세트가 없음) — 컬렉션이 빈 상태로 시작됩니다.',
+      );
+    }
+
+    final String? savedProgress = prefs.getString(_saveKey);
+    if (savedProgress != null) {
+      try {
+        final Map<String, dynamic> data = jsonDecode(savedProgress) as Map<String, dynamic>;
+        final List<dynamic> completedIds = data['completedIds'] as List<dynamic>? ?? [];
+        for (final CollectionModel collection in collections) {
+          if (completedIds.contains(collection.id)) {
+            collection.isCompleted = true;
+          }
         }
+      } catch (error) {
+        debugPrint('[CollectionManager] 로컬 진행 상태 데이터가 손상되어 건너뜁니다: $error');
       }
-    } catch (error) {
-      debugPrint('[CollectionManager] 로컬 저장 데이터가 손상되어 건너뜁니다: $error');
     }
     notifyListeners();
   }
 
-  // TODO(server): replace with a real fetch of collection definitions —
-  // everything above only ever reads/writes through [collections].
-  static List<CollectionModel> _defaultCollections() {
-    return [
-      CollectionModel(
-        id: 'char_n_collector',
-        category: CollectionCategory.character,
-        title: '초급 캐릭터 수집가 I',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.character, grade: ItemGrade.n, subId: 1, count: 3),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.attackPower, value: 0.02),
-      ),
-      CollectionModel(
-        id: 'char_sr_collector',
-        category: CollectionCategory.character,
-        title: '중급 캐릭터 수집가 II',
-        requiredItems: const [
-          RequiredCollectionItem(
-            type: EquipType.character,
-            grade: ItemGrade.sr,
-            subId: 1,
-            requiredLevel: 5,
-            count: 2,
+  /// Supabase 행 목록을 [CollectionModel] 목록으로 파싱한다 — 순수 함수라
+  /// 네트워크 없이 단위 테스트할 수 있다. `required_items`/`reward_stat`
+  /// jsonb 컬럼은 [RequiredCollectionItem]/[CollectionRewardStat]의 기존
+  /// `toJson`/`fromJson`과 정확히 같은 키(type/grade/subId/requiredLevel/
+  /// count, type/value)를 쓰도록 설계했다 — 그 모델들의 `fromJson`을 그대로
+  /// 재사용해 새로운 파싱 로직을 따로 만들지 않는다. 행 하나가 깨져 있어도
+  /// (필수 컬럼 누락, enum 이름 오타 등) 그 행만 건너뛴다 — 세트 하나의
+  /// 오타 때문에 전체 컬렉션 목록이 깨지면 안 되기 때문이다.
+  @visibleForTesting
+  static List<CollectionModel> parseRows(List<Map<String, dynamic>> rows) {
+    final List<CollectionModel> result = [];
+    for (final Map<String, dynamic> row in rows) {
+      try {
+        final List<dynamic> requiredItemsRaw = row['required_items'] as List<dynamic>;
+        result.add(
+          CollectionModel(
+            id: row['id'] as String,
+            category: CollectionCategory.values.byName(row['category'] as String),
+            title: row['title'] as String,
+            requiredItems: requiredItemsRaw
+                .map(
+                  (entry) => RequiredCollectionItem.fromJson(entry as Map<String, dynamic>),
+                )
+                .toList(),
+            rewardStat: CollectionRewardStat.fromJson(row['reward_stat'] as Map<String, dynamic>),
           ),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.criticalRate, value: 0.02),
-      ),
-      CollectionModel(
-        id: 'char_ur_collector',
-        category: CollectionCategory.character,
-        title: '전설 캐릭터 수집가 III',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.character, grade: ItemGrade.ur, subId: 1, count: 1),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.attackPower, value: 0.10),
-      ),
-      CollectionModel(
-        id: 'equip_weapon_set',
-        category: CollectionCategory.equipment,
-        title: '초급 무기 수집가 I',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.weapon, grade: ItemGrade.n, subId: 1, count: 4),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.attackPower, value: 0.03),
-      ),
-      CollectionModel(
-        id: 'equip_armor_set',
-        category: CollectionCategory.equipment,
-        title: '방어구 마스터 II',
-        requiredItems: const [
-          RequiredCollectionItem(
-            type: EquipType.armor,
-            grade: ItemGrade.ssr,
-            subId: 1,
-            requiredLevel: 10,
-            count: 1,
-          ),
-          RequiredCollectionItem(
-            type: EquipType.shield,
-            grade: ItemGrade.ssr,
-            subId: 2,
-            requiredLevel: 10,
-            count: 1,
-          ),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.defenseRate, value: 0.03),
-      ),
-      CollectionModel(
-        id: 'equip_relic_set',
-        category: CollectionCategory.equipment,
-        title: '유물 발굴가 III',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.relic, grade: ItemGrade.lr, subId: 1, count: 1),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.defense, value: 0.15),
-      ),
-      CollectionModel(
-        id: 'pet_n_collector',
-        category: CollectionCategory.pet,
-        title: '초급 펫 조련사 I',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.pet, grade: ItemGrade.r, subId: 1, count: 3),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.evasionRate, value: 0.02),
-      ),
-      CollectionModel(
-        id: 'pet_sssr_collector',
-        category: CollectionCategory.pet,
-        title: '희귀 펫 조련사 II',
-        requiredItems: const [
-          RequiredCollectionItem(
-            type: EquipType.pet,
-            grade: ItemGrade.sssr,
-            subId: 1,
-            requiredLevel: 3,
-            count: 1,
-          ),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.critDefenseRate, value: 0.025),
-      ),
-      CollectionModel(
-        id: 'pet_lr_collector',
-        category: CollectionCategory.pet,
-        title: '펫 마스터 III',
-        requiredItems: const [
-          RequiredCollectionItem(type: EquipType.pet, grade: ItemGrade.lr, subId: 1, count: 1),
-        ],
-        rewardStat: const CollectionRewardStat(type: CollectionStatType.attackPower, value: 0.20),
-      ),
-    ];
+        );
+      } catch (error) {
+        debugPrint('[CollectionManager] master_collections 행 파싱 실패(id=${row['id']}): $error');
+      }
+    }
+    return result;
   }
 }

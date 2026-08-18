@@ -13,16 +13,17 @@ import 'managers/attendance_manager.dart';
 import 'managers/battle_pass_manager.dart';
 import 'managers/character_manifest_manager.dart';
 import 'managers/character_meta_manager.dart';
+import 'managers/character_metadata_manager.dart';
 import 'managers/collection_manager.dart';
 import 'managers/dungeon_manager.dart';
 import 'managers/encyclopedia_manager.dart';
 import 'managers/equipment_manager.dart';
 import 'managers/equipment_set_manager.dart';
-import 'managers/gacha_manager.dart';
 import 'managers/game_manager.dart';
 import 'managers/guild_manager.dart';
 import 'managers/guild_raid_manager.dart';
 import 'managers/guild_war_manager.dart';
+import 'managers/iap_manager.dart';
 import 'managers/mailbox_manager.dart';
 import 'managers/main_story_manager.dart';
 import 'managers/midnight_reset_manager.dart';
@@ -91,7 +92,9 @@ Future<void> main() async {
   await EquipmentManager.instance.loadEquipment();
   // 상점 가챠 버튼(EquipmentManager.generateLootOfType/drawMultipleGacha)이
   // 곧바로 PityManager를 읽으므로, 상점 화면이 열리기 전에 끝나 있어야
-  // 한다.
+  // 한다. 캐릭터 가챠는 추가로 CharacterManifestManager(아래, Supabase
+  // master_characters)도 읽지만 그건 훨씬 나중에(EncyclopediaManager
+  // 직전에) 로드된다 — runApp() 전에만 끝나면 되므로 문제없다.
   await PityManager.instance.loadData();
   // GameManager._onMonsterDefeated/EquipmentManager의 가챠 진입점이 매
   // 처치/뽑기마다 AchievementManager.recordMonsterKill/recordGachaPull을
@@ -114,7 +117,6 @@ Future<void> main() async {
   // 무한의 탑 화면/전투(IdleGame._activateDungeon)가 곧바로 층 데이터를
   // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다.
   await TowerFloorManager.instance.loadData();
-  await GachaManager.instance.loadGachaInventory();
   await MissionManager.instance.loadData();
   await AttendanceManager.instance.checkDailyLogin();
   await RookieAttendanceManager.instance.loadData();
@@ -143,6 +145,10 @@ Future<void> main() async {
   // IdleGame._fireProjectile이 공격마다 근접/원거리를 판정할 때 곧바로
   // 읽으므로, 마찬가지로 전투가 시작되기 전에 끝나 있어야 한다.
   await CharacterMetaManager.instance.loadData();
+  // GameManager.attackPower/defensePower/maxHp/effectiveAttackSpeed가 곧바로
+  // 장착 캐릭터의 기본 스탯을 읽으므로(character_metadata 기반), 전투가
+  // 시작되기 전에 끝나 있어야 한다.
+  await CharacterMetadataManager.instance.loadData();
   await SpeedManager.instance.loadBoost();
   await StoryManager.instance.loadData();
   await MainStoryManager.instance.loadData();
@@ -162,6 +168,12 @@ Future<void> main() async {
   // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다. 지원하지
   // 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
   await AdManager.instance.loadData();
+  // 상점 '충전' 탭이 곧바로 IAPManager.instance.products/isAvailable을
+  // 읽으므로, 화면이 뜨기 전에 스토어 상품 조회가 끝나 있어야 한다. 구매
+  // 스트림 구독도 이 안에서 시작하는데, 이전 세션에서 completePurchase가
+  // 안 끝난 트랜잭션이 있으면 이 시점에 재전달되므로 최대한 앱 초반에
+  // 호출해야 놓치지 않는다.
+  await IAPManager.instance.loadData();
   // QuestManager.claimQuest가 BattlePassManager.addBpExp를 부르므로, 배틀패스
   // 보상 트랙(레벨/exp)이 먼저 로드돼 있어야 한다.
   await BattlePassManager.instance.loadData();
@@ -219,7 +231,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       GameManager.instance.saveGame();
       EquipmentManager.instance.saveEquipment();
       DungeonManager.instance.saveDungeonData();
-      GachaManager.instance.saveGachaInventory();
       // 디바운스된(최대 2초) 퀘스트 진행도 동기화가 그 시간을 못 채우고
       // 앱이 죽는 것을 막는다 — QuestManager.flushPendingSync 문서 참고.
       unawaited(QuestManager.instance.flushPendingSync());

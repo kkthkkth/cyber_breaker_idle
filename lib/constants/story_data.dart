@@ -242,6 +242,11 @@ final Map<int, ChapterStory> seasonOneMainStory = {
     opening: StoryModel(
       id: 'chapter_8',
       backgroundUrl: AppImages.chapterMemoryIllustration(8),
+      // 8장 전용 회상 일러스트(memory/chapter8/memory_8-1.png)가 아직
+      // 원격 레포에 없다(에셋 스캔으로 확인됨) — 임시로 8장 인게임 스테이지
+      // 배경을 대신 보여준다. 전용 일러스트가 올라오면 자동으로 그쪽이
+      // 우선된다.
+      fallbackBackgroundUrl: AppImages.chapterBackgroundBack(8),
       lines: [
         _line('N1', 'N1', '왕도가... 완전히 어둠에 물들었어요. 저기, 성전 위에 계신 분은... 스승님?!'),
         _commanderLine('지휘관', '네 스승이라고? 저 기운, 사람 것치곤 이미 반쯤 잠식돼 있어.'),
@@ -254,6 +259,7 @@ final Map<int, ChapterStory> seasonOneMainStory = {
     bossIntro: StoryModel(
       id: 'chapter_8_boss',
       backgroundUrl: AppImages.chapterMemoryIllustration(8),
+      fallbackBackgroundUrl: AppImages.chapterBackgroundBack(8),
       lines: [
         _commanderLine('지휘관', '틀렸습니다, 단장님. 동료를 버려서 지키는 평화는, 그냥 폭력일 뿐이에요.'),
         _line('보스 (타락한 기사단장)', 'SSSR1', '……그 눈. 정말로 아무것도 놓치지 않는군. 좋다, 그 각오, 검으로 증명해 보아라.'),
