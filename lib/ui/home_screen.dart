@@ -13,20 +13,24 @@ import '../managers/prestige_manager.dart';
 import '../managers/quest_manager.dart';
 import '../managers/skill_manager.dart';
 import '../managers/speed_manager.dart';
+import '../managers/title_manager.dart';
 import '../managers/tutorial_manager.dart';
 import '../managers/world_boss_manager.dart';
 import '../models/active_skill_model.dart';
 import '../models/mission_model.dart';
 import '../models/skill_model.dart';
+import '../models/title_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
+import '../widgets/guide_mission_banner.dart';
+import '../widgets/title_badge.dart';
 import 'battle_pass_screen.dart';
 import 'mailbox_screen.dart';
 import 'mission_dialog.dart';
 import 'potion_quick_slot.dart';
-import 'prestige_dialog.dart';
 import 'quest_screen.dart';
 import 'ranking_screen.dart';
+import 'rebirth_confirm_dialog.dart';
 import 'world_boss_entry_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -84,6 +88,11 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Column(
               children: [
+                // 초보자 온보딩용 메인 가이드 미션 배너 — 화면 최상단(퀘스트
+                // HUD 아이콘이 있는 배틀 뷰보다 위)에 고정, 시퀀스를 전부
+                // 끝내면(GuideMissionManager.isAllCompleted) 스스로 아무것도
+                // 그리지 않는다.
+                const GuideMissionBanner(),
                 Expanded(
                   flex: 1,
                   child: KeyedSubtree(
@@ -184,6 +193,21 @@ class _BattleView extends StatelessWidget {
               // 피드백으로 약 19% 줄였다.
               const double playerHpBarWidth = 65;
 
+              // 장착 중인 칭호(PlayerTitle) — 체력바보다 한 단계 더 위, 머리
+              // 바로 위에 띄운다(요구사항: "내 캐릭터 머리 위에 장착 중인
+              // 칭호를 띄워줘"). 폭이 이름 길이에 따라 달라지므로 체력바와
+              // 달리 고정 폭을 주지 않고, 최대 폭 안에서 내용 크기만큼만
+              // 차지하게 한 뒤 [playerX] 기준으로 가운데 정렬한다.
+              const double titleBadgeHeight = 20;
+              const double titleBadgeGap = 4;
+              const double titleBadgeMaxWidth = 140;
+              final double titleBadgeTop = headTopY -
+                  playerHpBarBreathingRoom -
+                  playerHpBarBlockHeight -
+                  playerHpBarExtraLift -
+                  titleBadgeHeight -
+                  titleBadgeGap;
+
               return Stack(
                 children: [
                   // 챕터 배경은 이제 IdleGame 안의 다중 레이어 패럴랙스
@@ -194,6 +218,16 @@ class _BattleView extends StatelessWidget {
                   Positioned.fill(child: GameWidget(game: game)),
                   const Positioned.fill(child: SkillEffectOverlay()),
                   Positioned.fill(child: PlayerHitFlashOverlay(game: game)),
+                  if (TitleManager.instance.equippedTitle case final PlayerTitle equippedTitle)
+                    Positioned(
+                      left: (playerX - titleBadgeMaxWidth / 2)
+                          .clamp(0, constraints.maxWidth - titleBadgeMaxWidth),
+                      top: titleBadgeTop,
+                      width: titleBadgeMaxWidth,
+                      child: Center(
+                        child: TitleBadge(title: equippedTitle, height: titleBadgeHeight),
+                      ),
+                    ),
                   Positioned(
                     left: (playerX - playerHpBarWidth / 2)
                         .clamp(0, constraints.maxWidth - playerHpBarWidth),
@@ -729,11 +763,15 @@ class _WorldBossHudButton extends StatelessWidget {
   }
 }
 
-/// 오버클럭(프레스티지) 진입 버튼 — [_WorldBossHudButton] 바로 아래(같은
-/// 44px 원 규격)에 놓인다. 아직 최소 챕터([PrestigeManager
+/// 환생(프레스티지) 진입 버튼 — [_WorldBossHudButton] 바로 아래(같은 44px
+/// 원 규격)에 놓인다. 아직 최소 챕터([PrestigeManager
 /// .minChapterToPrestige])에 도달하지 못했어도 숨기지 않고 회색으로
 /// "잠김" 상태를 보여준다 — 기능 자체를 미리 알려줘야 유저가 그 챕터까지
-/// 갈 목표가 생긴다(완전히 숨기면 이 기능이 있는지조차 모른다).
+/// 갈 목표가 생긴다(완전히 숨기면 이 기능이 있는지조차 모른다). 조건을
+/// 채운 순간(=[PrestigeManager.canPrestige])에는 테두리/아이콘이 보라색
+/// 강조색으로 바뀌는 것과 별개로, [_DailyQuestHudButton]의 "수령 가능"
+/// 빨간 점과 같은 자리에 초록 점 배지를 띄워 "지금 환생할 수 있다"는
+/// 신호를 한눈에 놓치지 않게 한다.
 class _PrestigeHudButton extends StatelessWidget {
   const _PrestigeHudButton();
 
@@ -743,27 +781,47 @@ class _PrestigeHudButton extends StatelessWidget {
       animation: Listenable.merge([PrestigeManager.instance, GameManager.instance]),
       builder: (context, _) {
         final PrestigeManager prestige = PrestigeManager.instance;
-        final Color accent = prestige.canPrestige ? const Color(0xFF6C4FCE) : Colors.white24;
+        final bool ready = prestige.canPrestige;
+        final Color accent = ready ? const Color(0xFF6C4FCE) : Colors.white24;
 
         return GestureDetector(
-          onTap: () => showPrestigeDialog(context),
+          onTap: () => showRebirthConfirmDialog(context),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: accent, width: 1.5),
-                ),
-                alignment: Alignment.center,
-                child: Text('⚡', style: TextStyle(fontSize: 22, color: accent)),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: accent, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text('⚡', style: TextStyle(fontSize: 22, color: accent)),
+                  ),
+                  if (ready)
+                    Positioned(
+                      top: -2,
+                      right: -2,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: Colors.greenAccent,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              if (prestige.corePoints > 0) ...[
+              if (prestige.rebirthStones > 0) ...[
                 const SizedBox(height: 2),
-                _OutlinedCountdownText(text: '${prestige.corePoints}P'),
+                _OutlinedCountdownText(text: '${prestige.rebirthStones}P'),
               ],
             ],
           ),

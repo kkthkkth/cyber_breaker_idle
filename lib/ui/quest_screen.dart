@@ -7,18 +7,21 @@ import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 import 'battle_pass_screen.dart';
 
-/// 퀘스트 화면 — 일일/주간 탭으로 나뉘어 목표 진행도 프로그레스 바를
-/// 보여주고, 달성한 퀘스트는 [받기] 버튼으로 배틀패스 BP 경험치를
-/// 수령한다. 우측 상단 버튼으로 [BattlePassScreen]에 바로 진입할 수 있다.
+/// 퀘스트 화면 — 일일/주간/월간 3개 탭으로 나뉘어, 각 주기마다 DB
+/// 카탈로그([Quest])에서 무작위로 배정된 퀘스트([QuestManager
+/// .dailyQuests]/[weeklyQuests]/[monthlyQuests])의 진행도 프로그레스 바를
+/// 보여주고, 달성한 퀘스트는 [받기] 버튼으로 [Quest.rewardType]에 맞는
+/// 보상(골드/보석/BP/룬 조각 등)을 수령한다. 우측 상단 버튼으로
+/// [BattlePassScreen]에 바로 진입할 수 있다.
 class QuestScreen extends StatelessWidget {
   const QuestScreen({super.key});
 
   Future<void> _claim(BuildContext context, QuestDisplayItem item) async {
-    final bool success = await QuestManager.instance.claimQuest(item.quest.id);
-    if (!context.mounted || !success) {
+    final Quest? claimed = await QuestManager.instance.claimQuest(item.quest.id);
+    if (!context.mounted || claimed == null) {
       return;
     }
-    showCenterToast(context, '배틀패스 경험치 +${item.quest.rewardBp} BP 획득!');
+    showCenterToast(context, '${claimed.rewardLabel} 획득!');
   }
 
   @override
@@ -28,10 +31,11 @@ class QuestScreen extends StatelessWidget {
       builder: (context, _) {
         final List<QuestDisplayItem> dailyItems = QuestManager.instance.dailyQuests;
         final List<QuestDisplayItem> weeklyItems = QuestManager.instance.weeklyQuests;
+        final List<QuestDisplayItem> monthlyItems = QuestManager.instance.monthlyQuests;
         final BattlePassManager battlePass = BattlePassManager.instance;
 
         return DefaultTabController(
-          length: 2,
+          length: 3,
           child: Scaffold(
             backgroundColor: const Color(0xFF14141C),
             appBar: AppBar(
@@ -52,6 +56,7 @@ class QuestScreen extends StatelessWidget {
                 tabs: [
                   Tab(text: '일일'),
                   Tab(text: '주간'),
+                  Tab(text: '월간'),
                 ],
               ),
             ),
@@ -116,6 +121,11 @@ class QuestScreen extends StatelessWidget {
                       _QuestListView(
                         items: weeklyItems,
                         emptyMessage: '이번 주 퀘스트를 불러오는 중이에요.',
+                        onClaim: (item) => _claim(context, item),
+                      ),
+                      _QuestListView(
+                        items: monthlyItems,
+                        emptyMessage: '이번 달 퀘스트를 불러오는 중이에요.',
                         onClaim: (item) => _claim(context, item),
                       ),
                     ],
@@ -187,7 +197,7 @@ class _QuestTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.quest.title,
+                  item.quest.description,
                   style: TextStyle(
                     color: claimed ? Colors.white38 : Colors.white,
                     fontWeight: FontWeight.bold,
@@ -207,7 +217,7 @@ class _QuestTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${item.progress.currentCount} / ${item.quest.targetCount} · 보상 ${item.quest.rewardBp} BP',
+                  '${item.progress.currentCount} / ${item.quest.targetCount} · 보상 ${item.quest.rewardLabel}',
                   style: const TextStyle(color: Colors.white54, fontSize: 11),
                 ),
               ],

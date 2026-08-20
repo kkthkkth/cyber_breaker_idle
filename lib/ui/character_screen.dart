@@ -15,6 +15,7 @@ import 'consumable_inventory_screen.dart';
 import 'crafting_screen.dart';
 import 'item_detail_dialog.dart';
 import 'rune_screen.dart';
+import 'title_screen.dart';
 
 class CharacterScreen extends StatefulWidget {
   const CharacterScreen({super.key});
@@ -204,6 +205,19 @@ class _CharacterScreenState extends State<CharacterScreen> {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (context) => const RuneScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.military_tech,
+                        label: '칭호',
+                        accentColor: const Color(0xFFC9A24B),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const TitleScreen(),
                           ),
                         ),
                       ),

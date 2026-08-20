@@ -33,6 +33,10 @@ class DungeonRewardManager {
   /// 호출할 때 쓰는 던전 타입 키.
   static const String guildVictorySanctuary = 'guild_victory_sanctuary';
 
+  /// "차원의 균열"(하루 한 번 로그라이크 모드)이 [RiftManager.endRun]에서
+  /// 도달한 층수만큼 반복 호출할 때 쓰는 던전 타입 키.
+  static const String dimensionalRift = 'dimensional_rift';
+
   final Random _random = Random();
 
   List<DungeonRewardConfigEntry> _config = const [];

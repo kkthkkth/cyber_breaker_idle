@@ -12,7 +12,8 @@
       "Bash(grep -rn \"class PopScope\" \"/c/flutter/packages/flutter/lib/src/\" 2>/dev/null)",
       "Read(//c/flutter/packages/flutter/lib/src//**)",
       "Bash(flutter pub *)",
-      "Bash(dart format *)"
+      "Bash(dart format *)",
+      "Bash(git log *)"
     ]
   }
 }

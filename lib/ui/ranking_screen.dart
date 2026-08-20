@@ -8,6 +8,7 @@ import '../managers/ranking_manager.dart';
 import '../managers/supabase_manager.dart';
 import '../models/ranking_model.dart';
 import '../utils/number_formatter.dart';
+import '../widgets/user_avatar.dart';
 
 /// 홈 화면의 트로피 버튼 등 여러 진입점에서 공통으로 부르는 진입 함수 —
 /// 랭킹은 항목이 많고(최대 100명 + 내 순위 바) 필터/새로고침 상호작용이
@@ -252,6 +253,8 @@ class _TopRankTile extends StatelessWidget {
       child: Row(
         children: [
           Text(_medal, style: const TextStyle(fontSize: 26)),
+          const SizedBox(width: 8),
+          UserAvatar(characterId: entry.equippedCharacter, size: 38),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -325,6 +328,8 @@ class _RankTile extends StatelessWidget {
               style: const TextStyle(color: Colors.white54, fontWeight: FontWeight.bold),
             ),
           ),
+          UserAvatar(characterId: entry.equippedCharacter, size: 32),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -388,6 +393,8 @@ class _MyRankBar extends StatelessWidget {
               style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 14),
             ),
           ),
+          UserAvatar(characterId: entry.equippedCharacter, size: 36),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

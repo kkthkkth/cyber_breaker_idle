@@ -17,6 +17,7 @@ import '../managers/game_manager.dart';
 import '../managers/guild_manager.dart';
 import '../managers/mission_manager.dart';
 import '../managers/potion_manager.dart';
+import '../managers/rift_manager.dart';
 import '../managers/skill_manager.dart';
 import '../managers/sound_manager.dart';
 import '../managers/speed_manager.dart';
@@ -49,6 +50,11 @@ enum GameMode {
   weekdayDungeon,
   guildRaid,
   guildWar,
+  /// "차원의 균열" — 하루 한 번 즐기는 로그라이크 모드([RiftManager] 참고).
+  /// 다른 던전 모드와 달리 시간제한이 아니라 몬스터 처치(층 클리어)/
+  /// [RiftManager.riftHp] 소진으로 끝나고, 스탯도 [GameManager]가 아니라
+  /// [RiftManager]의 균열 전용 기본 스탯 + 임시 유물 버프를 쓴다.
+  dimensionalRift,
 }
 
 /// 메인 스테이지 전용 조우 상태 — [GameMode.mainStage]일 때만 의미가
@@ -251,6 +257,13 @@ class IdleGame extends FlameGame {
   /// 승리자의 성소 전용 — 길드전 승리 배지와 같은 화려한 금색으로,
   /// "전쟁에서 승리한 길드만 들어올 수 있는 특별한 자리"라는 느낌을 준다.
   static const Color _guildVictorySanctuaryMonsterColor = Color(0xFFFFD700);
+
+  /// 차원의 균열 — 일반 전투는 차분한 남보라색, 엘리트 전투는 위협적인
+  /// 진자주색(+💀 이모지), 확정 보스(10층/20층)는 핏빛 진홍색(+👹
+  /// 이모지)으로 한눈에 구분한다.
+  static const Color _riftNormalMonsterColor = Color(0xFF4A3F8C);
+  static const Color _riftEliteMonsterColor = Color(0xFF8C1F8C);
+  static const Color _riftBossMonsterColor = Color(0xFF7A0F1F);
 
   static const double _goldDungeonDuration = 60.0;
   static const double _equipDungeonDuration = 60.0;
@@ -814,6 +827,31 @@ class IdleGame extends FlameGame {
           color: _guildWarBaseColor,
           emoji: '🏰',
         );
+      case GameMode.dimensionalRift:
+        // 시간제한 없음 — 몬스터 처치(성공) 또는 RiftManager.riftHp 소진
+        // (실패)으로만 끝난다. update()가 이 값을 `> 0`으로만 확인하므로
+        // 0 이하 아무 값이나 "무제한"을 뜻한다.
+        dungeonTimeRemaining = -1;
+        _spawnDungeonMonster(
+          hp: RiftManager.instance.currentMonsterMaxHp,
+          color: RiftManager.instance.isBossBattle
+              ? _riftBossMonsterColor
+              : (RiftManager.instance.isEliteBattle
+                    ? _riftEliteMonsterColor
+                    : _riftNormalMonsterColor),
+          emoji: RiftManager.instance.isBossBattle
+              ? '👹'
+              : (RiftManager.instance.isEliteBattle ? '💀' : ''),
+        );
+        // 10층/20층 확정 보스 조우 — 메인 스테이지 보스전 진입 때 쓰는
+        // 기존 경고 연출([_checkBossStageEntered])을 그대로 재사용한다.
+        // 메인 스테이지는 "false→true 전환"을 감지해서 한 번만 띄우지만,
+        // 균열은 전투마다 새 IdleGame 인스턴스로 시작하므로(=이 메서드가
+        // 호출되는 시점 자체가 항상 "막 시작") 전환 감지 없이 곧장
+        // 한 번만 추가하면 된다.
+        if (RiftManager.instance.isBossBattle) {
+          add(BossWarningText(screenSize: size));
+        }
       case GameMode.mainStage:
         break;
     }
@@ -930,6 +968,8 @@ class IdleGame extends FlameGame {
         _updateAutoPotion(combatDt);
         _checkStageRegression();
       }
+    } else if (mode == GameMode.dimensionalRift) {
+      _updateRiftCombat(combatDt);
     } else if (dungeonTimeRemaining > 0) {
       dungeonTimeRemaining -= combatDt;
       if (dungeonTimeRemaining <= 0) {
@@ -985,6 +1025,38 @@ class IdleGame extends FlameGame {
     }
   }
 
+  /// [GameMode.dimensionalRift] 전용 몬스터 공격 루프 — 메인 스테이지의
+  /// "몬스터 공격 타이머" 블록(위 [update] 참고)과 같은 구조지만,
+  /// [GameManager] 대신 [RiftManager.resolveMonsterAttack]/
+  /// [RiftManager.riftHp]를 쓴다. 다른 던전 모드와 달리 이 모드만 플레이어가
+  /// 실제로 피해를 입는다 — 나머지 던전은 전부 시간제한으로만 끝난다.
+  void _updateRiftCombat(double combatDt) {
+    if (_monsterDying) {
+      return;
+    }
+    _monsterAttackTimer += combatDt;
+    final double monsterInterval = 1 / RiftManager.instance.monsterAttackSpeed;
+    if (_monsterAttackTimer >= monsterInterval) {
+      _monsterAttackTimer -= monsterInterval;
+      final result = RiftManager.instance.resolveMonsterAttack();
+      _spawnPlayerCombatText(
+        evaded: result.evaded,
+        isCritical: result.isCritical,
+        damage: result.damageDealt,
+      );
+      if (result.playerDefeated) {
+        // riftHp 소진 — 메인 스테이지의 화면 페이드 연출 없이(이 모드
+        // 전용 화면인 RiftBattleScreen이 곧장 종료 결과를 보여준다) 바로
+        // 던전 실패로 종료한다.
+        _endDungeon(success: false, goldReward: 0);
+        return;
+      }
+      if (result.damageDealt > 0) {
+        onPlayerHit?.call(result.damageDealt);
+      }
+    }
+  }
+
   /// 프레임 하나 동안 몇 번 발사해야 하는지와, 다음 프레임으로 넘길 잔여
   /// 누적 시간을 계산하는 순수 함수 — [update]에서 Flame 컴포넌트 상태 없이
   /// 독립적으로 테스트할 수 있도록 분리해 뒀다.
@@ -1029,7 +1101,12 @@ class IdleGame extends FlameGame {
   /// .attack_type`)가 명시적으로 결정한다 — [classType]은 이제 원거리일 때
   /// 투사체 비주얼([visualFor])을 고르는 용도로만 남는다.
   void _fireProjectile() {
-    final ({double damage, bool isCritical, bool evaded}) result = manager.rollAttack();
+    // 차원의 균열은 메인 스탯이 아니라 균열 전용 기본 스탯 + 임시 유물
+    // 버프로 데미지를 굴린다([RiftManager] 문서 참고) — 그 외 모든 모드
+    // (메인 스테이지 포함 다른 던전들)는 예전처럼 GameManager의 실제
+    // 스탯을 그대로 쓴다.
+    final ({double damage, bool isCritical, bool evaded}) result =
+        mode == GameMode.dimensionalRift ? RiftManager.instance.rollAttack() : manager.rollAttack();
     final CharacterClass classType = _equippedCharacterClass;
     final AttackType attackType = CharacterMetaManager.instance.attackTypeFor(_equippedCharacterId);
 
@@ -1099,8 +1176,13 @@ class IdleGame extends FlameGame {
       unawaited(SoundManager.instance.playHit());
     }
     // 흡혈(GameManager.lifeSteal, 유물 ArtifactStat.lifeStealPercent 포함) —
-    // 대부분의 경우 0이라 조용히 아무 일도 하지 않는다.
-    manager.applyLifeSteal(damage);
+    // 대부분의 경우 0이라 조용히 아무 일도 하지 않는다. 차원의 균열은
+    // RiftManager.riftHp를 회복시키는 자체 흡혈 스탯을 쓴다.
+    if (mode == GameMode.dimensionalRift) {
+      RiftManager.instance.applyLifeSteal(damage);
+    } else {
+      manager.applyLifeSteal(damage);
+    }
 
     if (mode == GameMode.mainStage) {
       final ({Equipment? droppedItem, int goldReward}) hitResult =
@@ -1336,6 +1418,14 @@ class IdleGame extends FlameGame {
           color: _guildWarBaseColor,
           emoji: '🏰',
         );
+      case GameMode.dimensionalRift:
+        // 길드 던전과 같은 "처치=이 층 클리어" 구조 — 자동 재생성하지
+        // 않고 곧장 성공 종료 콜백으로 넘긴다. 다음 층으로 이어가는
+        // 루프(유물 선택 → 다음 갈림길)는 RiftBattleScreen이 이 콜백을
+        // 받아 화면 전환으로 처리한다(RiftManager는 재화/유물 상태만
+        // 관장할 뿐, 다음 층 몬스터 스폰은 새 RiftBattleScreen이 새
+        // IdleGame으로 다시 시작한다).
+        _endDungeon(success: true, goldReward: 0);
       case GameMode.mainStage:
         break;
     }

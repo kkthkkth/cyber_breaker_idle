@@ -21,7 +21,9 @@ import 'managers/dungeon_reward_manager.dart';
 import 'managers/encyclopedia_manager.dart';
 import 'managers/equipment_manager.dart';
 import 'managers/equipment_set_manager.dart';
+import 'managers/friend_manager.dart';
 import 'managers/game_manager.dart';
+import 'managers/guide_mission_manager.dart';
 import 'managers/guild_manager.dart';
 import 'managers/guild_raid_manager.dart';
 import 'managers/guild_war_manager.dart';
@@ -40,6 +42,7 @@ import 'managers/potion_manager.dart';
 import 'managers/prestige_manager.dart';
 import 'managers/profile_manager.dart';
 import 'managers/quest_manager.dart';
+import 'managers/rift_manager.dart';
 import 'managers/rookie_attendance_manager.dart';
 import 'managers/rune_manager.dart';
 import 'managers/skill_manager.dart';
@@ -47,17 +50,22 @@ import 'managers/sound_manager.dart';
 import 'managers/speed_manager.dart';
 import 'managers/story_manager.dart';
 import 'managers/supabase_manager.dart';
+import 'managers/title_manager.dart';
 import 'managers/tower_floor_manager.dart';
+import 'managers/trade_manager.dart';
 import 'managers/tutorial_manager.dart';
 import 'managers/weekday_dungeon_manager.dart';
 import 'managers/world_boss_manager.dart';
 import 'models/consumable_item_model.dart';
 import 'models/equipment.dart';
 import 'models/story_model.dart';
+import 'models/title_model.dart';
+import 'models/trade_model.dart';
 import 'widgets/tutorial_overlay.dart';
 import 'ui/character_screen.dart';
 import 'ui/comprehensive_stats_dialog.dart';
 import 'ui/dungeon_screen.dart';
+import 'ui/friend_screen.dart';
 import 'ui/guild_screen.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
@@ -66,6 +74,7 @@ import 'ui/offline_reward_dialog.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_screen.dart';
 import 'ui/top_bar.dart';
+import 'ui/trade_screen.dart';
 import 'utils/number_formatter.dart';
 import 'widgets/center_toast.dart';
 import 'widgets/story_dialog_widget.dart';
@@ -193,6 +202,15 @@ Future<void> main() async {
   // 보상 트랙(레벨/exp)이 먼저 로드돼 있어야 한다.
   await BattlePassManager.instance.loadData();
   await QuestManager.instance.loadData();
+  await GuideMissionManager.instance.loadData();
+  await RiftManager.instance.loadData();
+  await TitleManager.instance.loadData();
+  await TradeManager.instance.loadData();
+  // 친구 목록/받은 요청은 다른 유저와 함께 바뀌는 서버 전용 상태라
+  // 로컬 저장이 없다 — 부팅 시 한 번 미리 불러 둬야 앱바 친구 버튼
+  // 배지(받은 요청 수)가 화면을 열기 전에도 정확하다. 부팅을 막지
+  // 않도록 await하지 않는다.
+  unawaited(FriendManager.instance.loadAll());
   MidnightResetManager.instance.start();
   await TutorialManager.instance.loadData();
   unawaited(SoundManager.instance.playLobbyBgm());
@@ -249,17 +267,31 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       // 디바운스된(최대 2초) 퀘스트 진행도 동기화가 그 시간을 못 채우고
       // 앱이 죽는 것을 막는다 — QuestManager.flushPendingSync 문서 참고.
       unawaited(QuestManager.instance.flushPendingSync());
-      // 요구사항: "게임 종료 후 8시간 뒤 ➡️ 영웅들이 지쳤습니다!..." — 앱을
-      // 내릴 때마다 예약하고(다시 내릴 때마다 이전 예약을 덮어쓴다),
-      // 포그라운드로 돌아오면([resumed]) 곧바로 취소한다.
-      NotificationManager.instance.scheduleOfflineReminder();
+    }
+
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      // 요구사항: "백그라운드로 내려가거나 종료될 때(paused, detached)
+      // 오프라인 보상 MAX(24시간)/차원의 균열 충전(다음 자정) 알림을
+      // 예약" — 내려갈 때마다 다시 계산해서 예약한다(다시 내릴 때마다
+      // 이전 예약을 덮어쓴다).
+      unawaited(NotificationManager.instance.scheduleOfflineReminder());
+      unawaited(NotificationManager.instance.scheduleRiftReminder());
+      // 요구사항: "paused 될 때도 한 번 더 업데이트" — 친구 목록의 온라인
+      // 판정(profiles.last_seen 5분 이내)이 "마지막으로 본 시각"에
+      // 최대한 가깝도록, 백그라운드로 내려가는 순간에도 한 번 더
+      // 갱신해 둔다(하트비트 주기 최대 2분 오차를 줄인다).
+      unawaited(SupabaseManager.instance.updateLastSeen());
     } else if (state == AppLifecycleState.resumed) {
       // 백그라운드에 있던 동안엔 startLastSeenHeartbeat()의 주기 타이머가
       // 계속 돌긴 하지만(모바일 OS가 지연시킬 수 있다), 포그라운드로
       // 돌아온 순간 즉시 한 번 더 갱신해 "접속중" 표시가 최대한 빨리
       // 정확해지게 한다.
       SupabaseManager.instance.updateLastSeen();
-      NotificationManager.instance.cancelOfflineReminder();
+      // 요구사항: "resumed면 예약된 모든 로컬 알림을 취소" — cancelAll이
+      // 매주 반복되는 길드 전쟁 알림도 함께 지우므로, 곧바로 다시
+      // 예약해 둔다(NotificationManager.cancelAllReminders 문서 참고).
+      unawaited(NotificationManager.instance.cancelAllReminders());
+      unawaited(NotificationManager.instance.scheduleWeeklyWarStartReminder());
     }
   }
 
@@ -424,6 +456,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     OfflineRewardManager.instance.onRewardCalculated = _showOfflineRewardDialog;
     GameManager.instance.onChapterAdvanced = _onChapterAdvanced;
     GameManager.instance.onBossStageEntered = _onBossStageEntered;
+    // GuideMissionBanner(홈 탭 내부 위젯)의 "바로가기" 버튼이 하단 탭을
+    // 직접 전환할 방법이 없어([GuideMissionManager.onRequestTabSwitch]
+    // 문서 참고) 기존 탭 탭(_onItemTapped)을 그대로 연결한다 — 튜토리얼
+    // 진행 로직까지 동일하게 타므로 별도 처리가 필요 없다.
+    GuideMissionManager.instance.onRequestTabSwitch = _onItemTapped;
+    // 칭호 자동 획득 순간 토스트 — GameManager.onChapterAdvanced와 같은
+    // 콜백 연결 관례(TitleManager.checkAndGrantTitles는 BuildContext가
+    // 없는 매니저 계층에서 호출되므로, 실제 토스트는 화면 계층인 여기서
+    // 띄운다).
+    TitleManager.instance.onTitleGranted = _onTitleGranted;
+    // 받은 거래 요청 팝업 — 화면과 무관하게 앱이 켜져 있는 동안 항상
+    // 뜰 수 있어야 하므로(TradeManager.loadData가 이미 전역 구독을
+    // 시작해 뒀다) 어느 탭에 있든 유효한 이 계층에서 처리한다.
+    TradeManager.instance.onIncomingTradeRequest = _onIncomingTradeRequest;
     // Cold-start check — didChangeAppLifecycleState only fires on later
     // resumes, not on the very first launch.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -439,6 +485,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
     if (identical(GameManager.instance.onBossStageEntered, _onBossStageEntered)) {
       GameManager.instance.onBossStageEntered = null;
+    }
+    if (identical(GuideMissionManager.instance.onRequestTabSwitch, _onItemTapped)) {
+      GuideMissionManager.instance.onRequestTabSwitch = null;
+    }
+    if (identical(TradeManager.instance.onIncomingTradeRequest, _onIncomingTradeRequest)) {
+      TradeManager.instance.onIncomingTradeRequest = null;
+    }
+    if (identical(TitleManager.instance.onTitleGranted, _onTitleGranted)) {
+      TitleManager.instance.onTitleGranted = null;
     }
     super.dispose();
   }
@@ -545,6 +600,31 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       return;
     }
     Future.microtask(() => _presentBossIntro(chapter, bossIntro));
+  }
+
+  void _onTitleGranted(PlayerTitle title) {
+    if (!mounted) {
+      return;
+    }
+    showCenterToast(context, '새 칭호 "${title.name}"을(를) 획득했습니다!');
+  }
+
+  /// [TradeManager.onIncomingTradeRequest] 콜백 — 요청자 닉네임을 조회한
+  /// 뒤([FriendManager]가 이미 쓰던 [SupabaseManager.fetchProfilesByIds]를
+  /// 재사용) 수락/거절 팝업을 띄운다.
+  Future<void> _onIncomingTradeRequest(TradeSession request) async {
+    if (!mounted) {
+      return;
+    }
+    final List<Map<String, dynamic>> profiles =
+        await SupabaseManager.instance.fetchProfilesByIds([request.userA]);
+    if (!mounted) {
+      return;
+    }
+    final String nickname = profiles.isEmpty
+        ? '익명의 모험가'
+        : (profiles.first['nickname'] as String? ?? '익명의 모험가');
+    await showIncomingTradeRequestDialog(context, request: request, requesterNickname: nickname);
   }
 
   /// [chapter]의 오프닝을 전체 화면 라우트로 띄운다. 끝나면(완주/스킵
@@ -766,6 +846,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               },
             ),
           ),
+          // 친구 목록/온라인 상태 진입점 — 예전엔 이 앱바에 톱니바퀴(설정)
+          // 아이콘이 있었지만 프로필 다이얼로그 헤더로 옮겨갔다(위 leading
+          // 문서 참고) — 우측 끝에 새 친구 버튼을 둔다.
+          const FriendHudButton(),
         ],
       ),
       body: IndexedStack(

@@ -4,10 +4,15 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../utils/time_util.dart';
+
 /// 기기 로컬 예약 알림(서버 푸시/FCM 아님)을 관장하는 싱글턴 — 유저가
-/// 앱을 백그라운드로 내리거나(오프라인 보상 리마인드) 광고를 시청한
-/// 직후(무료 보상 리마인드) 특정 시간 뒤에, 또는 매주 토요일 저녁(길드
-/// 전쟁 시작 알림)처럼 정해진 "요일+시각"에 울리도록 예약한다.
+/// 앱을 백그라운드로 내리거나(오프라인 보상 MAX/차원의 균열 리마인드)
+/// 광고를 시청한 직후(무료 보상 리마인드) 특정 시간 뒤에, 또는 매주
+/// 토요일 저녁(길드 전쟁 시작 알림)처럼 정해진 "요일+시각"에 울리도록
+/// 예약한다. [MyApp.didChangeAppLifecycleState]가 포그라운드(resumed)로
+/// 돌아올 때마다 [cancelAllReminders]로 전부 정리하고, 백그라운드로
+/// 내려갈 때마다([paused]/[detached]) 다시 예약한다.
 ///
 /// [flutter_local_notifications]는 Android/iOS/macOS/Linux는 지원하지만
 /// Windows는 지원하지 않는다 — 이 프로젝트가 Windows/Web 빌드도 함께
@@ -31,13 +36,19 @@ class NotificationManager {
   /// id로 덮어써져 알림이 여러 개 쌓이지 않는다.
   static const int adRewardNotificationId = 1001;
 
-  /// 앱을 백그라운드로 내린 뒤 8시간 후 오프라인 보상 리마인드 — 포그라운드로
-  /// 복귀하면([cancelOfflineReminder]) 곧바로 취소된다.
+  /// 앱을 백그라운드로 내린 시점부터 정확히 24시간 후(=[OfflineRewardManager
+  /// .config]의 기본 `maxOfflineHours`와 같은 값 — 오프라인 보상 누적이
+  /// 상한에 도달하는 바로 그 순간) 오프라인 보상 리마인드. 포그라운드로
+  /// 복귀하면([cancelAllReminders]) 곧바로 취소된다.
   static const int offlineRewardNotificationId = 1002;
 
   /// 매주 토요일 20:50(전쟁 시작 10분 전) 리마인드 — [DateTimeComponents
   /// .dayOfWeekAndTime]로 한 번만 예약하면 매주 자동으로 반복된다.
   static const int warStartNotificationId = 1003;
+
+  /// 차원의 균열([RiftManager])의 하루 무료 입장이 리셋되는 다음 자정
+  /// 리마인드.
+  static const int riftNotificationId = 1004;
 
   static const AndroidNotificationDetails _androidDetails = AndroidNotificationDetails(
     'cyberbreaker_reminders',
@@ -147,15 +158,49 @@ class NotificationManager {
     body: '상점에서 무료 보상을 다시 받을 수 있습니다!',
   );
 
-  /// 요구사항 예시: "게임 종료 후 8시간 뒤 ➡️ 영웅들이 지쳤습니다! 접속해서
-  /// 오프라인 보상을 수령하세요." — 앱이 백그라운드로 내려갈 때마다
-  /// 호출한다.
+  /// 요구사항: "오프라인 보상 MAX(24시간) — 오프라인 보상이 가득 찼습니다!
+  /// 접속해서 전리품을 수령하세요." — 앱을 백그라운드로 내린 시점부터
+  /// 정확히 24시간 뒤에 울린다. [OfflineRewardManager.config]의 기본
+  /// `maxOfflineHours`도 24시간이라, 이 알림이 울리는 시점이 정확히
+  /// 오프라인 보상 누적이 상한에 도달하는 순간과 같다. 앱이 백그라운드로
+  /// 내려갈 때마다 호출한다(다시 내릴 때마다 이전 예약을 덮어쓴다).
   Future<void> scheduleOfflineReminder() => _scheduleIn(
     id: offlineRewardNotificationId,
-    delay: const Duration(hours: 8),
-    title: '영웅들이 지쳤습니다!',
-    body: '영웅들이 지쳤습니다! 접속해서 오프라인 보상을 수령하세요.',
+    delay: const Duration(hours: 24),
+    title: '오프라인 보상이 가득 찼어요!',
+    body: '오프라인 보상이 가득 찼습니다! 접속해서 전리품을 수령하세요.',
   );
+
+  /// 요구사항: "차원의 균열 충전 — 차원의 균열에 새로운 틈이 열렸습니다.
+  /// 지금 도전하세요!" — [RiftManager]의 하루 무료 입장이 초기화되는
+  /// "다음 자정"에 울린다. 기기 시계 조작을 막기 위해 자정 판정 자체는
+  /// [getNetworkTime](NTP)으로 하되, 실제 알림이 울릴 시각은 그 날짜를
+  /// 기기의 실제 시간대([tz.local], [init]이 등록)로 변환해 표현한다 —
+  /// [RiftManager.checkAndResetDailyTicket]과 정확히 같은 "오늘" 판정
+  /// 기준을 쓰므로, 알림이 울리는 시점과 실제로 입장권이 리셋되는 시점이
+  /// 어긋나지 않는다. 앱이 백그라운드로 내려갈 때마다 호출한다(다시 내릴
+  /// 때마다 "다음 자정"을 새로 계산해 덮어쓴다).
+  Future<void> scheduleRiftReminder() async {
+    if (!isSupportedPlatform || !_isInitialized) {
+      return;
+    }
+    try {
+      final DateTime now = await getNetworkTime();
+      final tz.TZDateTime nextLocalMidnight =
+          tz.TZDateTime(tz.local, now.year, now.month, now.day + 1);
+      await _plugin.zonedSchedule(
+        riftNotificationId,
+        '차원의 균열이 열렸습니다!',
+        '차원의 균열에 새로운 틈이 열렸습니다. 지금 도전하세요!',
+        nextLocalMidnight,
+        _details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    } catch (error) {
+      debugPrint('[NotificationManager] 차원의 균열 알림 예약 실패: $error');
+    }
+  }
 
   /// 요구사항: "토요일 오후 8시 50분(시작 10분 전)에 '곧 길드 전쟁이
   /// 시작됩니다!' 로컬 푸시 알림" — [DateTimeComponents.dayOfWeekAndTime]로
@@ -194,17 +239,21 @@ class NotificationManager {
     return candidate;
   }
 
-  /// 포그라운드로 복귀했을 때 대기 중인 오프라인 보상 리마인드를 취소한다
-  /// — 이미 돌아왔는데 몇 시간 뒤 뜬금없이 "접속해서 수령하세요" 알림이
-  /// 오는 것을 막는다.
-  Future<void> cancelOfflineReminder() async {
+  /// 포그라운드로 복귀했을 때 예약된 모든 리마인드를 한 번에 취소한다
+  /// (요구사항: "resumed면 예약된 모든 로컬 알림을 취소") — 이미
+  /// 돌아왔는데 나중에 뜬금없이 "접속하세요" 알림이 오는 것을 막는다.
+  /// 매주 반복되는 길드 전쟁 알림([scheduleWeeklyWarStartReminder])도
+  /// 함께 취소되므로, [MyApp.didChangeAppLifecycleState]가 이 호출
+  /// 직후 그 알림을 곧바로 다시 예약해 둔다(안 그러면 앱을 계속 켜 둔
+  /// 채로 한 주가 지나갈 경우 그 주의 길드 전쟁 알림을 영영 못 받는다).
+  Future<void> cancelAllReminders() async {
     if (!isSupportedPlatform || !_isInitialized) {
       return;
     }
     try {
-      await _plugin.cancel(offlineRewardNotificationId);
+      await _plugin.cancelAll();
     } catch (error) {
-      debugPrint('[NotificationManager] 오프라인 보상 알림 취소 실패: $error');
+      debugPrint('[NotificationManager] 전체 알림 취소 실패: $error');
     }
   }
 }

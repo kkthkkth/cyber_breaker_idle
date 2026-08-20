@@ -12,6 +12,7 @@ import 'guild_raid_screen.dart';
 import 'guild_shop_screen.dart';
 import 'guild_treasury_screen.dart';
 import 'guild_war_screen.dart';
+import 'trade_screen.dart';
 
 /// 가입 상태 전용 — 상단 헤더(엠블럼/이름/레벨/exp바/공지) + 출석체크
 /// 버튼 + 하단 4개 탭(길드원 목록/길드 버프/길드 상점/길드 던전)으로
@@ -666,8 +667,14 @@ class _MemberTile extends StatelessWidget {
     // 길드장 전용 정보라 요구사항대로 뷰어(나) 기준으로 판단한다 —
     // member.role이 아니라 GuildManager.instance.isMaster(내 직책).
     final bool showLastSeenToViewer = GuildManager.instance.isMaster;
+    final bool isSelf = member.userId == SupabaseManager.instance.currentUserId;
 
-    return Container(
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: isSelf
+          ? null
+          : () => requestTradeWith(context, userId: member.userId, nickname: member.nickname),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -758,6 +765,7 @@ class _MemberTile extends StatelessWidget {
               ],
             ),
         ],
+      ),
       ),
     );
   }

@@ -245,6 +245,169 @@ class SupabaseManager {
     _lastSeenTimer = null;
   }
 
+  // ── 친구 시스템 (FriendManager 전용) ──────────────────────────────
+  //
+  // `friendships`(`user_id` 요청자, `friend_id` 대상, `status` 'pending'|
+  // 'accepted') 하나로 요청/수락/친구 목록을 전부 표현한다 — 거절은 행
+  // 삭제로 처리한다(거절 기록을 남길 필요가 없다는 판단). 온라인 상태/
+  // 닉네임/전투력은 전부 이미 있는 `profiles` 테이블(닉네임/combat_power/
+  // last_seen 이미 관리 중)을 그대로 재사용한다 — 별도 유저 테이블을
+  // 새로 두지 않았다.
+  static const String _friendshipsTable = 'friendships';
+
+  /// 닉네임에 [query]가 포함된 유저를 검색한다(대소문자 무시), 최대 20명,
+  /// 본인은 제외. [query]가 정확한 유저 id와도 일치하면 그 결과도 함께
+  /// 포함한다(요구사항: "닉네임이나 유저 ID를 검색").
+  Future<List<Map<String, dynamic>>> searchProfilesForFriend(String query) async {
+    final String trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      return const [];
+    }
+    final String? userId = currentUserId;
+    try {
+      final Map<String, Map<String, dynamic>> byId = {};
+
+      final List<dynamic> byNickname = await _client
+          .from(_profilesTable)
+          .select('id, nickname, combat_power, equipped_character')
+          .ilike('nickname', '%$trimmed%')
+          .limit(20);
+      for (final dynamic row in byNickname.cast<Map<String, dynamic>>()) {
+        byId[row['id'] as String] = row;
+      }
+
+      // id.eq 필터는 값이 uuid 형식이 아니면 그 자체로 쿼리가 실패하므로,
+      // 닉네임 검색과 하나의 or() 절로 묶지 않고 완전히 독립된 별도
+      // 조회로 분리한다(형식이 안 맞으면 이 조회만 조용히 건너뛴다).
+      const String uuidPattern =
+          r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
+      if (RegExp(uuidPattern).hasMatch(trimmed)) {
+        final Map<String, dynamic>? byExactId = await _client
+            .from(_profilesTable)
+            .select('id, nickname, combat_power, equipped_character')
+            .eq('id', trimmed)
+            .maybeSingle();
+        if (byExactId != null) {
+          byId[byExactId['id'] as String] = byExactId;
+        }
+      }
+
+      byId.remove(userId);
+      return byId.values.toList();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 유저 검색 실패: $error');
+      return const [];
+    }
+  }
+
+  /// 현재 유저가 요청자(user_id)이거나 대상(friend_id)인 모든 friendships
+  /// 행 — pending/accepted 구분 없이 전부 가져온 뒤 [FriendManager]가
+  /// 클라이언트에서 내 친구 목록/받은 요청으로 나눈다. 결합 OR 필터
+  /// 대신 두 번의 단순 eq 조회로 나눈 이유는 [searchProfilesForFriend]와
+  /// 같다 — 이 프로젝트에서 검증된 필터 방식만 쓴다.
+  Future<List<Map<String, dynamic>>> fetchMyFriendshipRows() async {
+    final String? userId = currentUserId;
+    if (userId == null) {
+      return const [];
+    }
+    try {
+      final List<dynamic> asRequester =
+          await _client.from(_friendshipsTable).select().eq('user_id', userId);
+      final List<dynamic> asTarget =
+          await _client.from(_friendshipsTable).select().eq('friend_id', userId);
+      return [
+        ...asRequester.cast<Map<String, dynamic>>(),
+        ...asTarget.cast<Map<String, dynamic>>(),
+      ];
+    } catch (error) {
+      debugPrint('[SupabaseManager] 친구 관계 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// [targetUserId]에게 친구 요청을 보낸다(status='pending') — 중복 요청
+  /// 방지는 [FriendManager.sendFriendRequest]가 [fetchMyFriendshipRows]로
+  /// 이미 확인한 뒤에만 이 메서드를 부르므로 여기서는 다시 확인하지
+  /// 않는다.
+  Future<bool> sendFriendRequest(String targetUserId) async {
+    final String? userId = currentUserId;
+    if (userId == null) {
+      return false;
+    }
+    try {
+      await _client.from(_friendshipsTable).insert({
+        'user_id': userId,
+        'friend_id': targetUserId,
+        'status': 'pending',
+      });
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 친구 요청 전송 실패: $error');
+      return false;
+    }
+  }
+
+  /// [requesterId]가 나(friend_id)에게 보낸 pending 요청을 accepted로
+  /// 바꾼다 — 이 한 행이 양쪽 [fetchMyFriendshipRows] 조회에 모두
+  /// 잡히므로, 별도로 반대 방향 행을 추가로 만들 필요가 없다.
+  Future<bool> acceptFriendRequest(String requesterId) async {
+    final String? userId = currentUserId;
+    if (userId == null) {
+      return false;
+    }
+    try {
+      await _client
+          .from(_friendshipsTable)
+          .update({'status': 'accepted'})
+          .eq('user_id', requesterId)
+          .eq('friend_id', userId)
+          .eq('status', 'pending');
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 친구 요청 수락 실패: $error');
+      return false;
+    }
+  }
+
+  /// [requesterId]가 나에게 보낸 pending 요청을 거절(=행 삭제)한다.
+  Future<bool> declineFriendRequest(String requesterId) async {
+    final String? userId = currentUserId;
+    if (userId == null) {
+      return false;
+    }
+    try {
+      await _client
+          .from(_friendshipsTable)
+          .delete()
+          .eq('user_id', requesterId)
+          .eq('friend_id', userId)
+          .eq('status', 'pending');
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 친구 요청 거절 실패: $error');
+      return false;
+    }
+  }
+
+  /// [ids]에 해당하는 프로필들의 닉네임/전투력/최종 접속 시각 — 친구
+  /// 목록/받은 요청 탭이 [fetchMyFriendshipRows]로 얻은 유저 id들을
+  /// 한 번에 조회할 때 쓴다.
+  Future<List<Map<String, dynamic>>> fetchProfilesByIds(List<String> ids) async {
+    if (ids.isEmpty) {
+      return const [];
+    }
+    try {
+      final List<dynamic> rows = await _client
+          .from(_profilesTable)
+          .select('id, nickname, combat_power, last_seen, equipped_character')
+          .inFilter('id', ids);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 프로필 일괄 조회 실패: $error');
+      return const [];
+    }
+  }
+
   /// [nickname]이 이미 다른 유저가 쓰고 있는지 확인한 뒤, 비어있으면 현재
   /// 유저의 `profiles.nickname`을 갱신한다.
   ///
@@ -401,7 +564,7 @@ class SupabaseManager {
     try {
       final List<dynamic> rows = await _client
           .from(_profilesTable)
-          .select('id, nickname, highest_reached_chapter, prestige_count')
+          .select('id, nickname, highest_reached_chapter, prestige_count, equipped_character')
           .order('highest_reached_chapter', ascending: false)
           .order('prestige_count', ascending: false)
           .limit(100);
@@ -421,7 +584,7 @@ class SupabaseManager {
     try {
       final List<dynamic> rows = await _client
           .from(_profilesTable)
-          .select('id, nickname, highest_tower_floor')
+          .select('id, nickname, highest_tower_floor, equipped_character')
           .order('highest_tower_floor', ascending: false)
           .limit(100);
       return rows.cast<Map<String, dynamic>>();
@@ -475,10 +638,10 @@ class SupabaseManager {
     }
   }
 
-  /// 현재 유저의 `profiles.prestige_count`/`prestige_core_points`(오버클럭
-  /// 실행 횟수/누적 코어 포인트, 둘 다 기본 0) — 못 불러오면 null(호출부가
-  /// 로컬 캐시를 유지).
-  Future<({int count, int corePoints})?> fetchPrestigeData() async {
+  /// 현재 유저의 `profiles.prestige_count`/`prestige_core_points`(환생
+  /// 실행 횟수/누적 환생석 — 컬럼명은 하위 호환을 위해 그대로 유지, 둘 다
+  /// 기본 0) — 못 불러오면 null(호출부가 로컬 캐시를 유지).
+  Future<({int count, int stones})?> fetchPrestigeData() async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -494,10 +657,10 @@ class SupabaseManager {
       }
       return (
         count: (row['prestige_count'] as num?)?.toInt() ?? 0,
-        corePoints: (row['prestige_core_points'] as num?)?.toInt() ?? 0,
+        stones: (row['prestige_core_points'] as num?)?.toInt() ?? 0,
       );
     } catch (error) {
-      debugPrint('[SupabaseManager] 오버클럭 데이터 조회 실패: $error');
+      debugPrint('[SupabaseManager] 환생 데이터 조회 실패: $error');
       return null;
     }
   }
@@ -505,7 +668,7 @@ class SupabaseManager {
   /// `profiles.prestige_count`/`prestige_core_points`를 덮어쓴다 —
   /// [updateHighestTowerFloor]와 같은 "로컬이 먼저 확정한 값을 그대로
   /// push" 관례. [PrestigeManager.prestige]가 성공할 때마다 호출한다.
-  Future<void> updatePrestigeData({required int count, required int corePoints}) async {
+  Future<void> updatePrestigeData({required int count, required int stones}) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -513,10 +676,10 @@ class SupabaseManager {
       }
       await _client
           .from(_profilesTable)
-          .update({'prestige_count': count, 'prestige_core_points': corePoints})
+          .update({'prestige_count': count, 'prestige_core_points': stones})
           .eq('id', userId);
     } catch (error) {
-      debugPrint('[SupabaseManager] 오버클럭 데이터 동기화 실패: $error');
+      debugPrint('[SupabaseManager] 환생 데이터 동기화 실패: $error');
     }
   }
 
@@ -727,6 +890,334 @@ class SupabaseManager {
     }
   }
 
+  // ── 일반 장비 서버 동기화 (거래 시스템 전제 조건) ────────────────────
+  //
+  // [syncUserPets]/[fetchUserPets]와 완전히 같은 shape/로직을 펫이 아닌
+  // 나머지 장비 전체에 그대로 적용한다 — 이미 검증된 diff-upsert 동시성
+  // 패턴을 재사용할 뿐, 새로 설계하지 않는다(주석도 동일하게 적용된다:
+  // "전부 삭제 후 재삽입"이 아니라 "사라진 것만 삭제 + 나머지 upsert"라
+  // saveEquipment()가 겹쳐 불려도 안전하다). 이 테이블은 [TradeManager]가
+  // "이 아이템은 지금 누구 소유"를 서버에서 판단하기 위한 미러일 뿐 —
+  // 게임 로직 자체는 여전히 로컬(SharedPreferences)을 1차 신뢰 소스로
+  // 쓴다([EquipmentManager] 문서 참고, 이 동기화는 fire-and-forget이라
+  // 실패해도 로컬 플레이에 영향이 없다).
+  static const String _userEquipmentTable = 'user_equipment';
+
+  /// 현재 유저가 보유한 펫 이외 장비 전체(`user_equipment`, 각 행의
+  /// `data`가 [Equipment.toJson] 결과) — 실패하면 빈 리스트.
+  Future<List<Map<String, dynamic>>> fetchUserEquipment() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows =
+          await _client.from(_userEquipmentTable).select('id, data').eq('user_id', userId);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 장비 목록 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// 현재 유저의 `user_equipment` 행을 [items]로 맞춘다 — [syncUserPets]
+  /// 문서의 동시성 주의사항이 그대로 적용된다.
+  Future<void> syncUserEquipment(List<Map<String, dynamic>> items) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      if (items.isEmpty) {
+        await _client.from(_userEquipmentTable).delete().eq('user_id', userId);
+        return;
+      }
+
+      final List<Object> currentIds = [
+        for (final Map<String, dynamic> item in items) item['id'] as Object,
+      ];
+      await _client
+          .from(_userEquipmentTable)
+          .delete()
+          .eq('user_id', userId)
+          .not('id', 'in', currentIds);
+
+      await _client.from(_userEquipmentTable).upsert([
+        for (final Map<String, dynamic> item in items)
+          {'id': item['id'], 'user_id': userId, 'data': item},
+      ], onConflict: 'id');
+    } catch (error) {
+      debugPrint('[SupabaseManager] 장비 목록 동기화 실패: $error');
+    }
+  }
+
+  // ── 1:1 아이템 거래 (TradeManager 전용) ────────────────────────────
+  //
+  // profiles.allow_trade(boolean, 기본 false), trade_daily_count(user_id,
+  // trade_date, count — 요일 던전과 같은 날짜 키 패턴), trades(id, user_a
+  // 요청자, user_b 대상, status, locked_a, locked_b), trade_items(id,
+  // trade_id, owner_user_id, equipment_id → user_equipment(id)) — 실제
+  // 컬럼/제약은 supabase/trade_reference.sql 참고. 실제 아이템 이전은
+  // execute_trade RPC(SECURITY DEFINER, 트랜잭션+행 잠금) 안에서만
+  // 일어난다 — 이 클래스의 다른 메서드들은 요청/세션 상태만 다루고
+  // 소유권을 직접 바꾸지 않는다.
+  static const String _tradesTable = 'trades';
+  static const String _tradeItemsTable = 'trade_items';
+  static const String _tradeDailyCountTable = 'trade_daily_count';
+
+  Future<bool> fetchAllowTrade(String userId) async {
+    try {
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('allow_trade')
+          .eq('id', userId)
+          .maybeSingle();
+      return row?['allow_trade'] as bool? ?? false;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 허용 여부 조회 실패: $error');
+      return false;
+    }
+  }
+
+  Future<void> updateAllowTrade(bool value) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_profilesTable).update({'allow_trade': value}).eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 허용 여부 갱신 실패: $error');
+    }
+  }
+
+  /// 오늘(UTC 기준 `current_date`) 내가 완료한 거래 횟수 — 하루 3회 제한
+  /// 표시/사전 확인용(최종 판정은 RPC가 다시 한다).
+  Future<int> fetchTradeCountToday() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return 0;
+      }
+      final String today = DateTime.now().toUtc().toIso8601String().split('T').first;
+      final Map<String, dynamic>? row = await _client
+          .from(_tradeDailyCountTable)
+          .select('count')
+          .eq('user_id', userId)
+          .eq('trade_date', today)
+          .maybeSingle();
+      return (row?['count'] as num?)?.toInt() ?? 0;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 오늘 거래 횟수 조회 실패: $error');
+      return 0;
+    }
+  }
+
+  /// [targetUserId]에게 거래 요청을 보낸다(`status='pending'`) — 성공하면
+  /// 새로 생긴 [TradeSession] 행, 실패하면 null.
+  Future<Map<String, dynamic>?> createTradeRequest(String targetUserId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final Map<String, dynamic> row = await _client
+          .from(_tradesTable)
+          .insert({
+            'user_a': userId,
+            'user_b': targetUserId,
+            'status': 'pending',
+          })
+          .select()
+          .single();
+      return row;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 요청 전송 실패: $error');
+      return null;
+    }
+  }
+
+  /// 내가 받은 pending 거래 요청 전체.
+  Future<List<Map<String, dynamic>>> fetchIncomingTradeRequests() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows = await _client
+          .from(_tradesTable)
+          .select()
+          .eq('user_b', userId)
+          .eq('status', 'pending');
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 받은 거래 요청 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchTradeSession(String tradeId) async {
+    try {
+      final Map<String, dynamic>? row =
+          await _client.from(_tradesTable).select().eq('id', tradeId).maybeSingle();
+      return row;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 세션 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// 요청을 수락(`status='active'`)하거나 거절/취소(`status='cancelled'`)한다.
+  Future<bool> updateTradeStatus(String tradeId, String status) async {
+    try {
+      await _client.from(_tradesTable).update({'status': status}).eq('id', tradeId);
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 상태 변경 실패: $error');
+      return false;
+    }
+  }
+
+  /// [isUserA]에 따라 `locked_a`/`locked_b` 중 내 쪽만 갱신한다 — 아이템이
+  /// 바뀌면(요구사항: "2단 잠금") 호출부가 false로 다시 부른다.
+  Future<bool> updateTradeLock(String tradeId, {required bool isUserA, required bool locked}) async {
+    try {
+      final String column = isUserA ? 'locked_a' : 'locked_b';
+      await _client.from(_tradesTable).update({column: locked}).eq('id', tradeId);
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 잠금 상태 변경 실패: $error');
+      return false;
+    }
+  }
+
+  /// [tradeId]에 올라간 아이템 전체 — `user_equipment(data)` 임베드로
+  /// 표시용 스냅샷까지 한 번에 가져온다(FK: trade_items.equipment_id →
+  /// user_equipment.id, guild_members→profiles 임베드와 같은 관례).
+  Future<List<Map<String, dynamic>>> fetchTradeItems(String tradeId) async {
+    try {
+      final List<dynamic> rows = await _client
+          .from(_tradeItemsTable)
+          .select('id, trade_id, owner_user_id, equipment_id, user_equipment(data)')
+          .eq('trade_id', tradeId);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 아이템 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// 내 아이템 [equipmentId]를 거래창에 올린다.
+  Future<bool> addTradeItem({required String tradeId, required String equipmentId}) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return false;
+      }
+      await _client.from(_tradeItemsTable).insert({
+        'trade_id': tradeId,
+        'owner_user_id': userId,
+        'equipment_id': equipmentId,
+      });
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 아이템 추가 실패: $error');
+      return false;
+    }
+  }
+
+  /// 거래창에서 [tradeItemId](trade_items 행 id, equipment_id 아님)를 뺀다.
+  Future<bool> removeTradeItem(String tradeItemId) async {
+    try {
+      await _client.from(_tradeItemsTable).delete().eq('id', tradeItemId);
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 아이템 제거 실패: $error');
+      return false;
+    }
+  }
+
+  /// [tradeId] 세션(trades 행 + trade_items 행)이 바뀔 때마다 [onChange]를
+  /// 부른다 — payload를 직접 다루지 않고 매번 전체 세션을 다시 불러오는
+  /// 쪽([TradeManager]이 담당)이, trade_items의 Realtime payload에는
+  /// user_equipment 임베드가 없어 어차피 다시 조회해야 하는 것보다
+  /// 단순하고 안전하다.
+  RealtimeChannel? subscribeToTradeSession(String tradeId, void Function() onChange) {
+    try {
+      return _client
+          .channel('trade_session_$tradeId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: _tradesTable,
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: tradeId,
+            ),
+            callback: (payload) => onChange(),
+          )
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: _tradeItemsTable,
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'trade_id',
+              value: tradeId,
+            ),
+            callback: (payload) => onChange(),
+          )
+          .subscribe();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 세션 구독 실패: $error');
+      return null;
+    }
+  }
+
+  /// 내가 대상(user_b)인 새 거래 요청이 들어올 때마다 [onInsert]를 부른다
+  /// — 앱이 켜져 있는 동안 항상 살아있는 전역 구독([startLastSeenHeartbeat]
+  /// 과 같은 "앱 생명주기 = 구독 생명주기" 관례).
+  RealtimeChannel? subscribeToIncomingTradeRequests(
+    String myUserId,
+    void Function(Map<String, dynamic> row) onInsert,
+  ) {
+    try {
+      return _client
+          .channel('trade_requests_$myUserId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: _tradesTable,
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_b',
+              value: myUserId,
+            ),
+            callback: (payload) => onInsert(payload.newRecord),
+          )
+          .subscribe();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 요청 구독 실패: $error');
+      return null;
+    }
+  }
+
+  /// 거래를 원자적으로 확정한다 — 실제 아이템 이전/소유권 재검증/등급
+  /// 재검증/일일 횟수 재검증까지 전부 execute_trade RPC(SECURITY DEFINER,
+  /// 트랜잭션+행 잠금, supabase/trade_reference.sql 참고) 안에서 일어난다.
+  /// 이 메서드는 그 RPC를 호출만 한다 — 실패(exception)하면 서버가 이미
+  /// 전체 롤백한 상태이므로 호출부는 실패 토스트만 띄우면 된다.
+  Future<bool> executeTrade(String tradeId) async {
+    try {
+      await _client.rpc('execute_trade', params: {'p_trade_id': tradeId});
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 거래 확정 실패: $error');
+      return false;
+    }
+  }
+
   /// 현재 유저의 `profiles.equipped_pet_id`(장착 중인 펫의 [Equipment.id],
   /// 없으면 null) — 못 불러오면 null(호출부가 미장착으로 안전하게 취급).
   Future<String?> fetchEquippedPetId() async {
@@ -758,6 +1249,112 @@ class SupabaseManager {
       await _client.from(_profilesTable).update({'equipped_pet_id': petId}).eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 장착 펫 id 동기화 실패: $error');
+    }
+  }
+
+  /// 장착 캐릭터가 바뀔 때마다([EquipmentManager.equipItem]) `profiles
+  /// .equipped_character`를 함께 갱신한다 — [characterId]는
+  /// [Equipment.gradeBadgeLabel](예: "N1", "SSR12")과 같은 형식.
+  /// 친구/랭킹 화면이 다른 유저의 대표 캐릭터 썸네일([CharacterFacePortrait])
+  /// 을 그릴 때 이 값을 읽는다.
+  Future<void> updateEquippedCharacter(String characterId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client
+          .from(_profilesTable)
+          .update({'equipped_character': characterId})
+          .eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 장착 캐릭터 동기화 실패: $error');
+    }
+  }
+
+  // ── 칭호 (TitleManager 전용) ────────────────────────────────────────
+  //
+  // title_catalog(`id`, `name`, `buff_type`, `buff_value`, `condition_type`,
+  // `condition_goal`, `webp_path`) — 로그인 여부와 무관한 공개 카탈로그.
+  // user_titles(`user_id`, `title_id`)로 보유 여부를, `profiles
+  // .equipped_title`로 장착 중인 칭호 하나를 관리한다.
+  static const String _titleCatalogTable = 'title_catalog';
+  static const String _userTitlesTable = 'user_titles';
+
+  /// 칭호 카탈로그 전체 — 로그인 여부와 무관한 공개 데이터.
+  Future<List<Map<String, dynamic>>> fetchTitleCatalog() async {
+    try {
+      final List<dynamic> rows = await _client.from(_titleCatalogTable).select();
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 칭호 카탈로그 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// 현재 유저가 보유한 칭호 id 전체.
+  Future<List<String>> fetchOwnedTitleIds() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows =
+          await _client.from(_userTitlesTable).select('title_id').eq('user_id', userId);
+      return [for (final dynamic row in rows) (row as Map<String, dynamic>)['title_id'] as String];
+    } catch (error) {
+      debugPrint('[SupabaseManager] 보유 칭호 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// 현재 유저의 `profiles.equipped_title`.
+  Future<String?> fetchEquippedTitle() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('equipped_title')
+          .eq('id', userId)
+          .maybeSingle();
+      return row?['equipped_title'] as String?;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 장착 칭호 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// [titleId] 칭호를 획득 처리한다(`user_titles`에 행 삽입) —
+  /// [TitleManager.checkAndGrantTitles]가 조건을 처음 만족한 순간 한 번만
+  /// 호출한다. 이미 보유 중이면(중복 삽입 시도) 조용히 실패해도 무방하다
+  /// (호출부가 로컬 보유 목록으로 이미 걸러낸 뒤에만 부른다).
+  Future<bool> grantTitle(String titleId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return false;
+      }
+      await _client.from(_userTitlesTable).insert({'user_id': userId, 'title_id': titleId});
+      return true;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 칭호 획득 기록 실패: $error');
+      return false;
+    }
+  }
+
+  /// [titleId]를 장착한다(null이면 해제) — `profiles.equipped_title` 갱신.
+  Future<void> updateEquippedTitle(String? titleId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_profilesTable).update({'equipped_title': titleId}).eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 장착 칭호 동기화 실패: $error');
     }
   }
 
@@ -2206,22 +2803,24 @@ class SupabaseManager {
     }
   }
 
-  // ── 일일 퀘스트 (QuestManager 전용) ────────────────────────────────
+  // ── 퀘스트 (QuestManager 전용) ────────────────────────────────────
   //
-  // `quests`/`user_quests` 컬럼은 요구사항에 명시되지 않은 부분(일일
-  // 리셋 커서 등)이 있어 이 장르에서 흔히 쓰는 최소 구성으로 가정했다:
-  // quests(`id`, `action_type`, `title`, `target_count`, `reward_bp`),
-  // user_quests(`user_id`, `quest_id`, `current_count`, `is_claimed`) —
-  // 실제 컬럼명이 다르면 이 섹션과 [Quest]/[QuestProgress].fromJson만
-  // 고치면 된다. `action_type` 값은 [QuestActionType] 상수와 서버 시드
-  // 데이터가 반드시 합의해야 한다.
-  static const String _questsTable = 'quests';
+  // quest_catalog(`id`, `period_type`, `action_type`, `target_count`,
+  // `reward_type`, `reward_amount`, `description`) — 일일/주간/월간
+  // 퀘스트 "풀"을 통째로 담은 공개 카탈로그. `user_quests`(`user_id`,
+  // `quest_id`, `current_count`, `is_claimed`)는 그 풀에서 실제로 이
+  // 유저에게 배정된 항목만 행으로 갖는다 — 배정 여부 자체를 별도 컬럼이
+  // 아니라 "행이 존재하는지"로 표현한다([QuestManager] 참고). 실제
+  // 컬럼명이 다르면 이 섹션과 [Quest]/[QuestProgress].fromJson만 고치면
+  // 된다. `action_type`/`reward_type` 값은 [QuestActionType]/
+  // [QuestRewardType] 상수와 서버 시드 데이터가 반드시 합의해야 한다.
+  static const String _questCatalogTable = 'quest_catalog';
   static const String _userQuestsTable = 'user_quests';
 
-  /// 오늘의 퀘스트 카탈로그 — 로그인 여부와 무관한 공개 데이터.
+  /// 일일/주간/월간 퀘스트 풀 전체 — 로그인 여부와 무관한 공개 데이터.
   Future<List<Map<String, dynamic>>> fetchQuestCatalog() async {
     try {
-      final List<dynamic> rows = await _client.from(_questsTable).select();
+      final List<dynamic> rows = await _client.from(_questCatalogTable).select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 퀘스트 카탈로그 조회 실패: $error');
@@ -2229,7 +2828,7 @@ class SupabaseManager {
     }
   }
 
-  /// 현재 유저의 오늘 진행도 전체(`quest_id` -> 행).
+  /// 현재 유저에게 배정된 퀘스트 전체와 그 진행도.
   Future<List<Map<String, dynamic>>> fetchUserQuests() async {
     try {
       final String? userId = currentUserId;
@@ -2245,11 +2844,11 @@ class SupabaseManager {
     }
   }
 
-  /// 여러 퀘스트의 진행도를 한 번의 요청으로 갱신한다 — [QuestManager]가
-  /// 짧은 시간에 몰리는 진행도 갱신(예: 몬스터 연속 처치)을 모아서 이
-  /// 메서드 한 번으로 흘려보낸다(매 처치마다 네트워크 요청을 쏘지
-  /// 않기 위함). [rows]의 각 항목은 `{quest_id, current_count, is_claimed}`
-  /// 형태다.
+  /// 여러 퀘스트의 진행도를 한 번의 요청으로 갱신(또는 새로 배정된
+  /// 퀘스트를 진행도 0으로 최초 생성)한다 — [QuestManager]가 짧은 시간에
+  /// 몰리는 진행도 갱신(예: 몬스터 연속 처치)을 모아서 이 메서드 한 번으로
+  /// 흘려보낸다(매 처치마다 네트워크 요청을 쏘지 않기 위함). [rows]의 각
+  /// 항목은 `{quest_id, current_count, is_claimed}` 형태다.
   Future<void> upsertUserQuestProgressBatch(List<Map<String, dynamic>> rows) async {
     if (rows.isEmpty) {
       return;
@@ -2264,6 +2863,29 @@ class SupabaseManager {
           .upsert([for (final Map<String, dynamic> row in rows) {...row, 'user_id': userId}]);
     } catch (error) {
       debugPrint('[SupabaseManager] 퀘스트 진행도 일괄 동기화 실패: $error');
+    }
+  }
+
+  /// 주기가 리셋되어 재배정될 때, 이전에 배정돼 있던 [questIds]의 행을
+  /// 지운다 — [QuestManager]가 새 무작위 배정을 [upsertUserQuestProgressBatch]
+  /// 로 다시 삽입하기 직전에 호출한다(배정 해제 = 행 삭제라는 [QuestManager]
+  /// 관례를 서버에도 그대로 반영).
+  Future<void> deleteUserQuestsByIds(List<String> questIds) async {
+    if (questIds.isEmpty) {
+      return;
+    }
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client
+          .from(_userQuestsTable)
+          .delete()
+          .eq('user_id', userId)
+          .inFilter('quest_id', questIds);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 이전 배정 퀘스트 삭제 실패: $error');
     }
   }
 

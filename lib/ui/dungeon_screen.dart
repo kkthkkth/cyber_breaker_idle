@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../game/idle_game.dart';
 import '../managers/dungeon_manager.dart';
+import '../managers/rift_manager.dart';
 import '../managers/skill_manager.dart';
 import '../managers/sound_manager.dart';
 import '../managers/tower_floor_manager.dart';
@@ -17,6 +18,7 @@ import '../models/tower_floor_model.dart';
 import '../models/weekday_dungeon_model.dart';
 import 'arena_screen.dart';
 import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
+import 'rift_screen.dart';
 import 'top_bar.dart';
 import 'world_boss_entry_dialog.dart';
 import 'world_boss_ranking_dialog.dart';
@@ -59,7 +61,8 @@ class _DungeonScreenState extends State<DungeonScreen> {
       GameMode.guildVictorySanctuary ||
       GameMode.weekdayDungeon ||
       GameMode.guildRaid ||
-      GameMode.guildWar => null,
+      GameMode.guildWar ||
+      GameMode.dimensionalRift => null,
     };
 
     if (ticketType != null) {
@@ -223,9 +226,10 @@ class _DungeonScreenState extends State<DungeonScreen> {
   Widget build(BuildContext context) {
     final DungeonManager dungeonManager = DungeonManager.instance;
     final WeekdayDungeonManager weekdayDungeonManager = WeekdayDungeonManager.instance;
+    final RiftManager riftManager = RiftManager.instance;
 
     return AnimatedBuilder(
-      animation: Listenable.merge([dungeonManager, weekdayDungeonManager]),
+      animation: Listenable.merge([dungeonManager, weekdayDungeonManager, riftManager]),
       builder: (context, _) {
         return Scaffold(
           backgroundColor: const Color(0xFF14141C),
@@ -248,6 +252,24 @@ class _DungeonScreenState extends State<DungeonScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               const _WorldBossBanner(),
+              const SizedBox(height: 16),
+              _DungeonCard(
+                title: '차원의 균열',
+                description: riftManager.isActive
+                    ? '탐험이 진행 중입니다! (${riftManager.floor}/${RiftManager.maxFloor}층) '
+                          '균열 전용 스탯으로 즐기는 로그라이크 도전.'
+                    : '균열 전용 스탯 + 임시 유물로 즐기는 하루 한 번의 로그라이크 도전! '
+                          '체력이 0이 되거나 ${RiftManager.maxFloor}층을 클리어하면 종료됩니다.',
+                icon: Icons.blur_circular,
+                accentColor: const Color(0xFF8C1F8C),
+                buttonLabel: riftManager.isActive
+                    ? '이어하기'
+                    : (riftManager.hasFreeEntryToday ? '입장 (오늘 1회)' : '오늘 입장 완료'),
+                enabled: riftManager.isActive || riftManager.hasFreeEntryToday,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const RiftScreen()),
+                ),
+              ),
               const SizedBox(height: 16),
               _DungeonCard(
                 title: weekdayDungeonManager.todayConfig.name,
@@ -896,6 +918,10 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
         return '길드 전쟁';
       case GameMode.weekdayDungeon:
         return WeekdayDungeonManager.instance.todayConfig.name;
+      case GameMode.dimensionalRift:
+        // worldBoss와 같은 이유 — 전용 RiftBattleScreen이 따로 있어
+        // 실제로 이 값이 쓰이지 않는다.
+        return '차원의 균열';
       case GameMode.mainStage:
         return '';
     }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../managers/dungeon_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/game_manager.dart';
+import '../managers/trade_manager.dart';
 
 void showSettingsDialog(BuildContext context) {
   showDialog<void>(
@@ -156,6 +157,19 @@ class _SettingsDialog extends StatelessWidget {
               icon: Icons.privacy_tip,
               label: '개인정보 처리방침',
               onTap: () => _closeAndNotify(context, '준비 중입니다'),
+            ),
+            // 요구사항: "거래 허용을 켜고 끌 수 있게" — 켜져 있어야
+            // 다른 유저가 나에게 거래를 요청할 수 있다(TradeManager
+            // .requestTrade가 상대방 이 값을 먼저 확인한다).
+            AnimatedBuilder(
+              animation: TradeManager.instance,
+              builder: (context, _) => SwitchListTile(
+                secondary: const Icon(Icons.swap_horiz, color: Colors.white70),
+                title: const Text('거래 허용', style: TextStyle(color: Colors.white)),
+                activeThumbColor: const Color(0xFF6C4FCE),
+                value: TradeManager.instance.allowTrade,
+                onChanged: (value) => TradeManager.instance.setAllowTrade(value),
+              ),
             ),
             _SettingsTile(
               icon: Icons.save,

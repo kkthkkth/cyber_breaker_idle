@@ -9,13 +9,16 @@ import 'package:uuid/uuid.dart';
 import '../constants/item_pool_config.dart';
 import '../models/consumable_item_model.dart';
 import '../models/equipment.dart';
+import '../models/guide_mission_model.dart';
 import 'achievement_manager.dart';
 import 'character_manifest_manager.dart';
 import 'consumable_manager.dart';
 import 'game_manager.dart';
+import 'guide_mission_manager.dart';
 import 'pet_stat_metadata_manager.dart';
 import 'pity_manager.dart';
 import 'supabase_manager.dart';
+import 'title_manager.dart';
 
 class EquipmentManager extends ChangeNotifier {
   EquipmentManager._internal() {
@@ -116,6 +119,13 @@ class EquipmentManager extends ChangeNotifier {
     equippedItems[item.type] = item;
     notifyListeners();
     saveEquipment();
+
+    // 대표 캐릭터(친구/랭킹 화면의 아바타 썸네일 소스)가 바뀔 때마다
+    // profiles.equipped_character도 즉시 동기화한다 — updateEquippedPetId와
+    // 같은 관례.
+    if (item.type == EquipType.character) {
+      unawaited(SupabaseManager.instance.updateEquippedCharacter(item.gradeBadgeLabel));
+    }
   }
 
   void unequipItem(EquipType type) {
@@ -209,6 +219,10 @@ class EquipmentManager extends ChangeNotifier {
   /// 아닌 장비만 바뀐 호출이어도 매번 함께 동기화한다. 개별 변경마다
   /// "이번에 펫이 바뀌었는지"를 따로 추적하는 것보다 훨씬 단순하고, 펫
   /// 개수가 많지 않아(수십 마리 수준) 매번 통째로 보내도 부담이 적다.
+  /// 펫이 아닌 나머지 장비도 같은 방식으로 [_syncEquipmentToRemote]가
+  /// 함께 백업한다 — 거래 시스템([TradeManager])이 "이 장비는 지금 누구
+  /// 소유"를 서버에서 판단하려면 개별 행이 필요하기 때문이다(로컬이
+  /// 여전히 게임플레이의 1차 신뢰 소스라는 원칙 자체는 바뀌지 않는다).
   Future<void> saveEquipment() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final String inventoryJson = jsonEncode(
@@ -217,6 +231,7 @@ class EquipmentManager extends ChangeNotifier {
     await prefs.setString(_inventoryKey, inventoryJson);
     debugPrint('Equipment saved: ${inventory.length} items');
     unawaited(_syncPetsToRemote());
+    unawaited(_syncEquipmentToRemote());
   }
 
   /// 현재 보유 펫 전체와 장착 중인 펫 id를 Supabase에 백업한다 — 다른
@@ -229,6 +244,17 @@ class EquipmentManager extends ChangeNotifier {
         .toList();
     await SupabaseManager.instance.syncUserPets(pets);
     await SupabaseManager.instance.updateEquippedPetId(equippedItems[EquipType.pet]?.id);
+  }
+
+  /// 펫을 제외한 나머지 장비(무기/방어구/캐릭터/유물/휘장 등) 전체를
+  /// `user_equipment`에 백업한다 — [_syncPetsToRemote]와 완전히 같은
+  /// fire-and-forget 관례.
+  Future<void> _syncEquipmentToRemote() async {
+    final List<Map<String, dynamic>> items = inventory
+        .where((item) => item.type != EquipType.pet)
+        .map((item) => item.toJson())
+        .toList();
+    await SupabaseManager.instance.syncUserEquipment(items);
   }
 
   // equippedItems isn't persisted separately — it's fully derivable from
@@ -454,11 +480,20 @@ class EquipmentManager extends ChangeNotifier {
   /// 필드 드랍 등 가챠가 아닌 다른 경로도 함께 쓰므로 건드리지 않는다
   /// ([PityManager] 클래스 문서 참고).
   List<Equipment> drawMultipleGacha(int count) {
-    return List.generate(count, (_) {
+    // 초보자 가이드 미션("장비 N회 뽑기") 진행도 — 11연차 뽑기 한 번을
+    // count(11)만큼 한 번에 반영한다([GuideMissionManager.updateProgress]가
+    // 목표치에서 알아서 clamp하므로 목표가 1이든 3이든 안전하다).
+    GuideMissionManager.instance.updateProgress(GuideMissionActionType.equipmentGachaPull, count);
+    final List<Equipment> results = List.generate(count, (_) {
       AchievementManager.instance.recordGachaPull();
       final bool hitPity = PityManager.instance.rollAndConsumePity(GachaPityCategory.equipment);
       return hitPity ? _generatePityEquipmentLoot() : generateRandomLoot();
     });
+    // 칭호(Title) 자동 획득 판정 — 배치 전체가 끝난 뒤 최신
+    // totalGachaPulls 기준으로 한 번만 확인한다(개별 뽑기마다 확인해도
+    // 결과는 같지만 낭비).
+    TitleManager.instance.checkAndGrantTitles();
+    return results;
   }
 
   /// 장비 가챠 천장(확정) 지급 — [_gearTypes] 중 실제로 최고 등급 컨텐츠가

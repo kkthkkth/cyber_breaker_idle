@@ -49,6 +49,7 @@ class CustomSafeImage extends StatefulWidget {
     Key? key,
     required this.path,
     this.fallbackPath,
+    this.fallbackBuilder,
     this.width,
     this.height,
     this.fit = BoxFit.contain,
@@ -56,6 +57,13 @@ class CustomSafeImage extends StatefulWidget {
   }) : super(key: key ?? ValueKey('$path|$fallbackPath'));
 
   final String path;
+
+  /// [path](와 있다면 [fallbackPath]까지) 로드가 최종적으로 실패했을 때
+  /// 기본 회색 placeholder([_CustomSafeImageState._errorPlaceholder]) 대신
+  /// 보여줄 위젯 — 예: [TitleBadge]가 칭호 webp 로드 실패 시 이름 텍스트
+  /// 배지로 대체하는 용도. null이면(기본값) 기존과 동일하게 회색
+  /// placeholder를 그린다.
+  final WidgetBuilder? fallbackBuilder;
 
   /// [path] 로드가 실패하면(예: 아직 준비되지 않은 애니메이션 .webp, 디코딩
   /// 실패, 또는 타임아웃) 대신 시도할 경로 — 그마저 실패하면 최종적으로
@@ -142,6 +150,10 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
   }
 
   Widget _errorPlaceholder(BuildContext context) {
+    final WidgetBuilder? fallbackBuilder = widget.fallbackBuilder;
+    if (fallbackBuilder != null) {
+      return fallbackBuilder(context);
+    }
     return Container(
       width: widget.width,
       height: widget.height,
@@ -190,6 +202,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
     }
     return CustomSafeImage(
       path: fallback,
+      fallbackBuilder: widget.fallbackBuilder,
       width: widget.width,
       height: widget.height,
       fit: widget.fit,

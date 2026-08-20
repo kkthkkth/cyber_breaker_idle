@@ -11,10 +11,12 @@ import '../models/collection_model.dart';
 import '../models/combat_power_weights_model.dart';
 import '../models/equipment.dart';
 import '../models/equipment_set_model.dart';
+import '../models/guide_mission_model.dart';
 import '../models/pet_stat_metadata_model.dart';
 import '../models/quest_model.dart';
 import '../models/rune_model.dart';
 import '../models/skill_model.dart';
+import '../models/title_model.dart';
 import 'achievement_manager.dart';
 import 'artifact_manager.dart';
 import 'battle_pass_manager.dart';
@@ -23,6 +25,7 @@ import 'config_manager.dart';
 import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'equipment_set_manager.dart';
+import 'guide_mission_manager.dart';
 import 'guild_manager.dart';
 import 'guild_war_manager.dart';
 import 'monster_drop_manager.dart';
@@ -31,6 +34,7 @@ import 'quest_manager.dart';
 import 'rune_manager.dart';
 import 'skill_manager.dart';
 import 'supabase_manager.dart';
+import 'title_manager.dart';
 
 class GameManager extends ChangeNotifier {
   GameManager._internal() {
@@ -77,9 +81,21 @@ class GameManager extends ChangeNotifier {
   double monsterHp = 0;
   double monsterMaxHp = 0;
 
-  double baseAttackPower = 10;
-  double attackSpeed = 1.0;
-  double criticalRate = 0.05;
+  // 환생(PrestigeManager) 시 아래 7종 골드 강화 트랙(레벨+값)을 전부 이
+  // 초기값으로 되돌린다([resetForPrestige] 참고) — gold 자체는 이미 0으로
+  // 돌아가지만, 이미 구매해 둔 레벨/스탯 증분은 gold와 완전히 별개의
+  // 필드라 초기화해 주지 않으면 영구히 남는다.
+  static const double _baseAttackPowerDefault = 10;
+  static const double _attackSpeedDefault = 1.0;
+  static const double _criticalRateDefault = 0.05;
+  static const double _baseDefenseDefault = 0;
+  static const double _defenseRateDefault = 0.0;
+  static const double _evasionRateDefault = 0.0;
+  static const double _critDefenseRateDefault = 0.0;
+
+  double baseAttackPower = _baseAttackPowerDefault;
+  double attackSpeed = _attackSpeedDefault;
+  double criticalRate = _criticalRateDefault;
   double criticalMultiplier = 2.0;
 
   /// 장착 펫의 "크리티컬 데미지 증폭" 옵션까지 더한 최종 크리티컬 배율.
@@ -103,10 +119,10 @@ class GameManager extends ChangeNotifier {
   static const double _maxCriticalRate = 0.75;
 
   // ── 방어 스탯 4종 (골드로 업그레이드) ──────────────────────────────
-  double baseDefense = 0;
-  double defenseRate = 0.0;
-  double evasionRate = 0.0;
-  double critDefenseRate = 0.0;
+  double baseDefense = _baseDefenseDefault;
+  double defenseRate = _defenseRateDefault;
+  double evasionRate = _evasionRateDefault;
+  double critDefenseRate = _critDefenseRateDefault;
 
   int defenseLevel = 1;
   int defenseRateLevel = 1;
@@ -222,7 +238,8 @@ class GameManager extends ChangeNotifier {
       (baseMaxHp + _equippedCharacterStats.hp) *
       (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
       (1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.maxHpPercent, _equippedSetCounts)) *
-      (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent));
+      (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent)) *
+      (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent));
 
   /// 장착 세트별 부위 수 — [EquipmentSetManager.totalBonus] 호출마다 매번
   /// 새로 계산하지 않도록 한 곳에 모았다(EquipmentManager.equippedItems를
@@ -340,8 +357,8 @@ class GameManager extends ChangeNotifier {
     // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.attackBonus가
     // 0이라 곱산에 영향이 없다.
     power *= 1 + GuildManager.instance.attackBonus;
-    // 오버클럭(프레스티지) 누적 코어 포인트 버프 — 한 번도 오버클럭하지
-    // 않았으면 PrestigeManager.attackBonus가 0이라 곱산에 영향이 없다.
+    // 환생(프레스티지) 누적 환생석 버프 — 한 번도 환생하지 않았으면
+    // PrestigeManager.attackBonus가 0이라 곱산에 영향이 없다.
     power *= 1 + PrestigeManager.instance.attackBonus;
     // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
@@ -355,6 +372,9 @@ class GameManager extends ChangeNotifier {
     // 룬(공격형, 붉은 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
     power *= 1 + RuneManager.instance.totalBonus(RuneStat.attackPercent);
+    // 칭호(Title) 버프 — 장착 중인 칭호가 attack_percent 타입이 아니면
+    // bonusFor가 0이라 곱산에 영향이 없다.
+    power *= 1 + TitleManager.instance.bonusFor(TitleBuffType.attackPercent);
     return power;
   }
 
@@ -411,6 +431,9 @@ class GameManager extends ChangeNotifier {
     // 룬(방어형, 푸른 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
     value *= 1 + RuneManager.instance.totalBonus(RuneStat.defensePercent);
+    // 칭호(Title) 버프 — 장착 중인 칭호가 defense_percent 타입이 아니면
+    // bonusFor가 0이라 곱산에 영향이 없다.
+    value *= 1 + TitleManager.instance.bonusFor(TitleBuffType.defensePercent);
     return value;
   }
 
@@ -493,7 +516,7 @@ class GameManager extends ChangeNotifier {
   double get estimatedKillsPerHour => (effectiveAttackSpeed * 3600) / _averageHitsPerKill;
 
   /// [chapter]/[stage] 몬스터를 처치했을 때 실제로 받는 골드 — 기본 공식과
-  /// 펫/길드/오버클럭/유물 보너스 곱산 체인을 [_onMonsterDefeated]와
+  /// 펫/길드/환생/유물 보너스 곱산 체인을 [_onMonsterDefeated]와
   /// [offlineGoldPerMinute]가 공유한다(두 곳이 서로 다른 공식을 쓰다 밸런스가
   /// 어긋나는 일을 막기 위해 여기 하나로 모았다).
   int goldRewardForKill({required int chapter, required int stage}) {
@@ -508,8 +531,8 @@ class GameManager extends ChangeNotifier {
     // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.goldBonus가
     // 0이라 곱산에 영향이 없다.
     goldReward = (goldReward * (1 + GuildManager.instance.goldBonus)).round();
-    // 오버클럭(프레스티지) 누적 코어 포인트 버프 — 한 번도 오버클럭하지
-    // 않았으면 PrestigeManager.goldBonus가 0이라 곱산에 영향이 없다.
+    // 환생(프레스티지) 누적 환생석 버프 — 한 번도 환생하지 않았으면
+    // PrestigeManager.goldBonus가 0이라 곱산에 영향이 없다.
     goldReward = (goldReward * (1 + PrestigeManager.instance.goldBonus)).round();
     // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
@@ -527,13 +550,17 @@ class GameManager extends ChangeNotifier {
     // 별개 소스라(둘 다 0이 기본값) 곱산이 한 번 더 들어간다(요구사항:
     // "몬스터 처치 시 지급되는 최종 골드... 계산식에 이 비율을 곱해서").
     goldReward = (goldReward * (1 + goldGain)).round();
+    // 칭호(Title) 버프 — 장착 중인 칭호가 gold_gain_percent 타입이 아니면
+    // bonusFor가 0이라 곱산에 영향이 없다.
+    goldReward =
+        (goldReward * (1 + TitleManager.instance.bonusFor(TitleBuffType.goldGainPercent))).round();
     return goldReward;
   }
 
   /// 오프라인 방치 보상 전용 — [highestReachedChapter]의 "평균적인" 몬스터
   /// (서브스테이지 1~[maxStage]의 중간값)를 잡았을 때 골드 기준으로 분당
   /// 획득량을 추정한다. 실제 온라인 전투와 같은 공식+보너스 체인
-  /// ([goldRewardForKill])을 쓰므로, 오프라인 중에도 펫/길드/오버클럭/유물
+  /// ([goldRewardForKill])을 쓰므로, 오프라인 중에도 펫/길드/환생/유물
   /// 보너스가 그대로 반영된다.
   double get offlineGoldPerMinute {
     const double averageStage = (1 + maxStage) / 2;
@@ -709,16 +736,37 @@ class GameManager extends ChangeNotifier {
     saveGame();
   }
 
-  /// "오버클럭"(프레스티지) 실행 — [PrestigeManager.prestige]가 코어
-  /// 포인트를 정산한 직후 호출한다. 스테이지 진행도([chapter]/[stage])와
-  /// [gold]를 처음(1-1)으로 되돌리지만, [highestReachedChapter](역대 최고
-  /// 기록 — 다음 오버클럭 보상 계산의 기준)와 장비/캐릭터/보석/길드 등
-  /// "수집형" 진행도는 전혀 건드리지 않는다 — 되돌리는 건 오직 이번 판의
-  /// 스테이지 주행 기록뿐이다.
+  /// 환생(PrestigeManager) 실행 — [PrestigeManager.prestige]가 환생석을
+  /// 정산한 직후 호출한다. **초기화 대상**: 스테이지 진행도([chapter]/
+  /// [stage])와 [gold], 그리고 그 골드로 산 "캐릭터 기본 레벨" 7종
+  /// (공격력/공속/치명타 확률/방어력/방어율/회피율/치명타 저항 — 각각의
+  /// 레벨 카운터와 실제 스탯 증분 둘 다)을 전부 최초 상태로 되돌린다.
+  /// **보존 대상**([highestReachedChapter](역대 최고 기록 — 다음 환생
+  /// 보상 계산의 기준)과 보석/장비/캐릭터 등급/유물/펫/룬/도감/길드 등
+  /// "수집형" 진행도, 그리고 이 매니저 밖에 있는 QuestManager 진행도·
+  /// PrestigeManager의 누적 환생석/환생 횟수)는 이 메서드가 전혀 건드리지
+  /// 않는다 — 되돌리는 건 오직 이번 판의 스테이지 주행 기록과 그 골드로
+  /// 산 임시 전투력뿐이다.
   void resetForPrestige() {
     chapter = 1;
     stage = 1;
     gold = 0;
+
+    attackLevel = 1;
+    baseAttackPower = _baseAttackPowerDefault;
+    attackSpeedLevel = 1;
+    attackSpeed = _attackSpeedDefault;
+    criticalRateLevel = 1;
+    criticalRate = _criticalRateDefault;
+    defenseLevel = 1;
+    baseDefense = _baseDefenseDefault;
+    defenseRateLevel = 1;
+    defenseRate = _defenseRateDefault;
+    evasionRateLevel = 1;
+    evasionRate = _evasionRateDefault;
+    critDefenseRateLevel = 1;
+    critDefenseRate = _critDefenseRateDefault;
+
     currentHp = maxHp;
     _resetMonsterHp();
     notifyListeners();
@@ -773,6 +821,10 @@ class GameManager extends ChangeNotifier {
     // 이벤트라 QuestManager가 스스로 서버 동기화를 디바운스한다(여기서는
     // 그냥 부담 없이 매번 호출).
     QuestManager.instance.updateProgress(QuestActionType.monsterKill, 1);
+    // 초보자 가이드 미션("몬스터 N마리 처치") 진행도 — 위 일일 퀘스트와
+    // 똑같은 이벤트를 공유하지만 완전히 독립된 시스템(GuideMissionManager)
+    // 이라 서로 영향을 주지 않는다.
+    GuideMissionManager.instance.updateProgress(GuideMissionActionType.monsterKill, 1);
     // 업적("누적 몬스터 처치") 진행도 — 위 일일 퀘스트와 달리 자정에도
     // 리셋되지 않는 영구 누적값이다. AchievementManager도 로컬 저장만
     // 매번 하고 서버 동기화는 실제로 보상을 받을 때만 하므로 잦은 호출이
@@ -828,6 +880,15 @@ class GameManager extends ChangeNotifier {
     chapter = GameManager.chapterOf(nextAbsoluteStage);
     stage = GameManager.subStageOf(nextAbsoluteStage);
 
+    // 초보자 가이드 미션("N-M 스테이지 도달") 진행도 — 누적 카운트가
+    // 아니라 "지금까지 도달한 절대 스테이지"를 그대로 보고하는 이벤트라
+    // reportAbsoluteValue로만 반영된다([GuideMissionActionType.stageReached]
+    // 문서 참고).
+    GuideMissionManager.instance.reportAbsoluteValue(
+      GuideMissionActionType.stageReached,
+      nextAbsoluteStage,
+    );
+
     if (stage == 1) {
       // 새 챕터의 첫 스테이지(1-1, 11-1, 21-1...)에 "방금" 진입했다 —
       // 오프닝 스토리/배경 전환 트리거.
@@ -856,6 +917,14 @@ class GameManager extends ChangeNotifier {
       onBossStageEntered?.call(chapter);
     }
     _resetMonsterHp();
+
+    // 칭호(Title) 자동 획득 판정 — 이 시점이면 누적 몬스터 처치
+    // (AchievementManager.recordMonsterKill)와 최고 도달 챕터
+    // (highestReachedChapter, 방금 갱신됐을 수도 있다) 둘 다 이미
+    // 최신값이라, 두 조건 타입(monster_kill_count/highest_chapter)을
+    // 이 한 번의 호출로 함께 확인할 수 있다.
+    TitleManager.instance.checkAndGrantTitles();
+
     return (droppedItem: droppedItem, goldReward: goldReward);
   }
 
@@ -920,6 +989,9 @@ class GameManager extends ChangeNotifier {
     gold -= cost;
     attackLevel++;
     baseAttackPower += 5;
+    // 초보자 가이드 미션("공격력 N회 강화") 진행도 — 골드가 부족해 실패한
+    // 시도는(위 조기 return) 세지 않는다.
+    GuideMissionManager.instance.updateProgress(GuideMissionActionType.attackUpgrade, 1);
     notifyListeners();
     return true;
   }
@@ -959,6 +1031,8 @@ class GameManager extends ChangeNotifier {
     gold -= cost;
     defenseLevel++;
     baseDefense += 2;
+    // 초보자 가이드 미션("방어력 N회 강화") 진행도.
+    GuideMissionManager.instance.updateProgress(GuideMissionActionType.defenseUpgrade, 1);
     notifyListeners();
     return true;
   }
