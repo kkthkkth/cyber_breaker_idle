@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -87,7 +88,41 @@ class CollectionManager extends ChangeNotifier {
 
     notifyListeners();
     saveData();
+    unawaited(SupabaseManager.instance.syncCollectionCompletion(collection.id));
     return true;
+  }
+
+  /// `master_collections` 테이블이 아직 비어 있는(또는 없는) 환경에서도
+  /// 컬렉션 시스템을 바로 테스트할 수 있도록 준비한 더미 세트 2종 —
+  /// 요구사항 예시 그대로 "초보자의 검/방패"와 "슬라임 반지"를 담았다.
+  /// [loadData]가 로컬 캐시도 Supabase 정의도 둘 다 비어 있을 때만(=진짜
+  /// 첫 실행) 이걸로 대체하므로, 실제 `master_collections`에 행이 생기면
+  /// 자동으로 그쪽이 우선한다(id가 "dummy_"로 시작해 나중에 실제 정의와
+  /// 구분하기도 쉽다). 등급(N, "초보자"급/하급)만으로 매칭해서 — 아직
+  /// 이 게임에 "초보자의 검"/"슬라임 반지" 같은 개별 이름의 장비 넘버링
+  /// (subId)이 없어도 즉시 동작한다.
+  static List<CollectionModel> _buildDummyCollections() {
+    return [
+      CollectionModel(
+        id: 'dummy_novice_gear_set',
+        category: CollectionCategory.equipment,
+        title: '초보자의 장비 세트',
+        requiredItems: const [
+          RequiredCollectionItem(type: EquipType.weapon, grade: ItemGrade.n, count: 5),
+          RequiredCollectionItem(type: EquipType.shield, grade: ItemGrade.n, count: 5),
+        ],
+        rewardStat: const CollectionRewardStat(type: CollectionStatType.attackPower, value: 0.01),
+      ),
+      CollectionModel(
+        id: 'dummy_slime_ring_set',
+        category: CollectionCategory.equipment,
+        title: '슬라임 반지 컬렉션',
+        requiredItems: const [
+          RequiredCollectionItem(type: EquipType.ring, grade: ItemGrade.n, count: 3),
+        ],
+        rewardStat: const CollectionRewardStat(type: CollectionStatType.maxHpPercent, value: 0.02),
+      ),
+    ];
   }
 
   static const String _saveKey = 'collection_manager_save';
@@ -139,22 +174,34 @@ class CollectionManager extends ChangeNotifier {
     } else if (collections.isEmpty) {
       debugPrint(
         '[CollectionManager] master_collections 조회 결과가 비어 있습니다 '
-        '(네트워크 실패 또는 실제로 활성 세트가 없음) — 컬렉션이 빈 상태로 시작됩니다.',
+        '(네트워크 실패 또는 실제로 활성 세트가 없음) — 더미 세트로 대체합니다.',
       );
+      // 로컬 캐시도, 방금 받아온 Supabase 정의도 둘 다 비어 있다면
+      // `master_collections` 테이블이 아직 세팅되지 않은 환경이다 —
+      // 컬렉션 탭이 영영 빈 목록으로 남지 않도록 더미 세트로 대체한다
+      // ([ArtifactManager]/[PetStatMetadataManager]의 더미 폴백과 같은
+      // 이유·같은 조치).
+      collections = _buildDummyCollections();
     }
 
     final String? savedProgress = prefs.getString(_saveKey);
+    final Set<String> completedIds = {};
     if (savedProgress != null) {
       try {
         final Map<String, dynamic> data = jsonDecode(savedProgress) as Map<String, dynamic>;
-        final List<dynamic> completedIds = data['completedIds'] as List<dynamic>? ?? [];
-        for (final CollectionModel collection in collections) {
-          if (completedIds.contains(collection.id)) {
-            collection.isCompleted = true;
-          }
-        }
+        completedIds.addAll((data['completedIds'] as List<dynamic>? ?? []).cast<String>());
       } catch (error) {
         debugPrint('[CollectionManager] 로컬 진행 상태 데이터가 손상되어 건너뜁니다: $error');
+      }
+    }
+    // 다른 기기에서 이미 등록한 컬렉션도 놓치지 않도록 서버 완료 목록을
+    // 함께 합친다(요구사항: "요구량이 다 차면 DB에 완성 기록을 insert" —
+    // 그 기록을 다시 읽어오는 짝 역할).
+    completedIds.addAll(await SupabaseManager.instance.fetchUserCollections());
+
+    for (final CollectionModel collection in collections) {
+      if (completedIds.contains(collection.id)) {
+        collection.isCompleted = true;
       }
     }
     notifyListeners();

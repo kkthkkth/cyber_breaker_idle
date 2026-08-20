@@ -18,9 +18,11 @@ extension CollectionCategoryX on CollectionCategory {
 
 /// 도감 완성 보상으로 지급 가능한 영구 스탯 종류. 공격 계열(attackPower/
 /// criticalRate) 두 가지에 이어, 플레이어 HP 시스템 도입과 함께 방어
-/// 계열 4종(defense/defenseRate/evasionRate/critDefenseRate)도 지원한다 —
-/// 전부 GameManager의 "장착 여부와 무관하게 항상 합산되는" collectionBonuses
-/// 맵 하나로 처리된다.
+/// 계열 4종(defense/defenseRate/evasionRate/critDefenseRate), 그리고 최대
+/// 체력(maxHpPercent, 다른 %계열 최대체력 보너스와 같은 이름 관례 —
+/// ArtifactStat.maxHpPercent/EquipmentSetStat.maxHpPercent 참고)도
+/// 지원한다 — 전부 GameManager의 "장착 여부와 무관하게 항상 합산되는"
+/// collectionBonuses 맵 하나로 처리된다.
 enum CollectionStatType {
   attackPower,
   criticalRate,
@@ -28,6 +30,7 @@ enum CollectionStatType {
   defenseRate,
   evasionRate,
   critDefenseRate,
+  maxHpPercent,
 }
 
 extension CollectionStatTypeX on CollectionStatType {
@@ -45,6 +48,8 @@ extension CollectionStatTypeX on CollectionStatType {
         return '회피율';
       case CollectionStatType.critDefenseRate:
         return '크리티컬 방어율';
+      case CollectionStatType.maxHpPercent:
+        return '최대 체력';
     }
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../constants/story_data.dart';
@@ -5,6 +7,7 @@ import '../managers/collection_manager.dart';
 import '../managers/encyclopedia_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/main_story_manager.dart';
+import '../managers/sound_manager.dart';
 import '../managers/story_manager.dart';
 import '../models/collection_model.dart';
 import '../models/encyclopedia_model.dart';
@@ -666,6 +669,9 @@ class _CollectionListViewState extends State<_CollectionListView> {
     }
 
     if (_manager.register(collection)) {
+      // 등록 성공 "띠링!" 효과음(요구사항) — 실패해도(에셋 미비 등)
+      // SoundManager 내부에서 조용히 넘어가므로 등록 자체에는 영향이 없다.
+      unawaited(SoundManager.instance.playGachaReveal());
       showCenterToast(context, '${collection.title} 등록 완료!');
     } else {
       showCenterToast(context, '등록에 실패했습니다.');
@@ -754,6 +760,16 @@ class _CollectionCard extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                if (!collection.isCompleted) ...[
+                  const SizedBox(height: 8),
+                  // 요구 조건별 진행도(요구사항: "진행도(예: 3/5)를
+                  // 프로그레스 바 등으로") — 등록 자체는 한 번에
+                  // 원자적으로 이뤄지지만(부분 등록 없음), 지금 인벤토리에
+                  // 몇 개나 들고 있는지를 미리 보여주면 뭘 더 모아야
+                  // 하는지 한눈에 알 수 있다.
+                  for (final RequiredCollectionItem req in collection.requiredItems)
+                    _RequirementProgressRow(requirement: req),
+                ],
               ],
             ),
           ),
@@ -777,11 +793,11 @@ class _CollectionCard extends StatelessWidget {
 }
 
 /// [req]가 요구하는 타입/등급/넘버링(subId)/레벨 조건을 만족하는 미장착
-/// 인벤토리 아이템이 [req.count]개 이상 있는지 — CollectionManager의
-/// 등록 가능 검사와 같은 조건이지만, 이 화면(레드닷 표시)에서만 쓰는
-/// 슬롯 단위 판정이라 매니저를 건드리지 않고 여기서 직접 인벤토리를 본다.
-bool _canFulfillRequirement(RequiredCollectionItem req) {
-  final int matched = EquipmentManager.instance.inventory
+/// 인벤토리 아이템 수 — [CollectionManager._matches]와 같은 조건이지만,
+/// 이 화면(진행도/레드닷 표시)에서만 쓰는 판정이라 매니저를 건드리지
+/// 않고 여기서 직접 인벤토리를 본다.
+int _matchedCount(RequiredCollectionItem req) {
+  return EquipmentManager.instance.inventory
       .where(
         (item) =>
             !item.isEquipped &&
@@ -791,7 +807,69 @@ bool _canFulfillRequirement(RequiredCollectionItem req) {
             item.level >= req.requiredLevel,
       )
       .length;
-  return matched >= req.count;
+}
+
+/// [req]가 요구하는 조건을 만족하는 미장착 인벤토리 아이템이 [req.count]개
+/// 이상 있는지 — [_matchedCount]의 bool 버전.
+bool _canFulfillRequirement(RequiredCollectionItem req) => _matchedCount(req) >= req.count;
+
+/// 요구 조건 하나의 "N/M" 진행도 한 줄 — 아이템명(타입+등급)과 프로그레스
+/// 바를 함께 보여준다. [EquipmentManager]를 구독하지 않는 이유: 부모
+/// [_CollectionListView]가 이미 [EquipmentManager.instance]를 구독하고
+/// 있어 인벤토리가 바뀌면 이 위젯을 포함한 트리 전체가 다시 그려진다.
+class _RequirementProgressRow extends StatelessWidget {
+  const _RequirementProgressRow({required this.requirement});
+
+  final RequiredCollectionItem requirement;
+
+  @override
+  Widget build(BuildContext context) {
+    final int matched = _matchedCount(requirement);
+    final int required = requirement.count;
+    final bool fulfilled = matched >= required;
+    final String label = requirement.subId != null
+        ? '${requirement.type.displayName}${requirement.grade.displayName}${requirement.subId}'
+        : '${requirement.type.displayName}(${requirement.grade.displayName})';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 76,
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white54, fontSize: 10),
+            ),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: required <= 0 ? 1 : (matched / required).clamp(0.0, 1.0),
+                minHeight: 6,
+                backgroundColor: Colors.white12,
+                valueColor: AlwaysStoppedAnimation(
+                  fulfilled ? Colors.amberAccent : const Color(0xFF6C4FCE),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '${matched.clamp(0, required)}/$required',
+            style: TextStyle(
+              color: fulfilled ? Colors.amberAccent : Colors.white54,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// [req] 하나가 요구하는 개수(count)만큼 타일을 만든다. 아직 미완성인

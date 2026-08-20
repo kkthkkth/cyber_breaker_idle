@@ -50,6 +50,14 @@ class NotificationManager {
   /// 리마인드.
   static const int riftNotificationId = 1004;
 
+  /// 탐험(Expedition) 지역별 복귀 알림의 시작 id — 위 고정 id들(1001~1004)
+  /// 과 겹치지 않도록 충분히 떨어진 범위를 쓴다. [ExpeditionCatalog
+  /// .regions]의 인덱스를 더해 지역별로 서로 다른 id를 부여한다(요구사항
+  /// 예시가 지역 2~3개뿐이라 이 정도 범위로 충분하다) — 위 4개처럼 "종류당
+  /// 하나"가 아니라 "지역당 하나"라 여러 지역이 동시에 진행 중이어도 서로
+  /// 다른 예약을 독립적으로 유지/취소할 수 있다.
+  static const int expeditionReturnNotificationIdBase = 2000;
+
   static const AndroidNotificationDetails _androidDetails = AndroidNotificationDetails(
     'cyberbreaker_reminders',
     '보상 알림',
@@ -224,6 +232,37 @@ class NotificationManager {
       );
     } catch (error) {
       debugPrint('[NotificationManager] 길드 전쟁 알림 예약 실패: $error');
+    }
+  }
+
+  /// 요구사항: "ends_at 시간에 맞춰 '탐험대가 복귀했습니다!'라는 로컬
+  /// 푸시 알림을 스케줄링" — [ExpeditionManager.startExpedition]이 성공할
+  /// 때, 그리고 앱이 백그라운드로 내려갈 때마다(그 시점 기준 남은 시간으로
+  /// 다시) 호출한다. [regionIndex]는 [ExpeditionCatalog.regions]에서의
+  /// 위치 — 지역마다 고유한 id를 만드는 데 쓴다.
+  Future<void> scheduleExpeditionReturn({
+    required int regionIndex,
+    required Duration delay,
+    required String regionName,
+  }) => _scheduleIn(
+    id: expeditionReturnNotificationIdBase + regionIndex,
+    delay: delay,
+    title: '탐험대가 복귀했습니다!',
+    body: '$regionName 탐험을 마치고 돌아왔어요. 보상을 수령하세요!',
+  );
+
+  /// [ExpeditionManager.claimReward]가 보상을 수령한 직후 호출 — 이미
+  /// 지나간 예약이라 대부분은 조용히 아무 일도 안 하지만, 정확히 완료
+  /// 시각과 유저가 직접 확인해 즉시 수령한 시각이 겹치는 드문 경우에도
+  /// 중복 알림이 남지 않게 한다.
+  Future<void> cancelExpeditionReturn(int regionIndex) async {
+    if (!isSupportedPlatform || !_isInitialized) {
+      return;
+    }
+    try {
+      await _plugin.cancel(expeditionReturnNotificationIdBase + regionIndex);
+    } catch (error) {
+      debugPrint('[NotificationManager] 탐험 알림 취소 실패: $error');
     }
   }
 

@@ -683,6 +683,149 @@ class SupabaseManager {
     }
   }
 
+  static const String _userTalentsTable = 'user_talents';
+
+  /// 현재 유저의 `profiles.talent_points`(환생으로 지급되는 특성 포인트,
+  /// 기본 0) — 못 불러오면 null(호출부가 로컬 캐시를 유지).
+  Future<int?> fetchTalentPoints() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('talent_points')
+          .eq('id', userId)
+          .maybeSingle();
+      if (row == null) {
+        return null;
+      }
+      return (row['talent_points'] as num?)?.toInt() ?? 0;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 특성 포인트 조회 실패: $error');
+      return null;
+    }
+  }
+
+  /// `profiles.talent_points`를 덮어쓴다 — [updatePrestigeData]와 같은
+  /// "로컬이 먼저 확정한 값을 그대로 push" 관례. [TalentManager]가 포인트를
+  /// 지급하거나(환생) 소모할 때마다(레벨업) 호출한다.
+  Future<void> updateTalentPoints(int points) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_profilesTable).update({'talent_points': points}).eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 특성 포인트 동기화 실패: $error');
+    }
+  }
+
+  /// 현재 유저가 투자한 특성 노드별 레벨(`user_talents`, 각 행이 (node_id,
+  /// level) 하나) — 실패하면 빈 리스트(호출부가 로컬 캐시를 유지).
+  Future<List<Map<String, dynamic>>> fetchUserTalents() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows = await _client
+          .from(_userTalentsTable)
+          .select('node_id, level')
+          .eq('user_id', userId);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 특성 노드 목록 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// [TalentManager.levelUp]이 성공할 때마다 `user_talents`의 해당 노드
+  /// 행을 [level]로 맞춘다(upsert) — [syncUserSkill]과 같은 관례.
+  Future<void> syncUserTalent({required String nodeId, required int level}) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_userTalentsTable).upsert({
+        'user_id': userId,
+        'node_id': nodeId,
+        'level': level,
+      }, onConflict: 'user_id, node_id');
+    } catch (error) {
+      debugPrint('[SupabaseManager] 특성 노드 동기화 실패: $error');
+    }
+  }
+
+  static const String _userExpeditionsTable = 'user_expeditions';
+
+  /// 현재 유저의 진행 중(또는 완료했지만 아직 수령 전인) 탐험 임무 전체 —
+  /// 지역당 최대 1행([ExpeditionManager]가 region_id를 upsert 충돌 키로
+  /// 쓴다). 실패하면 빈 리스트(호출부가 로컬 캐시를 유지).
+  Future<List<Map<String, dynamic>>> fetchUserExpeditions() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows = await _client
+          .from(_userExpeditionsTable)
+          .select('region_id, unit_ids, start_time, is_collected')
+          .eq('user_id', userId);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 탐험 목록 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// [ExpeditionManager.startExpedition]이 성공할 때마다 호출 — 새 임무
+  /// 행을 insert(upsert)한다.
+  Future<void> syncExpeditionStart({
+    required String regionId,
+    required List<String> unitIds,
+    required DateTime startTime,
+  }) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_userExpeditionsTable).upsert({
+        'user_id': userId,
+        'region_id': regionId,
+        'unit_ids': unitIds,
+        'start_time': startTime.toIso8601String(),
+        'is_collected': false,
+      }, onConflict: 'user_id, region_id');
+    } catch (error) {
+      debugPrint('[SupabaseManager] 탐험 시작 동기화 실패: $error');
+    }
+  }
+
+  /// [ExpeditionManager.claimReward]가 성공할 때마다 호출 — 해당 지역
+  /// 행을 `is_collected = true`로 갱신한다(요구사항: "DB is_collected =
+  /// true 처리"). 그 다음 탐험이 다시 시작되면 [syncExpeditionStart]가
+  /// 같은 행을 새 값으로 다시 upsert하므로 별도 delete는 필요 없다.
+  Future<void> syncExpeditionCollected(String regionId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client
+          .from(_userExpeditionsTable)
+          .update({'is_collected': true})
+          .eq('user_id', userId)
+          .eq('region_id', regionId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 탐험 수령 동기화 실패: $error');
+    }
+  }
+
   /// 현재 유저의 `profiles.character_pity_count`/`pet_pity_count`/
   /// `equipment_pity_count`(가챠 종류별 천장 카운터, 전부 기본 0) — 못
   /// 불러오면 null(호출부가 로컬 캐시를 유지).
@@ -3052,6 +3195,51 @@ class SupabaseManager {
     } catch (error) {
       debugPrint('[SupabaseManager] 마스터 컬렉션 목록 조회 실패: $error');
       return const [];
+    }
+  }
+
+  static const String _userCollectionsTable = 'user_collections';
+
+  /// 현재 유저가 완료한 컬렉션 id 전체 — [CollectionManager.loadData]가
+  /// 로컬 저장값과 합쳐서(둘 중 하나라도 완료면 완료로 취급) 다른 기기에서
+  /// 이미 등록한 컬렉션도 놓치지 않게 한다. 실패하면 빈 리스트 — 로컬
+  /// 저장값만으로 계속 진행한다.
+  Future<List<String>> fetchUserCollections() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return const [];
+      }
+      final List<dynamic> rows = await _client
+          .from(_userCollectionsTable)
+          .select('collection_id')
+          .eq('user_id', userId);
+      return rows
+          .cast<Map<String, dynamic>>()
+          .map((row) => row['collection_id'] as String)
+          .toList();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 완료한 컬렉션 목록 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// [CollectionManager.register]가 컬렉션을 완료 처리한 직후 호출 —
+  /// `user_collections`에 완성 기록 1행을 남긴다. 같은 컬렉션을 두 번
+  /// 등록할 일은 없지만(완료된 컬렉션은 [CollectionManager.canRegister]가
+  /// 항상 false), 혹시 모를 중복 호출에도 안전하도록 upsert한다.
+  Future<void> syncCollectionCompletion(String collectionId) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client.from(_userCollectionsTable).upsert({
+        'user_id': userId,
+        'collection_id': collectionId,
+      }, onConflict: 'user_id, collection_id');
+    } catch (error) {
+      debugPrint('[SupabaseManager] 컬렉션 완성 기록 저장 실패: $error');
     }
   }
 

@@ -898,23 +898,36 @@ class IdleGame extends FlameGame {
 
   @override
   void update(double dt) {
-    super.update(dt);
-
     // 패배 시퀀스(피격 포즈 → 페이드아웃 → 페널티 적용 → 페이드인) 재생
-    // 중이면 그 밖의 모든 것(공격/몬스터 스폰/스테이지 진행 판정)을 멈춘다
-    // — combatDt 계산조차 건너뛰어(dt 원본만 씀) 배속 부스트가 이 연출을
-    // 빨리 감지 않게 한다.
-    if (_isDefeatSequenceActive) {
+    // 중엔 그 연출이 배속으로 빨리 감기지 않도록 컴포넌트 트리 전체
+    // (Flame Effect 기반 연출 포함)에도 원본 dt를 그대로 전달한다. 그 외엔
+    // combatDt(=dt*배속)를 컴포넌트 트리에 그대로 전달해서, Meteor/스킬
+    // 아이콘/데미지 텍스트 등 Flame Effect(MoveEffect/ScaleEffect/
+    // OpacityEffect 등)로 구현된 모든 시각 연출의 재생 속도가 배속에 맞춰
+    // 같이 빨라진다(요구사항: "Flame update(double dt)에서... dt에 게임
+    // 배속을 곱해서 물리적인 이동 속도와 애니메이션 속도가 배속에 맞춰
+    // 빨라지게"). 예전엔 여기서 항상 원본 dt로 super.update()를 불러서,
+    // 게임 로직(공격 타이머 등)은 배속을 반영하는 combatDt를 따로 계산해
+    // 썼지만 Flame 컴포넌트 자체의 애니메이션/이펙트는 배속과 무관하게
+    // 항상 1배속으로만 재생되고 있었다(버그).
+    final bool defeatSequenceActive = _isDefeatSequenceActive;
+    final double speedMultiplier = defeatSequenceActive
+        ? 1.0
+        : SpeedManager.instance.gameSpeedMultiplier.toDouble();
+    final double combatDt = dt * speedMultiplier;
+    super.update(combatDt);
+
+    if (defeatSequenceActive) {
       _updateDefeatSequence(dt);
       return;
     }
 
-    // Speed boosts (SpeedManager.activeSpeed 2x/3x) scale how much combat
-    // "time" passes per real second — everything below ticks off this
-    // instead of the raw frame dt.
-    final double speedMultiplier =
-        SpeedManager.instance.gameSpeedMultiplier.toDouble();
-    final double combatDt = dt * speedMultiplier;
+    // 액티브 스킬 쿨타임/버프 지속시간도 같은 게임 시간(combatDt) 기준으로
+    // 줄어든다(요구사항 2번: "버프형 스킬의 지속 시간도... 배속이 적용된
+    // 속도로 더 빨리 닳도록"). 모드/조우 단계와 무관하게 항상 실행돼야
+    // 하므로(스킬 HUD는 메인 스테이지든 던전이든 항상 떠 있다) 아래 모드
+    // 분기보다 앞에 둔다.
+    SkillManager.instance.tickActiveSkillTimers(combatDt);
 
     // 공격속도 스탯(업그레이드든 장비 서브 옵션이든, effectiveAttackSpeed
     // 하나로 이미 다 합산돼 있다)이 바뀌었으면 공격 애니메이션 stepTime도

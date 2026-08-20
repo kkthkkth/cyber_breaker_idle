@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'game_manager.dart';
 import 'supabase_manager.dart';
+import 'talent_manager.dart';
 import 'title_manager.dart';
 
 /// **환생(Rebirth)** — 이 게임의 프레스티지 시스템. 스테이지 진행도
@@ -99,6 +100,9 @@ class PrestigeManager extends ChangeNotifier {
     );
     // 칭호(Title) 자동 획득 판정 — prestige_count 조건 타입.
     TitleManager.instance.checkAndGrantTitles();
+    // 특성(별자리) 트리 포인트 지급 — 요구사항: "환생 시에 talent_points가
+    // 지급되는 훅을 추가".
+    TalentManager.instance.grantTalentPoints();
     return gained;
   }
 

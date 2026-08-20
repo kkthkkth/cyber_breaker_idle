@@ -48,13 +48,16 @@ class SkillManager extends ChangeNotifier {
   /// 존재 여부와 무관하게 쿨타임/장착 검증과 배율 계산만 담당한다.
   void Function(ActiveSkill skill, double damage)? onActiveSkillCast;
 
-  DateTime? _buffEndTime;
+  /// 버프 남은 시간(게임 시간 기준 초) — [tickActiveSkillTimers]가 매 프레임
+  /// 배속이 곱해진 dt만큼 깎는다. 예전엔 실제(wall-clock) [DateTime]/[Timer]
+  /// 기반이라 배속(2x/3x) 중에도 실제 30초가 그대로 걸렸다(버그) — 쿨타임
+  /// 타이머([_activeSkillCooldownRemaining])와 같은 방식으로 통일했다
+  /// (요구사항: "버프형 스킬의 지속 시간도... 배속이 적용된 속도로").
+  double _buffRemainingSeconds = 0;
   double _buffAttackPowerBonus = 0;
   double _buffAttackSpeedBonus = 0;
-  Timer? _buffTimer;
 
-  bool get isActiveSkillBuffActive =>
-      _buffEndTime != null && _buffEndTime!.isAfter(DateTime.now());
+  bool get isActiveSkillBuffActive => _buffRemainingSeconds > 0;
 
   /// [GameManager.attackPower]가 곱산 체인 끝에서 읽는 값 — 버프가 없으면
   /// 0이라 곱산에 영향이 없다.
@@ -67,13 +70,58 @@ class SkillManager extends ChangeNotifier {
       isActiveSkillBuffActive ? _buffAttackSpeedBonus : 0;
 
   /// 버프 남은 시간(초) — HUD가 "버프 N초 남음" 같은 표시에 쓴다.
-  double get activeSkillBuffRemainingSeconds {
-    final DateTime? endTime = _buffEndTime;
-    if (endTime == null) {
-      return 0;
+  double get activeSkillBuffRemainingSeconds => _buffRemainingSeconds;
+
+  /// [useActiveSkill]이 발동시킨 액티브 스킬별 남은 쿨타임(게임 시간 기준
+  /// 초) — [tickActiveSkillTimers]가 매 프레임 배속이 곱해진 dt만큼 깎는다.
+  /// 예전엔 `lastUsedAt`(DateTime)과 [DateTime.now]의 차이로 계산해서
+  /// 배속(2x/3x) 중에도 실제 시간 기준으로만 줄어들었다(버그 — 요구사항:
+  /// "화면에 떨어지는 액티브 스킬... 쿨타임 타이머는 2배로 빨리 줄어들고
+  /// 있는데... 배속이 적용 안 되고").
+  final Map<String, double> _activeSkillCooldownRemaining = {};
+
+  /// [IdleGame.update]가 매 프레임(정확히는 `dt * gameSpeedMultiplier`,
+  /// [SpeedManager] 배속이 곱해진 "게임 시간")마다 호출 — 쿨타임/버프
+  /// 지속시간을 이 게임 시간 기준으로 깎는다. 전투 화면이 하나도 안 떠
+  /// 있는 동안(예: 순수 메뉴 화면)은 아무도 이걸 호출하지 않아 진행이
+  /// 멈추지만, 이 프로젝트의 IdleGame은 배틀/던전 화면이 떠 있는 한
+  /// 항상 살아있으므로 실질적으로 거의 항상 갱신된다.
+  void tickActiveSkillTimers(double dt) {
+    if (dt <= 0) {
+      return;
     }
-    final double remaining = endTime.difference(DateTime.now()).inMilliseconds / 1000.0;
-    return remaining > 0 ? remaining : 0;
+
+    bool changed = false;
+
+    if (_activeSkillCooldownRemaining.isNotEmpty) {
+      final List<String> finishedIds = [];
+      _activeSkillCooldownRemaining.updateAll((id, remaining) {
+        final double next = remaining - dt;
+        if (next <= 0) {
+          finishedIds.add(id);
+        }
+        return next;
+      });
+      if (finishedIds.isNotEmpty) {
+        for (final String id in finishedIds) {
+          _activeSkillCooldownRemaining.remove(id);
+        }
+      }
+      changed = true;
+    }
+
+    if (_buffRemainingSeconds > 0) {
+      _buffRemainingSeconds = (_buffRemainingSeconds - dt).clamp(0.0, double.infinity);
+      if (_buffRemainingSeconds <= 0) {
+        _buffAttackPowerBonus = 0;
+        _buffAttackSpeedBonus = 0;
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      notifyListeners();
+    }
   }
 
   final Random _random = Random();
@@ -261,9 +309,8 @@ class SkillManager extends ChangeNotifier {
   @visibleForTesting
   void debugResetActiveSkillStateForTest([List<ActiveSkill> skills = const []]) {
     activeSkills = skills;
-    _buffTimer?.cancel();
-    _buffTimer = null;
-    _buffEndTime = null;
+    _activeSkillCooldownRemaining.clear();
+    _buffRemainingSeconds = 0;
     _buffAttackPowerBonus = 0;
     _buffAttackSpeedBonus = 0;
   }
@@ -288,17 +335,11 @@ class SkillManager extends ChangeNotifier {
     return (skill.baseCooldown * (1 - reduction)).clamp(0.1, skill.baseCooldown);
   }
 
-  /// [skillId] 스킬의 남은 쿨타임(초) — 아직 한 번도 안 썼으면 0.
-  double activeSkillCooldownRemaining(String skillId) {
-    final ActiveSkill? skill = findActiveSkillById(skillId);
-    if (skill?.lastUsedAt == null) {
-      return 0;
-    }
-    final double elapsed =
-        DateTime.now().difference(skill!.lastUsedAt!).inMilliseconds / 1000.0;
-    final double remaining = effectiveActiveSkillCooldown(skill) - elapsed;
-    return remaining > 0 ? remaining : 0;
-  }
+  /// [skillId] 스킬의 남은 쿨타임(게임 시간 기준 초) — 아직 한 번도 안
+  /// 썼거나 이미 다 돌았으면 0([tickActiveSkillTimers]가 다 돈 항목은
+  /// 맵에서 지운다).
+  double activeSkillCooldownRemaining(String skillId) =>
+      _activeSkillCooldownRemaining[skillId] ?? 0;
 
   bool isActiveSkillReady(String skillId) => activeSkillCooldownRemaining(skillId) <= 0;
 
@@ -316,7 +357,10 @@ class SkillManager extends ChangeNotifier {
       return false;
     }
 
+    // lastUsedAt은 더 이상 쿨타임 계산에 쓰이지 않지만(그게 배속을 무시하던
+    // 버그의 원인이었다), "마지막으로 언제 썼는지" 기록 자체는 남겨 둔다.
     activeSkills[index] = skill.copyWith(lastUsedAt: DateTime.now());
+    _activeSkillCooldownRemaining[skillId] = effectiveActiveSkillCooldown(skill);
 
     switch (skill.type) {
       case ActiveSkillType.aoe:
@@ -331,18 +375,9 @@ class SkillManager extends ChangeNotifier {
   }
 
   void _activateBuff(ActiveSkill skill) {
-    _buffTimer?.cancel();
     _buffAttackPowerBonus = skill.buffAttackPowerBonus;
     _buffAttackSpeedBonus = skill.buffAttackSpeedBonus;
-    final Duration duration =
-        Duration(milliseconds: (skill.buffDurationSeconds * 1000).round());
-    _buffEndTime = DateTime.now().add(duration);
-    _buffTimer = Timer(duration, () {
-      _buffEndTime = null;
-      _buffAttackPowerBonus = 0;
-      _buffAttackSpeedBonus = 0;
-      notifyListeners();
-    });
+    _buffRemainingSeconds = skill.buffDurationSeconds;
   }
 
   /// 골드를 소모해 [skillId] 스킬을 한 단계 레벨업한다. 골드가 부족하거나

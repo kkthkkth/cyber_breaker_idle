@@ -6,6 +6,7 @@ import '../managers/speed_manager.dart';
 import '../models/consumable_item_model.dart';
 import '../utils/number_formatter.dart';
 import 'dispatch_screen.dart';
+import 'expedition_screen.dart';
 import 'settings_dialog.dart';
 
 /// Common top bar: user/settings icon on the left, speed + gold/gem on the
@@ -26,6 +27,19 @@ class TopBar extends StatelessWidget {
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const DispatchScreen()),
+    );
+  }
+
+  /// 탐험 화면 진입 — 위 [_openDispatch]와 같은 연타 방지 패턴. 이름이
+  /// 비슷한 기존 "파견"(단기 알바, [DispatchScreen])과는 완전히 별개
+  /// 시스템이다([ExpeditionManager] 문서 참고).
+  void _openExpedition(BuildContext context) {
+    final ModalRoute<dynamic>? currentRoute = ModalRoute.of(context);
+    if (currentRoute != null && !currentRoute.isCurrent) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const ExpeditionScreen()),
     );
   }
 
@@ -51,6 +65,14 @@ class TopBar extends StatelessWidget {
             ),
             tooltip: '파견',
             onPressed: () => _openDispatch(context),
+          ),
+          IconButton(
+            icon: const CircleAvatar(
+              backgroundColor: Color(0xFF2C2C3A),
+              child: Icon(Icons.map, color: Colors.white70),
+            ),
+            tooltip: '탐험',
+            onPressed: () => _openExpedition(context),
           ),
           const Spacer(),
           const SpeedButton(),

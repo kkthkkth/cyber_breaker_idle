@@ -57,6 +57,16 @@ class SoundManager {
   /// 통째로 실패할 수 있다(배치 Future 하나가 통째로 reject). 실패한
   /// 파일은 [_brokenFiles]에 바로 등록해 첫 재생 시도조차 하지 않는다.
   Future<void> init() async {
+    // audioplayers(flame_audio가 감싸는 실제 재생 엔진)는 디코딩 실패
+    // (예: 에셋이 아직 준비 안 된 자리표시 파일이라 "Format error Code: 4")를
+    // 우리 Future의 예외로 던지는 게 아니라, 자체 AudioLogger가 내부에서
+    // 곧바로 print()로 빨간 스택트레이스를 찍는다 — 그래서 이 파일의 모든
+    // try/catch로도 막을 수 없었다(진짜 원인). 로그 레벨을 none으로
+    // 낮추면 그 내부 print 자체가 나가지 않는다 — 우리 쪽
+    // debugPrint('[SoundManager] ...')는 그대로 남아 무엇이 실패했는지는
+    // 계속 알 수 있다.
+    AudioLogger.logLevel = AudioLogLevel.none;
+
     for (final String file in _sfxFiles) {
       try {
         await FlameAudio.audioCache.load(file);

@@ -16,6 +16,7 @@ import '../models/pet_stat_metadata_model.dart';
 import '../models/quest_model.dart';
 import '../models/rune_model.dart';
 import '../models/skill_model.dart';
+import '../models/talent_model.dart';
 import '../models/title_model.dart';
 import 'achievement_manager.dart';
 import 'artifact_manager.dart';
@@ -34,6 +35,7 @@ import 'quest_manager.dart';
 import 'rune_manager.dart';
 import 'skill_manager.dart';
 import 'supabase_manager.dart';
+import 'talent_manager.dart';
 import 'title_manager.dart';
 
 class GameManager extends ChangeNotifier {
@@ -239,7 +241,11 @@ class GameManager extends ChangeNotifier {
       (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
       (1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.maxHpPercent, _equippedSetCounts)) *
       (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent)) *
-      (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent));
+      (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent)) *
+      // 도감(컬렉션) 완성 보상 — 다른 소스들과 같은 "장착 여부와 무관하게
+      // 항상 합산" 곱산 체인의 한 항이다(요구사항 예시: "슬라임 반지 3개
+      // 등록 ➔ 최대 체력 2% 증가").
+      (1 + (collectionBonuses[CollectionStatType.maxHpPercent] ?? 0));
 
   /// 장착 세트별 부위 수 — [EquipmentSetManager.totalBonus] 호출마다 매번
   /// 새로 계산하지 않도록 한 곳에 모았다(EquipmentManager.equippedItems를
@@ -375,6 +381,9 @@ class GameManager extends ChangeNotifier {
     // 칭호(Title) 버프 — 장착 중인 칭호가 attack_percent 타입이 아니면
     // bonusFor가 0이라 곱산에 영향이 없다.
     power *= 1 + TitleManager.instance.bonusFor(TitleBuffType.attackPercent);
+    // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
+    // 영향이 없다.
+    power *= 1 + TalentManager.instance.totalBonus(TalentBuffType.attackPercent);
     return power;
   }
 
@@ -411,6 +420,7 @@ class GameManager extends ChangeNotifier {
     rate += EquipmentSetManager.instance
         .totalBonus(EquipmentSetStat.criticalRatePercent, _equippedSetCounts);
     rate += RuneManager.instance.totalBonus(RuneStat.criticalRatePercent);
+    rate += TalentManager.instance.totalBonus(TalentBuffType.criticalRatePercent);
     return rate.clamp(0.0, _maxCriticalRate);
   }
 
@@ -434,6 +444,9 @@ class GameManager extends ChangeNotifier {
     // 칭호(Title) 버프 — 장착 중인 칭호가 defense_percent 타입이 아니면
     // bonusFor가 0이라 곱산에 영향이 없다.
     value *= 1 + TitleManager.instance.bonusFor(TitleBuffType.defensePercent);
+    // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
+    // 영향이 없다.
+    value *= 1 + TalentManager.instance.totalBonus(TalentBuffType.defensePercent);
     return value;
   }
 
@@ -554,6 +567,11 @@ class GameManager extends ChangeNotifier {
     // bonusFor가 0이라 곱산에 영향이 없다.
     goldReward =
         (goldReward * (1 + TitleManager.instance.bonusFor(TitleBuffType.goldGainPercent))).round();
+    // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
+    // 영향이 없다.
+    goldReward =
+        (goldReward * (1 + TalentManager.instance.totalBonus(TalentBuffType.goldGainPercent)))
+            .round();
     return goldReward;
   }
 

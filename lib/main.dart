@@ -20,6 +20,7 @@ import 'managers/dungeon_manager.dart';
 import 'managers/dungeon_reward_manager.dart';
 import 'managers/encyclopedia_manager.dart';
 import 'managers/equipment_manager.dart';
+import 'managers/expedition_manager.dart';
 import 'managers/equipment_set_manager.dart';
 import 'managers/friend_manager.dart';
 import 'managers/game_manager.dart';
@@ -51,6 +52,7 @@ import 'managers/speed_manager.dart';
 import 'managers/story_manager.dart';
 import 'managers/supabase_manager.dart';
 import 'managers/title_manager.dart';
+import 'managers/talent_manager.dart';
 import 'managers/tower_floor_manager.dart';
 import 'managers/trade_manager.dart';
 import 'managers/tutorial_manager.dart';
@@ -121,6 +123,13 @@ Future<void> main() async {
   // PrestigeManager.attackBonus/goldBonus를 읽어가므로, 전투가 시작되기
   // 전(runApp 이전)에 반드시 끝나 있어야 한다.
   await PrestigeManager.instance.loadData();
+  // GameManager.attackPower/defensePower/effectiveCriticalRate/
+  // goldRewardForKill이 곧바로 TalentManager.totalBonus를 읽으므로, 전투가
+  // 시작되기 전(runApp 이전)에 끝나 있어야 한다.
+  await TalentManager.instance.loadData();
+  // ExpeditionManager.claimReward가 특성 포인트 보상을 TalentManager로
+  // 넘기므로, 그보다 뒤에 로드돼야 한다.
+  await ExpeditionManager.instance.loadData();
   await CollectionManager.instance.loadData();
   // EncyclopediaManager.instance는 최초 접근 시 생성자에서 즉시 도감 항목을
   // 만든다(캐릭터는 CharacterManifestManager.subIdsFor를 그 자리에서
@@ -276,6 +285,12 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       // 이전 예약을 덮어쓴다).
       unawaited(NotificationManager.instance.scheduleOfflineReminder());
       unawaited(NotificationManager.instance.scheduleRiftReminder());
+      // 요구사항: "ends_at 시간에 맞춰... 로컬 푸시 알림을 스케줄링" —
+      // cancelAllReminders(resumed)가 진행 중인 탐험 알림도 함께 지우므로,
+      // 위 두 알림과 같은 이유로 내려갈 때마다 남은 시간 기준으로 다시
+      // 예약해 둔다(ExpeditionManager.rescheduleReturnNotifications 문서
+      // 참고).
+      unawaited(ExpeditionManager.instance.rescheduleReturnNotifications());
       // 요구사항: "paused 될 때도 한 번 더 업데이트" — 친구 목록의 온라인
       // 판정(profiles.last_seen 5분 이내)이 "마지막으로 본 시각"에
       // 최대한 가깝도록, 백그라운드로 내려가는 순간에도 한 번 더
