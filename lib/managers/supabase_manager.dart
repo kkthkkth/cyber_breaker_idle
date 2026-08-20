@@ -3375,6 +3375,60 @@ class SupabaseManager {
     }
   }
 
+  static const String _guildBossParticipantsTable = 'guild_boss_participants';
+
+  /// [guildId] 길드의 레이드 기여도 상위 5명(`total_damage_dealt` 내림차순)
+  /// — `guild_boss_attack` RPC가 공격마다 이 테이블에 직접 누적 기록해
+  /// 두므로, 여기서는 조회만 한다([fetchWorldBossRanking]과 같은
+  /// `profiles(nickname)` 임베드 관례). 실패하면 빈 리스트(호출부가 이전
+  /// 캐시를 유지).
+  Future<List<Map<String, dynamic>>> fetchGuildBossLeaderboard(String guildId) async {
+    try {
+      final List<dynamic> rows = await _client
+          .from(_guildBossParticipantsTable)
+          .select('user_id, total_damage_dealt, profiles(nickname)')
+          .eq('guild_id', guildId)
+          .order('total_damage_dealt', ascending: false)
+          .limit(5);
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 레이드 기여도 랭킹 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  /// [guildId] 보스 행의 변경(UPDATE — 다른 길드원의 공격으로 체력이
+  /// 깎일 때마다)을 실시간으로 구독한다 — [onChanged]는 매번 원본 row를
+  /// 그대로 넘긴다. 요구사항: "다른 길드원이 때린 데미지가 내 화면의
+  /// 보스 HP 바에도... 주기적으로(또는 Realtime으로) 갱신" — 이미 같은
+  /// 목적으로 쓰인 [subscribeToGuildMessages]와 같은 관례(체감 지연 없이
+  /// 즉시 반영). 반환된 채널은 화면을 떠날 때 반드시 [unsubscribeChannel]
+  /// 로 정리해야 한다. 구독 생성 자체가 실패하면 null.
+  RealtimeChannel? subscribeToGuildBoss(
+    String guildId,
+    void Function(Map<String, dynamic> row) onChanged,
+  ) {
+    try {
+      return _client
+          .channel('guild_boss_$guildId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: _guildBossesTable,
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'guild_id',
+              value: guildId,
+            ),
+            callback: (payload) => onChanged(payload.newRecord),
+          )
+          .subscribe();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 길드 레이드 보스 구독 실패: $error');
+      return null;
+    }
+  }
+
   // ── 길드 전쟁(GvG) + 세금 (GuildWarManager 전용) ────────────────────
   //
   // `guild_war_config`/`global_tax_pool`은 싱글턴 1행 테이블, `guild_wars`는

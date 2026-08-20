@@ -307,6 +307,17 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
   void initState() {
     super.initState();
     GuildRaidManager.instance.refreshBoss();
+    GuildRaidManager.instance.refreshLeaderboard();
+    // 요구사항: "다른 길드원이 때린 데미지가 내 화면의 보스 HP 바에도
+    // 반영될 수 있도록... Realtime으로 갱신" — 이 탭이 떠 있는 동안만
+    // 구독하고, dispose에서 반드시 정리한다.
+    GuildRaidManager.instance.startLiveUpdates();
+  }
+
+  @override
+  void dispose() {
+    GuildRaidManager.instance.stopLiveUpdates();
+    super.dispose();
   }
 
   Future<void> _enter() async {
@@ -370,15 +381,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Row(
-                                children: [
-                                  Icon(Icons.local_fire_department, color: Colors.redAccent, size: 20),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    '길드 레이드 보스',
-                                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
+                              const Text(
+                                '길드 레이드 보스',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                               ),
                               Text(
                                 'Lv.${boss.level}',
@@ -389,21 +394,36 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 4),
+                          // 거대한 보스 이미지(요구사항) — 전용 아트가 아직
+                          // 없어 이 프로젝트의 다른 던전 이모지 연출
+                          // (idle_game.dart의 🐉/👹/🏰/👑)과 같은 관례로
+                          // 큼직한 이모지로 대체한다.
+                          const Center(
+                            child: Text('🐉', style: TextStyle(fontSize: 88)),
+                          ),
                           const SizedBox(height: 10),
+                          // "엄청나게 긴 통합 HP 바"(요구사항) — 기존
+                          // 10px보다 훨씬 두껍게 키워서 길드 전체가 공유하는
+                          // 체력이라는 느낌을 강조한다.
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(10),
                             child: LinearProgressIndicator(
                               value: boss.hpRatio,
-                              minHeight: 10,
+                              minHeight: 22,
                               backgroundColor: Colors.white12,
                               valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
                             ),
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            '${NumberFormatter.format(boss.currentHp.toDouble())} / '
-                            '${NumberFormatter.format(boss.maxHp.toDouble())}',
-                            style: const TextStyle(color: Colors.white54, fontSize: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: Text(
+                              '${NumberFormatter.format(boss.currentHp.toDouble())} / '
+                              '${NumberFormatter.format(boss.maxHp.toDouble())}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                            ),
                           ),
                         ],
                       ),
@@ -441,10 +461,102 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
+              const SizedBox(height: 28),
+              _RaidLeaderboard(contributions: manager.leaderboard),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// 길드원 누적 딜량 랭킹 1~5위(요구사항) — [GuildRaidManager.leaderboard]를
+/// 그대로 그린다. 보스 체력과 마찬가지로 Realtime 구독([GuildRaidManager
+/// .startLiveUpdates])이 갱신할 때마다 이 위젯도 함께 다시 그려진다(부모
+/// [_GuildRaidTabState.build]가 이미 GuildRaidManager 전체를 구독 중).
+class _RaidLeaderboard extends StatelessWidget {
+  const _RaidLeaderboard({required this.contributions});
+
+  final List<GuildRaidContribution> contributions;
+
+  static const List<Color> _rankColors = [
+    Color(0xFFFFD700), // 1위 금
+    Color(0xFFC0C0C0), // 2위 은
+    Color(0xFFCD7F32), // 3위 동
+    Color(0xFF8A6FE0),
+    Color(0xFF8A6FE0),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF20202C),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF3A3A4A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.leaderboard, color: Color(0xFFC9A24B), size: 18),
+              SizedBox(width: 6),
+              Text(
+                '누적 딜량 랭킹',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (contributions.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                '아직 이번 보스에게 데미지를 넣은 길드원이 없습니다.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            )
+          else
+            for (int i = 0; i < contributions.length; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 24,
+                      child: Text(
+                        '${i + 1}',
+                        style: TextStyle(
+                          color: _rankColors[i.clamp(0, _rankColors.length - 1)],
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        contributions[i].nickname,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ),
+                    Text(
+                      NumberFormatter.format(contributions[i].totalDamageDealt.toDouble()),
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
     );
   }
 }

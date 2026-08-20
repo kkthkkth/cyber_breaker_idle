@@ -64,3 +64,37 @@ class GuildBossAttackResult {
     coinReward: (json['coin_reward'] as num?)?.toInt() ?? 0,
   );
 }
+
+/// `guild_boss_participants` 테이블 한 행 — `guild_boss_attack` RPC가
+/// 공격마다 직접 누적 기록하는, 길드원별 "이 보스에게 지금까지 넣은 총
+/// 데미지"([SupabaseManager.attackGuildBoss] 문서 참고). 이 클라이언트
+/// 코드는 이 테이블에 쓰지 않고 오직 랭킹 표시용으로 읽기만 한다
+/// ([SupabaseManager.fetchGuildBossLeaderboard]).
+///
+/// 실제 컬럼 스키마는 요구사항에 명시되지 않아, 이미 있는 `guild_bosses`
+/// 문서 및 자매 랭킹 테이블([SupabaseManager.fetchWorldBossRanking]의
+/// `user_world_boss.total_damage_dealt`)과 같은 이름 관례로 가정했다:
+/// `guild_id`(uuid), `user_id`(uuid), `total_damage_dealt`(bigint).
+class GuildRaidContribution {
+  const GuildRaidContribution({
+    required this.userId,
+    required this.nickname,
+    required this.totalDamageDealt,
+  });
+
+  final String userId;
+  final String nickname;
+  final int totalDamageDealt;
+
+  /// `profiles(nickname)` 임베드(user_id → profiles.id 외래키 전제,
+  /// [fetchWorldBossRanking]과 같은 관례)가 없거나 null이면 "익명"으로
+  /// 안전하게 대체한다.
+  factory GuildRaidContribution.fromJson(Map<String, dynamic> json) {
+    final Map<String, dynamic>? profile = json['profiles'] as Map<String, dynamic>?;
+    return GuildRaidContribution(
+      userId: json['user_id'].toString(),
+      nickname: profile?['nickname'] as String? ?? '익명',
+      totalDamageDealt: (json['total_damage_dealt'] as num?)?.toInt() ?? 0,
+    );
+  }
+}

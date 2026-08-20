@@ -1,0 +1,47 @@
+-- guild_boss_participants 테이블 — 길드 레이드 기여도 랭킹 조회가
+-- 정확히 이 스키마를 가정합니다(lib/managers/supabase_manager.dart의
+-- fetchGuildBossLeaderboard, lib/managers/guild_raid_manager.dart의
+-- SupabaseManager.subscribeToGuildBoss 콜백에서 함께 갱신).
+--
+-- 이 테이블 자체는 새로 만드는 게 아닙니다 — guild_boss_attack RPC(이미
+-- 존재, lib/managers/supabase_manager.dart:3318-3328 주석 참고)가 공격마다
+-- 이미 이 테이블에 직접 누적 기록하고 있다고 문서화돼 있었지만, 정확한
+-- 컬럼명이 이 저장소 어디에도 SQL로 남아있지 않았습니다(그 RPC의 실제
+-- SQL은 지난 완료 보고에서 채팅으로만 전달됐던 것 같습니다). 그래서 이
+-- 파일은 "이미 있는 테이블의 컬럼명이 실제로 이것과 같은지 확인용"입니다
+-- — 새로 테이블을 만드시면 안 되고, 기존 guild_boss_attack RPC가 쓰는
+-- 실제 컬럼명과 아래가 다르면 이 파일 대신
+-- lib/managers/supabase_manager.dart의 fetchGuildBossLeaderboard/
+-- lib/models/guild_boss_model.dart의 GuildRaidContribution.fromJson만
+-- 실제 컬럼명에 맞게 고쳐 주세요.
+--
+-- 가정한 스키마: guild_id(uuid), user_id(uuid), total_damage_dealt(bigint)
+-- — 자매 랭킹 테이블(user_world_boss.total_damage_dealt)과 같은 이름
+-- 관례입니다. 랭킹 조회는 profiles(nickname) 임베드를 쓰므로
+-- (user_world_boss/user_arena 랭킹과 같은 관례), user_id → profiles.id
+-- 외래키가 잡혀 있어야 닉네임이 함께 내려옵니다.
+--
+-- 참고용 CREATE(이미 테이블이 있다면 실행하지 마세요):
+-- create table if not exists guild_boss_participants (
+--   guild_id uuid not null references guilds(id) on delete cascade,
+--   user_id uuid not null references auth.users(id) on delete cascade,
+--   total_damage_dealt bigint not null default 0,
+--   primary key (guild_id, user_id)
+-- );
+--
+-- 랭킹은 읽기만 하면 되므로(쓰기는 guild_boss_attack RPC가 전담) RLS는
+-- 같은 길드원 전체가 조회 가능하도록 열어두는 것을 권장합니다:
+-- alter table guild_boss_participants enable row level security;
+-- create policy "guild_boss_participants_select_guildmates" on guild_boss_participants
+--   for select using (
+--     exists (
+--       select 1 from guild_members gm
+--       where gm.guild_id = guild_boss_participants.guild_id and gm.user_id = auth.uid()
+--     )
+--   );
+
+-- Realtime 갱신(요구사항: "주기적으로 또는 Realtime으로 갱신")을 쓰려면
+-- guild_bosses 테이블에 대해 Realtime publication이 켜져 있어야 합니다 —
+-- Supabase 대시보드의 Database > Replication에서 guild_bosses를
+-- supabase_realtime publication에 추가해 주세요(guild_messages를 이미
+-- 켜 두셨다면 같은 방식입니다).

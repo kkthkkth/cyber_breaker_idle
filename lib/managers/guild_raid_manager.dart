@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/guild_boss_model.dart';
 import '../utils/time_util.dart';
@@ -38,6 +39,13 @@ class GuildRaidManager extends ChangeNotifier {
   GuildBoss? boss;
   int remainingAttemptsToday = maxDailyAttempts;
   String? _lastResetDate;
+
+  /// 기여도 상위 5명 — [refreshLeaderboard]가 채운다. 보스처럼 길드원
+  /// 전원이 공유하는 상태라 로컬에 캐시하지 않는다.
+  List<GuildRaidContribution> leaderboard = [];
+
+  /// [startLiveUpdates]가 만든 Realtime 구독 — [stopLiveUpdates]가 정리한다.
+  RealtimeChannel? _liveChannel;
 
   bool get hasAttemptsLeft => remainingAttemptsToday > 0;
 
@@ -115,6 +123,50 @@ class GuildRaidManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 기여도 랭킹을 새로 받아온다 — [refreshBoss]/[submitDamage]/실시간
+  /// 구독 콜백이 전부 이걸 함께 호출해서, 보스 체력이 갱신되는 시점마다
+  /// 랭킹도 같이 최신화된다.
+  Future<void> refreshLeaderboard() async {
+    final String? guildId = GuildManager.instance.guildId;
+    if (guildId == null) {
+      return;
+    }
+    final List<Map<String, dynamic>> rows =
+        await SupabaseManager.instance.fetchGuildBossLeaderboard(guildId);
+    leaderboard = rows.map(GuildRaidContribution.fromJson).toList();
+    notifyListeners();
+  }
+
+  /// [GuildRaidTab]이 화면에 보이는 동안 구독해서, 다른 길드원의 공격으로
+  /// 보스 체력이 바뀔 때마다 자동으로 [refreshBoss]/[refreshLeaderboard]를
+  /// 다시 부른다(요구사항: "다른 길드원이 때린 데미지가 내 화면의 보스
+  /// HP 바에도 반영될 수 있도록... Realtime으로 갱신"). 이미 같은 채널
+  /// API를 쓰는 [GuildChatManager]와 같은 관례 — 중복 호출해도 안전하도록
+  /// 기존 구독이 있으면 먼저 정리한다.
+  void startLiveUpdates() {
+    final String? guildId = GuildManager.instance.guildId;
+    if (guildId == null) {
+      return;
+    }
+    stopLiveUpdates();
+    _liveChannel = SupabaseManager.instance.subscribeToGuildBoss(guildId, (row) {
+      boss = GuildBoss.fromJson(row);
+      notifyListeners();
+      unawaited(refreshLeaderboard());
+    });
+  }
+
+  /// [GuildRaidTab.dispose]가 호출 — 소켓 연결/리스너가 화면을 나간 뒤에도
+  /// 계속 남아 있지 않게 정리한다.
+  void stopLiveUpdates() {
+    final RealtimeChannel? channel = _liveChannel;
+    if (channel == null) {
+      return;
+    }
+    _liveChannel = null;
+    unawaited(SupabaseManager.instance.unsubscribeChannel(channel));
+  }
+
   /// 도전 1회를 소모한다 — 오늘 이미 [maxDailyAttempts]번 다 썼으면 false
   /// (아무것도 바꾸지 않음).
   Future<bool> consumeAttempt() async {
@@ -157,6 +209,7 @@ class GuildRaidManager extends ChangeNotifier {
       GuildManager.instance.addGuildCoins(result.coinReward);
     }
     notifyListeners();
+    unawaited(refreshLeaderboard());
     return result;
   }
 
