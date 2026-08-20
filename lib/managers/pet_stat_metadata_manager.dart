@@ -60,7 +60,51 @@ class PetStatMetadataManager {
       }
     }
 
+    // 로컬 캐시도, 방금 받아온 Supabase 메타데이터도 둘 다 비어 있다면
+    // `pet_stat_metadata` 테이블이 아직 세팅되지 않은 환경이다 — 이 경우
+    // rollSpecialStats가 항상 빈 맵만 돌려줘서, GameManager에 이미 완전히
+    // 연동된 펫 패시브 버프(_petSpecialStat)가 실제로는 항상 0으로만
+    // 계산돼 눈에 보이지 않는다([ArtifactManager]의 더미 카탈로그 폴백과
+    // 같은 이유·같은 조치).
+    if (_entries.isEmpty) {
+      _entries = _buildDummyMetadata();
+    }
+
     await _saveLocal();
+  }
+
+  /// [loadData]의 더미 폴백 — 저등급(N/R)은 원래 특수 스탯을 굴리지 않는
+  /// 장르 관례를 따라 제외하고, SR~LR 5개 등급에 [PetSpecialStat]의 8개
+  /// 키 전부를 등급이 오를수록 커지는 범위로 채운다. 정확한 밸런스
+  /// 데이터가 없어 임의로 정한 값이니, 기획 수치가 정해지면 이 함수만
+  /// 지우면 된다(실제 `pet_stat_metadata` 테이블에 행이 생기면 그쪽이
+  /// 자동으로 우선한다).
+  static List<PetStatMetadata> _buildDummyMetadata() {
+    const List<ItemGrade> eligibleGrades = [
+      ItemGrade.sr,
+      ItemGrade.ssr,
+      ItemGrade.sssr,
+      ItemGrade.ur,
+      ItemGrade.lr,
+    ];
+    final List<PetStatMetadata> entries = [];
+    for (int gradeIndex = 0; gradeIndex < eligibleGrades.length; gradeIndex++) {
+      final double tier = gradeIndex + 1;
+      for (final String statKey in PetSpecialStat.values) {
+        // 스킬 쿨감은 SkillManager._cooldownReduction()에서 [0, 0.9]로
+        // 클램프되는 값이라 다른 %보다 절반 스케일로 보수적으로 잡는다.
+        final double base = statKey == PetSpecialStat.skillCooldownReduction ? 0.01 : 0.02;
+        entries.add(
+          PetStatMetadata(
+            statKey: statKey,
+            grade: eligibleGrades[gradeIndex],
+            minValue: base * tier,
+            maxValue: base * tier * 1.5,
+          ),
+        );
+      }
+    }
+    return entries;
   }
 
   /// [grade]에 해당하는 모든 (스탯 키, 등급) 조합에 대해 [min_value, max_value]

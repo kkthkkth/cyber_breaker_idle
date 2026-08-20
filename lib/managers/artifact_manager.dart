@@ -38,6 +38,30 @@ class ArtifactManager extends ChangeNotifier {
   List<Artifact> _artifacts = const [];
   List<Artifact> get artifacts => _artifacts;
 
+  /// `artifacts` 테이블이 아직 비어 있는(또는 없는) 환경에서도 유물 시스템을
+  /// 바로 테스트할 수 있도록 준비한 더미 카탈로그 2종 — 요구사항 예시 그대로
+  /// "흡혈"과 "골드 획득량"을 하나씩 담았다. [loadData]가 로컬 캐시도
+  /// Supabase 카탈로그도 둘 다 비어 있을 때만(=진짜 첫 실행) 이걸로
+  /// 대체하므로, 실제 `artifacts` 테이블에 행이 생기면 자동으로 그쪽이
+  /// 우선한다(id가 "dummy_"로 시작해 나중에 실제 카탈로그와 구분하기도
+  /// 쉽다).
+  static const List<Artifact> _dummyCatalog = [
+    Artifact(
+      id: 'dummy_vampiric_fang',
+      name: '흡혈의 송곳니',
+      statKey: ArtifactStat.lifeStealPercent,
+      valuePerLevel: 0.005,
+      maxLevel: 20,
+    ),
+    Artifact(
+      id: 'dummy_golden_scale',
+      name: '황금 비늘',
+      statKey: ArtifactStat.goldGainPercent,
+      valuePerLevel: 0.01,
+      maxLevel: 20,
+    ),
+  ];
+
   /// [statKey]를 가진 모든 유물의 [Artifact.passiveValue] 합계 — 레벨 0
   /// (조각만 있고 아직 레벨업 전)인 유물은 passiveValue가 0이라 자동으로
   /// 제외된다. [GameManager]가 공격력/방어력/최대체력/골드 획득/드랍률
@@ -190,6 +214,15 @@ class ArtifactManager extends ChangeNotifier {
       if (remoteIsAhead) {
         _artifacts[index] = local.copyWith(level: remoteLevel, fragmentCount: remoteFragments);
       }
+    }
+
+    // 로컬 캐시도, 방금 받아온 Supabase 카탈로그도 둘 다 비어 있다면
+    // `artifacts` 테이블이 아직 세팅되지 않은 환경이다 — 유물 상점 탭이
+    // 영영 "불러오는 중"에 멈춰 있지 않도록 더미 카탈로그로 대체한다.
+    if (_artifacts.isEmpty) {
+      // rollArtifact/levelUp이 인덱스로 직접 대입(`_artifacts[i] = ...`)하므로
+      // const 리스트 그대로 두면 안 되고 growable 복사본이어야 한다.
+      _artifacts = _dummyCatalog.toList();
     }
 
     await _saveLocal();

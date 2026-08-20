@@ -3,11 +3,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../constants/app_images.dart';
-import '../managers/character_metadata_manager.dart';
+import '../managers/config_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/equipment_set_manager.dart';
+import '../managers/game_manager.dart';
 import '../managers/guild_war_manager.dart';
-import '../models/character_metadata_model.dart';
 import '../models/equipment.dart';
 import '../models/guild_war_model.dart';
 import '../models/equipment_set_model.dart';
@@ -15,6 +15,7 @@ import '../models/pet_stat_metadata_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/safe_image.dart';
+import '../widgets/total_combat_power_banner.dart';
 import 'affection_screen.dart';
 import 'character_illustration_dialog.dart';
 import 'character_screen.dart' show InventoryArea, InventorySlot;
@@ -129,15 +130,10 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
     // EquipmentManager.levelUpItem이 이미 notifyListeners()를 호출해
     // GameManager(EquipmentManager를 구독 중)까지 자동으로 갱신되므로
     // 인게임 전투 스탯(체력바 등)은 별도 처리 없이도 즉시 반영된다 — 이
-    // setState는 이 다이얼로그 자신의 [_CharacterCoreStatsCard] 숫자를
-    // 새 level로 다시 계산해 그리기 위한 것뿐이다.
+    // setState는 이 다이얼로그 자신의 다른 화면 요소(레벨 표시 등)를 새
+    // level로 다시 그리기 위한 것뿐이다.
     setState(() {});
   }
-
-  /// [character](EquipType.character)의 character_metadata 행 — 아직 없는
-  /// 캐릭터면 null([_CharacterCoreStatsCard]가 안내 문구로 대체한다).
-  CharacterMetadata? _characterMetadataFor(Equipment character) =>
-      CharacterMetadataManager.instance.byId(character.gradeBadgeLabel);
 
   IconData _iconForEquipmentStat(EquipmentStatType type) {
     switch (type) {
@@ -319,16 +315,6 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
 
     final _StatLine mainStat = _equipmentMainStat(equipment);
     final List<_StatLine> subStats = _equipmentSubStats(equipment);
-
-    // character_metadata 기반 체력/공격력/방어력/공격속도 — 캐릭터 타입일
-    // 때만 계산한다(장비/펫은 위 mainStat/subStats로 충분하다). 이
-    // 다이얼로그가 setState로 다시 그려질 때마다(레벨업 등) 매번 새로
-    // 계산하므로, [equipment.level]/[equipment.star]가 바뀐 즉시 화면
-    // 숫자도 함께 바뀐다.
-    final CharacterFinalStats? characterStats = equipment.type == EquipType.character
-        ? _characterMetadataFor(equipment)
-            ?.computeFinalStats(level: equipment.level, star: equipment.star)
-        : null;
 
     // 레벨업 시 실제로 자라는 건 statMultiplier뿐이라, 화면에 보이는 메인
     // 스탯이 statMultiplier 기반(=레거시 아이템)일 때만 "다음 레벨 증가치"를
@@ -514,12 +500,23 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                     ),
                     const SizedBox(height: 20),
 
-                    // ── 캐릭터 전용: character_metadata 기반 체력/공격력/
-                    // 방어력/공격속도 카드. 위 mainStat/subStats(가챠로 뽑힌
-                    // 랜덤 옵션)와는 별개의, 캐릭터 자체의 구조화된 기본
-                    // 능력치라 별도 카드로 나눠 보여준다.
+                    // ── 캐릭터 전용: 복잡한 개별 스탯 나열(구
+                    // _CharacterCoreStatsCard, HP/ATK/DEF/ASPD 4줄 카드) 대신
+                    // 모든 능력치를 한 값으로 합산한 총 전투력을 크고 화려하게
+                    // 강조한다(요구사항 — 스탯 UI를 없애고 총 전투력을 부각).
+                    // 이 다이얼로그 자체는 GameManager/ConfigManager를
+                    // 구독하지 않으므로(레벨업 등은 로컬 setState로만
+                    // 처리), 이 배너만 AnimatedBuilder로 감싸서 전투력
+                    // 가중치가 인게임 중 다시 로드돼도 자동으로 갱신되게
+                    // 한다(요구사항: "UI 실시간 반영").
                     if (equipment.type == EquipType.character) ...[
-                      _CharacterCoreStatsCard(stats: characterStats),
+                      AnimatedBuilder(
+                        animation: Listenable.merge([GameManager.instance, ConfigManager.instance]),
+                        builder: (context, _) => TotalCombatPowerBanner(
+                          combatPower: GameManager.instance.totalCombatPower,
+                          fontSize: 30,
+                        ),
+                      ),
                       const SizedBox(height: 20),
                     ],
 
@@ -1079,143 +1076,3 @@ class _SetTierLine extends StatelessWidget {
   }
 }
 
-/// 캐릭터 상세 팝업 전용 — character_metadata 기반 체력/공격력/방어력/
-/// 공격속도를 요청받은 이모지(❤️⚔️🛡️⚡)와 함께 나열한다
-/// ([ItemDetailDialog.build]가 EquipType.character일 때만 붙인다). 체력/
-/// 공격력/방어력은 "최종 (기본 + 추가 성장치)" 형태로 성장 체감을
-/// 보여주고, 공격속도는 요청받은 예외 규칙(레벨/별 등급 영향 없음)대로
-/// 최종 수치만 보여준다.
-class _CharacterCoreStatsCard extends StatelessWidget {
-  const _CharacterCoreStatsCard({required this.stats});
-
-  /// null이면(character_metadata에 아직 이 캐릭터 행이 없음 — 신규 추가
-  /// 캐릭터, 마이그레이션 전 등) 안내 문구로 대체한다.
-  final CharacterFinalStats? stats;
-
-  @override
-  Widget build(BuildContext context) {
-    final CharacterFinalStats? s = stats;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF20202C),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: s == null
-          ? const Text(
-              '이 캐릭터의 기본 능력치 정보가 아직 없습니다.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white38, fontSize: 12),
-            )
-          : Column(
-              children: [
-                _CoreStatRow(
-                  emoji: '❤️',
-                  label: '체력',
-                  total: s.hp,
-                  base: s.baseHp,
-                  growth: s.hpGrowth,
-                ),
-                const SizedBox(height: 8),
-                _CoreStatRow(
-                  emoji: '⚔️',
-                  label: '공격력',
-                  total: s.attack,
-                  base: s.baseAttack,
-                  growth: s.attackGrowth,
-                ),
-                const SizedBox(height: 8),
-                _CoreStatRow(
-                  emoji: '🛡️',
-                  label: '방어력',
-                  total: s.defense,
-                  base: s.baseDefense,
-                  growth: s.defenseGrowth,
-                ),
-                const SizedBox(height: 8),
-                _CoreStatFixedRow(emoji: '⚡', label: '공속', value: s.attackSpeed),
-              ],
-            ),
-    );
-  }
-}
-
-/// [total] = [base] + [growth] 형태로 성장치를 함께 보여주는 한 줄
-/// (체력/공격력/방어력 공용) — 예: "공격력: 2,400 (1,000 + 1,400)".
-class _CoreStatRow extends StatelessWidget {
-  const _CoreStatRow({
-    required this.emoji,
-    required this.label,
-    required this.total,
-    required this.base,
-    required this.growth,
-  });
-
-  final String emoji;
-  final String label;
-  final double total;
-  final double base;
-  final double growth;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(emoji, style: const TextStyle(fontSize: 15)),
-        const SizedBox(width: 8),
-        Text(
-          '$label:',
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            '${NumberFormatter.format(total)} (${NumberFormatter.format(base)} + '
-            '${NumberFormatter.format(growth)})',
-            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// 레벨/별 등급의 영향을 받지 않는 고정 수치(공격속도) 전용 한 줄 — 예:
-/// "공속: 1.15 /s". [_CoreStatRow]와 달리 기본/성장 분해를 보여주지 않는다
-/// (요청받은 명시적 예외).
-class _CoreStatFixedRow extends StatelessWidget {
-  const _CoreStatFixedRow({required this.emoji, required this.label, required this.value});
-
-  final String emoji;
-  final String label;
-  final double value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(emoji, style: const TextStyle(fontSize: 15)),
-        const SizedBox(width: 8),
-        Text(
-          '$label:',
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          '${value.toStringAsFixed(2)} /s',
-          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-        ),
-      ],
-    );
-  }
-}

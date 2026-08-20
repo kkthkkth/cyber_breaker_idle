@@ -17,6 +17,7 @@ class RankingEntry {
     this.highestReachedChapter = 0,
     this.prestigeCount = 0,
     this.highestTowerFloor = 0,
+    this.combatPower = 0,
     this.guildName,
   });
 
@@ -25,6 +26,11 @@ class RankingEntry {
   final int highestReachedChapter;
   final int prestigeCount;
   final int highestTowerFloor;
+
+  /// [RankingCategory.combatPower] 전용 — [GameManager.totalCombatPower]가
+  /// `profiles.combat_power`에 동기화해 둔 값(GameManager.syncCombatPower
+  /// 문서 참고). 다른 카테고리로 조회했으면 항상 0.
+  final int combatPower;
 
   /// 소속 길드가 없으면 null.
   final String? guildName;
@@ -49,15 +55,29 @@ class RankingEntry {
       guildName: guildName,
     );
   }
+
+  /// [SupabaseManager.fetchCombatPowerRanking]의 RPC 결과 행 — 컬럼은
+  /// `id`/`nickname`/`combat_power` 셋뿐이다(블랙리스트 제외는 RPC 안에서
+  /// 이미 끝난 상태로 내려온다).
+  factory RankingEntry.fromCombatPowerProfileJson(Map<String, dynamic> json, {String? guildName}) {
+    final String? nickname = json['nickname'] as String?;
+    return RankingEntry(
+      userId: json['id'] as String,
+      nickname: (nickname == null || nickname.trim().isEmpty) ? '익명의 모험가' : nickname,
+      combatPower: (json['combat_power'] as num?)?.toInt() ?? 0,
+      guildName: guildName,
+    );
+  }
 }
 
 /// 명예의 전당이 지원하는 랭킹 종류 — [RankingManager]가 종류별로 독립된
 /// 캐시를 둔다.
-enum RankingCategory { chapterPrestige, towerFloor }
+enum RankingCategory { chapterPrestige, towerFloor, combatPower }
 
 extension RankingCategoryX on RankingCategory {
   String get displayName => switch (this) {
     RankingCategory.chapterPrestige => '챕터·환생',
     RankingCategory.towerFloor => '무한의 탑',
+    RankingCategory.combatPower => '전투력',
   };
 }

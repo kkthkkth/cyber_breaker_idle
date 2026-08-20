@@ -8,10 +8,11 @@ import 'supabase_manager.dart';
 /// 않고, [loadTopRankings]에 `forceRefresh: true`를 주면(Pull-to-refresh)
 /// 캐시를 무시하고 새로 받아온다(요구사항: "최소 5분~10분 주기로만 갱신").
 ///
-/// [RankingCategory.chapterPrestige](최고 도달 챕터·환생 횟수)와
-/// [RankingCategory.towerFloor](무한의 탑 최고 층수)를 완전히 독립된
-/// 캐시로 관리한다 — 한쪽을 강제 새로고침해도 다른 쪽 캐시는 그대로
-/// 유지된다.
+/// [RankingCategory.chapterPrestige](최고 도달 챕터·환생 횟수),
+/// [RankingCategory.towerFloor](무한의 탑 최고 층수),
+/// [RankingCategory.combatPower](총 전투력, 블랙리스트 제외)를 완전히
+/// 독립된 캐시로 관리한다 — 한쪽을 강제 새로고침해도 다른 쪽 캐시는
+/// 그대로 유지된다.
 class RankingManager {
   RankingManager._internal();
 
@@ -48,10 +49,13 @@ class RankingManager {
   /// - [RankingCategory.chapterPrestige]: 최고 도달 챕터 내림차순(1순위) →
   ///   환생 횟수 내림차순(2순위).
   /// - [RankingCategory.towerFloor]: 무한의 탑 최고 클리어 층수 내림차순.
+  /// - [RankingCategory.combatPower]: `profiles.combat_power` 내림차순 —
+  ///   `ranking_blacklist`에 등록된 유저는 RPC 안에서 이미 제외된 채로
+  ///   내려온다([SupabaseManager.fetchCombatPowerRanking] 참고).
   ///
   /// `profiles`에는 길드 FK가 없어 길드명은
   /// [SupabaseManager.fetchGuildNamesForUsers]로 한 번 더 조회해 유저 id로
-  /// 클라이언트에서 합친다(두 카테고리 공통).
+  /// 클라이언트에서 합친다(세 카테고리 공통).
   Future<List<RankingEntry>> loadTopRankings({
     RankingCategory category = RankingCategory.chapterPrestige,
     bool forceRefresh = false,
@@ -61,9 +65,11 @@ class RankingManager {
       return cached;
     }
 
-    final List<Map<String, dynamic>> profileRows = category == RankingCategory.towerFloor
-        ? await SupabaseManager.instance.fetchTopTowerRankingProfiles()
-        : await SupabaseManager.instance.fetchTopRankingProfiles();
+    final List<Map<String, dynamic>> profileRows = switch (category) {
+      RankingCategory.towerFloor => await SupabaseManager.instance.fetchTopTowerRankingProfiles(),
+      RankingCategory.combatPower => await SupabaseManager.instance.fetchCombatPowerRanking(),
+      RankingCategory.chapterPrestige => await SupabaseManager.instance.fetchTopRankingProfiles(),
+    };
 
     final List<String> userIds = [
       for (final Map<String, dynamic> row in profileRows) row['id'] as String,
@@ -83,9 +89,20 @@ class RankingManager {
 
     final List<RankingEntry> entries = [
       for (final Map<String, dynamic> row in profileRows)
-        category == RankingCategory.towerFloor
-            ? RankingEntry.fromTowerProfileJson(row, guildName: guildNameByUserId[row['id'] as String])
-            : RankingEntry.fromProfileJson(row, guildName: guildNameByUserId[row['id'] as String]),
+        switch (category) {
+          RankingCategory.towerFloor => RankingEntry.fromTowerProfileJson(
+            row,
+            guildName: guildNameByUserId[row['id'] as String],
+          ),
+          RankingCategory.combatPower => RankingEntry.fromCombatPowerProfileJson(
+            row,
+            guildName: guildNameByUserId[row['id'] as String],
+          ),
+          RankingCategory.chapterPrestige => RankingEntry.fromProfileJson(
+            row,
+            guildName: guildNameByUserId[row['id'] as String],
+          ),
+        },
     ];
     _entriesByCategory[category] = entries;
     _lastFetchedAtByCategory[category] = DateTime.now();

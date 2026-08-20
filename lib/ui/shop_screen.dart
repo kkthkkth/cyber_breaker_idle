@@ -10,6 +10,7 @@ import '../managers/iap_manager.dart';
 import '../managers/pity_manager.dart';
 import '../managers/potion_manager.dart';
 import '../managers/profile_manager.dart';
+import '../managers/rune_manager.dart';
 import '../managers/tutorial_manager.dart';
 import '../models/artifact_model.dart';
 import '../models/equipment.dart';
@@ -49,11 +50,35 @@ class _PremiumOffer {
 }
 
 class ShopScreen extends StatefulWidget {
-  const ShopScreen({super.key});
+  const ShopScreen({super.key, this.initialTabIndex = 0});
+
+  /// [showShopDialog]가 "충전" 탭(6)으로 곧장 열 때처럼, 특정 탭을 미리
+  /// 선택한 채로 띄우고 싶을 때 쓴다. 하단 네비게이션의 기본 "상점" 탭은
+  /// 이 값을 지정하지 않아(기본 0 = 무료 보상) 기존 동작 그대로다.
+  final int initialTabIndex;
 
   @override
   State<ShopScreen> createState() => _ShopScreenState();
 }
+
+/// 인게임 상단바 등 어디서든 상점을 특정 탭으로 곧장 여는 진입점 —
+/// [ShopScreen]은 원래 하단 네비게이션에 항상 마운트돼 있는 탭이라, 다른
+/// 화면 위에 잠깐 띄우려면 이렇게 별도 라우트로 push해야 한다
+/// (요구사항: "골드/보석 + 버튼 → 상점 다이얼로그(ShopDialog) → 충전 탭").
+Future<void> showShopDialog(BuildContext context, {int initialTabIndex = 0}) {
+  return Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => ShopScreen(initialTabIndex: initialTabIndex),
+    ),
+  );
+}
+
+/// [showShopDialog]로 열었을 때 "충전" 탭(부제로 실제 IAP 상품이 있는
+/// 마지막 탭)을 가리키는 인덱스 — [_ShopScreenState._tabController]가 만드는
+/// 7개 탭(무료 보상/캐릭터/장비/펫/소모품/유물/충전) 순서와 반드시 같이
+/// 맞춰 유지해야 한다.
+const int shopChargeTabIndex = 6;
 
 class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateMixin {
   final GameManager _gameManager = GameManager.instance;
@@ -68,7 +93,8 @@ class _ShopScreenState extends State<ShopScreen> with SingleTickerProviderStateM
   /// 3단계가 시작되면 "캐릭터" 탭(가챠 버튼이 있는 곳)으로 프로그램적으로
   /// 강제 전환해야 하는데([_onTutorialChanged]), DefaultTabController는
   /// 이 위젯의 build() 안에서 만들어져 State의 context로는 접근할 수 없다.
-  late final TabController _tabController = TabController(length: 7, vsync: this);
+  late final TabController _tabController =
+      TabController(length: 7, vsync: this, initialIndex: widget.initialTabIndex);
 
   @override
   void initState() {
@@ -734,23 +760,28 @@ class _ConsumablesShopTab extends StatelessWidget {
     final List<ShopConsumableEntry> potions = PotionManager.instance.potions;
     final List<ShopConsumableEntry> gifts = PotionManager.instance.affectionGifts;
     final List<ShopConsumableEntry> tickets = PotionManager.instance.tickets;
-
-    if (potions.isEmpty && gifts.isEmpty && tickets.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 32),
-          child: Text(
-            '상점 목록을 불러오는 중이거나 아직 등록된 상품이 없습니다.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white54),
-          ),
-        ),
-      );
-    }
+    final bool hasDbCatalog = potions.isNotEmpty || gifts.isNotEmpty || tickets.isNotEmpty;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // 룬 조각 구매 — DB 카탈로그(ShopConsumableEntry)를 거치지 않는
+        // 고정가 상품이라(요구사항: "보석으로 룬 조각을 살 수 있는 상품을
+        // 상점에 추가"), 물약/선물 목록이 아직 로드되지 않은 상태에서도
+        // 항상 보여준다.
+        const _SectionHeader(title: '룬 조각'),
+        const SizedBox(height: 8),
+        const _RuneFragmentShopSection(),
+        const SizedBox(height: 20),
+        if (!hasDbCatalog)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              '나머지 상점 목록을 불러오는 중이거나 아직 등록된 상품이 없습니다.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
         if (potions.isNotEmpty) ...[
           const _SectionHeader(title: '물약'),
           const SizedBox(height: 8),
@@ -776,6 +807,82 @@ class _ConsumablesShopTab extends StatelessWidget {
             _TicketShopTile(entry: entry, onBuy: () => _openBaseCurrencyDialog(context, entry)),
         ],
       ],
+    );
+  }
+}
+
+/// 보석으로 룬 조각을 직접 구매하는 고정가 상품 — DB 카탈로그
+/// ([ShopConsumableEntry]) 없이 이 위젯 안에 값을 그대로 둔다([_ArtifactTab]의
+/// [_PremiumGachaButton]과 같은 "단순 고정가" 관례). 던전(룬의 미궁)이
+/// 유일한 "무료" 획득처가 된 만큼, 보석을 쓰는 유저를 위한 확정적 대안
+/// 획득처로 마련했다 — 가격/수량은 임의로 정한 값이니 기획 수치가 정해지면
+/// 이 두 상수만 바꾸면 된다.
+class _RuneFragmentShopSection extends StatelessWidget {
+  const _RuneFragmentShopSection();
+
+  static const int fragmentsPerPurchase = 30;
+  static const int costGems = 150;
+
+  void _buy(BuildContext context) {
+    final bool success = GameManager.instance.spendGems(costGems);
+    if (!success) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('보석이 부족합니다')));
+      return;
+    }
+    RuneManager.instance.addFragments(fragmentsPerPurchase);
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(content: Text('룬 조각 +$fragmentsPerPurchase 획득!')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: GameManager.instance,
+      builder: (context, _) {
+        final bool enabled = GameManager.instance.gems >= costGems;
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF20202C),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF3A3A4A)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_fix_high, color: Colors.tealAccent, size: 28),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '룬 조각 x$fragmentsPerPurchase',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '보석으로 룬 조각을 바로 구매합니다',
+                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              ElevatedButton(
+                onPressed: enabled ? () => _buy(context) : null,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6C4FCE),
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: const Color(0xFF3A3A4A),
+                ),
+                child: const Text('💎 $costGems'),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -66,16 +66,6 @@ class _CharacterIdlePreviewState extends State<CharacterIdlePreview> {
     super.dispose();
   }
 
-  /// 캔버스 안에서 캐릭터 콘텐츠가 차지하는 비율(표준 규격 기준 가로/세로
-  /// 모두 50% — [PlayerAnimationComponent.contentRatio] 참고)의 역수.
-  /// [build]가 원본 캔버스(800x720) 전체를 잘림 없이 상자 안에 발밑 기준
-  /// (bottomCenter)으로 맞춰 넣어 둔 다음, 이 배율만큼 다시 발밑을 축으로
-  /// 확대하면 위쪽/좌우 이펙트 여백이 상자 밖으로 밀려나 잘리고 캐릭터
-  /// 콘텐츠만(가로/세로 각각 정확히 상자를 꽉 채우며) 남는다 — 가로/세로
-  /// 콘텐츠 비율이 똑같이 50%라 이 배율 하나로 양쪽 축 모두 정확히
-  /// 들어맞는다.
-  static const double _zoom = 1 / PlayerAnimationComponent.contentRatio;
-
   @override
   Widget build(BuildContext context) {
     // 우선 시도: 애니메이션 webp 한 장(자체 반복 재생, [_timer]가 필요
@@ -86,41 +76,34 @@ class _CharacterIdlePreviewState extends State<CharacterIdlePreview> {
     final String fallbackPath =
         AppImages.playerActionFrame(widget.characterId, 'wait', _frameIndex);
 
-    // 원본 캔버스(800x720)는 정사각형이 아니다 — 예전처럼 BoxFit.cover로
-    // 정사각형 상자에 곧바로 맞추면 그 단계에서 이미 좌우가 잘려 나가고,
-    // 그 위에 다시 [_zoom]만큼 확대하면 캐릭터 콘텐츠 가장자리(어깨 등)
-    // 까지 이중으로 잘려 나간다 — 정수리가 위쪽 테두리에 잘려 보이던
-    // 버그의 원인이었다(실측 확인됨). FittedBox(BoxFit.contain +
-    // Alignment.bottomCenter)로 원본 비율을 유지한 채 "잘림 없이" 발밑
-    // 기준으로 상자에 맞춰 넣은 뒤에만 [_zoom] 확대를 적용해야 한다 —
-    // contain은 잘라내지 않고 레터박스(여백)로만 맞추므로, 이 단계에서는
-    // 캐릭터가 항상 통째로 보인다.
-    final Widget zoomed = ClipRect(
-      child: Transform.scale(
-        scale: _zoom,
-        alignment: Alignment.bottomCenter,
-        child: SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.contain,
-            alignment: Alignment.bottomCenter,
-            child: SizedBox(
-              width: PlayerAnimationComponent.referenceCanvasWidth,
-              height: PlayerAnimationComponent.referenceCanvasHeight,
-              child: CustomSafeImage(
-                path: path,
-                fallbackPath: fallbackPath,
-                fit: BoxFit.fill,
-                filterQuality: FilterQuality.none,
-              ),
-            ),
-          ),
+    // 예전엔 FittedBox(contain)로 전체를 담은 뒤 다시 Transform.scale로
+    // 확대(발밑 기준)해 이펙트 여백을 잘라내는 2단계 방식을 썼는데, 그
+    // 배율이 "콘텐츠가 캔버스의 정확히 50%를 차지한다"는 가정에 기반해서
+    // 캐릭터마다 실제 여백 비율이 조금만 달라도 정수리가 다시 잘려 보이는
+    // 문제가 있었다(요구사항: "무조건 박스 안에 다 들어가도록"). 지금은
+    // FittedBox(BoxFit.contain, Alignment.bottomCenter) 한 단계만 쓴다 —
+    // 원본 800x720 캔버스 전체를 잘라내지 않고 레터박스(여백)로만 맞추므로,
+    // 어떤 크기의 상자에 넣어도 캐릭터 전체가 수학적으로 항상 다 보인다.
+    // 대신 이펙트 여백만큼 캐릭터가 상자를 꽉 채우지 않고 살짝 작게 보일
+    // 수 있다 — 잘림 없음을 더 우선한 트레이드오프다.
+    final Widget contained = FittedBox(
+      fit: BoxFit.contain,
+      alignment: Alignment.bottomCenter,
+      child: SizedBox(
+        width: PlayerAnimationComponent.referenceCanvasWidth,
+        height: PlayerAnimationComponent.referenceCanvasHeight,
+        child: CustomSafeImage(
+          path: path,
+          fallbackPath: fallbackPath,
+          fit: BoxFit.fill,
+          filterQuality: FilterQuality.none,
         ),
       ),
     );
 
     final Widget clipped = ClipRRect(
       borderRadius: BorderRadius.circular(widget.borderRadius),
-      child: zoomed,
+      child: contained,
     );
 
     final double? boxSize = widget.size;

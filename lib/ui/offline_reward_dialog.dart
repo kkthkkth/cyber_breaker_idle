@@ -15,6 +15,8 @@ class OfflineRewardDialog extends StatelessWidget {
     required this.rewardGold,
     this.equipmentCount = 0,
     this.consumableDrops = const {},
+    this.bpExpGained = 0,
+    this.runeFragmentsGained = 0,
   });
 
   final int offlineSeconds;
@@ -25,6 +27,16 @@ class OfflineRewardDialog extends StatelessWidget {
 
   /// 이번 방치 동안 획득한 소모품 종류별 수량.
   final Map<ConsumableType, int> consumableDrops;
+
+  /// 방치 시간에 비례해 획득한 배틀패스 BP 경험치 — 활성 시즌이 없으면
+  /// [OfflineRewardManager.claimReward]에서 실제로는 지급되지 않지만,
+  /// 표시 자체는 그대로 한다(팝업이 뜨는 시점엔 이미 [OfflineRewardManager
+  /// .checkOfflineReward]가 값을 계산해 넘겨준 상태라 시즌 유무를 다시
+  /// 확인할 필요가 없다).
+  final int bpExpGained;
+
+  /// 방치 시간에 비례해 획득한 룬 조각(요구사항: "룬 조각(시간 비례)").
+  final int runeFragmentsGained;
 
   bool get _hasLoot => equipmentCount > 0 || consumableDrops.isNotEmpty;
 
@@ -85,6 +97,22 @@ class OfflineRewardDialog extends StatelessWidget {
                       _InfoRow(label: '방치 시간', value: _formattedDuration),
                       const SizedBox(height: 10),
                       _InfoRow(label: '획득한 골드', value: '🪙 $rewardGold', valueColor: Colors.amberAccent),
+                      if (bpExpGained > 0) ...[
+                        const SizedBox(height: 10),
+                        _InfoRow(
+                          label: '획득한 경험치(BP)',
+                          value: '✨ $bpExpGained',
+                          valueColor: Colors.lightBlueAccent,
+                        ),
+                      ],
+                      if (runeFragmentsGained > 0) ...[
+                        const SizedBox(height: 10),
+                        _InfoRow(
+                          label: '획득한 룬 조각',
+                          value: '🔮 $runeFragmentsGained',
+                          valueColor: Colors.tealAccent,
+                        ),
+                      ],
                       if (_hasLoot) ...[
                         const SizedBox(height: 16),
                         const Align(

@@ -7,6 +7,7 @@ import '../managers/prestige_manager.dart';
 import '../managers/ranking_manager.dart';
 import '../managers/supabase_manager.dart';
 import '../models/ranking_model.dart';
+import '../utils/number_formatter.dart';
 
 /// 홈 화면의 트로피 버튼 등 여러 진입점에서 공통으로 부르는 진입 함수 —
 /// 랭킹은 항목이 많고(최대 100명 + 내 순위 바) 필터/새로고침 상호작용이
@@ -18,15 +19,18 @@ Future<void> showRankingScreen(BuildContext context) {
 }
 
 /// 명예의 전당 — [RankingManager]가 카테고리별로 메모리에 캐싱한 상위
-/// 100명을 탭 2개(챕터·환생 / 무한의 탑)로 보여준다. 각 탭은
-/// [_RankingCategoryView]가 독립적으로 로드/새로고침한다.
+/// 100명을 탭 3개(챕터·환생 / 무한의 탑 / 전투력)로 보여준다. 각 탭은
+/// [_RankingCategoryView]가 독립적으로 로드/새로고침한다. 탭 목록 자체가
+/// [RankingCategory.values]를 그대로 순회하므로, 카테고리를 늘리거나
+/// 줄이는 건 그 enum 하나만 고치면 된다(TabBar 개수를 따로 맞출 필요
+/// 없음).
 class RankingScreen extends StatelessWidget {
   const RankingScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 2,
+      length: RankingCategory.values.length,
       child: Scaffold(
         backgroundColor: const Color(0xFF14141C),
         appBar: AppBar(
@@ -100,6 +104,12 @@ class _RankingCategoryViewState extends State<_RankingCategoryView> {
         nickname: '나',
         highestReachedChapter: GameManager.instance.highestReachedChapter,
         prestigeCount: PrestigeManager.instance.prestigeCount,
+        guildName: resolvedGuildName,
+      ),
+      RankingCategory.combatPower => RankingEntry(
+        userId: userId,
+        nickname: '나',
+        combatPower: GameManager.instance.totalCombatPower,
         guildName: resolvedGuildName,
       ),
     };
@@ -192,6 +202,11 @@ class _RankingCategoryViewState extends State<_RankingCategoryView> {
     RankingCategory.chapterPrestige => (
       primary: '${entry.highestReachedChapter}챕터',
       secondary: '환생 ${entry.prestigeCount}회',
+    ),
+    // 요구사항 예시 그대로: "⚔️ 1,234,567"(축약 없이 쉼표 구분 전체 자릿수).
+    RankingCategory.combatPower => (
+      primary: '⚔️ ${NumberFormatter.formatExact(entry.combatPower)}',
+      secondary: '전투력',
     ),
   };
 }

@@ -130,13 +130,21 @@ class GuildWarManager extends ChangeNotifier {
   /// 이번 주 전쟁에 신청한다 — 신청 직전 내 전투력을 서버에 동기화해서
   /// 토요일 매칭 공식이 최대한 최신 값을 쓰게 한다. 이미 신청했으면
   /// (서버가 중복 무시) 그냥 현재 상태를 다시 받아온다.
+  ///
+  /// [주의] 예전엔 이 자리에서 `(attackPower + defensePower).round()`라는
+  /// 길드 전쟁 전용 임시 공식으로 `profiles.combat_power`를 채웠다 —
+  /// 이제 명예의 전당 [전투력] 랭킹도 같은 컬럼을 읽으므로(GameManager
+  /// ._syncCombatPowerIfChanged 참고), 두 기능이 같은 컬럼에 서로 다른
+  /// 공식을 계속 쓰면 어느 쪽이 마지막에 썼는지에 따라 값이 오락가락한다.
+  /// 그래서 이제 [GameManager.totalCombatPower](가중치까지 반영된 정식
+  /// 전투력 공식)로 통일했다 — 길드 전쟁 매칭 결과가 예전 공식과 달라질
+  /// 수 있다는 점은 감안해야 한다.
   Future<bool> applyForWar() async {
     final String? guildId = GuildManager.instance.guildId;
     if (guildId == null) {
       return false;
     }
-    final int power = (GameManager.instance.attackPower + GameManager.instance.defensePower).round();
-    unawaited(SupabaseManager.instance.updateCombatPower(power));
+    unawaited(SupabaseManager.instance.updateCombatPower(GameManager.instance.totalCombatPower));
 
     final DateTime now = await getNetworkTime();
     final String weekKey = weekKeyOf(now);

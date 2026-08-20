@@ -16,13 +16,23 @@ class GuildBoss {
   final int maxHp;
   final int currentHp;
 
+  /// 서버 응답이 손상됐거나(레거시 null 컬럼 등 — `guild_bosses.current_hp`
+  /// null 제약 위반 버그가 실제로 있었다, `supabase/guild_boss_null_hp_fix.sql`
+  /// 참고) `guild_bosses` 행 자체가 아직 없을 때 안전하게 쓰는 기본 최대
+  /// 체력 — [GuildRaidManager.refreshBoss]의 "행 없음" 폴백과
+  /// [fromJson]의 null 방어가 공유하는 단일 소스.
+  static const int defaultMaxHp = 100000;
+
   double get hpRatio => maxHp <= 0 ? 0 : (currentHp / maxHp).clamp(0.0, 1.0);
 
+  /// [json]의 `max_hp`/`current_hp`가 null이어도(서버 쪽 버그로 실제
+  /// 관측된 사례 — 위 [defaultMaxHp] 문서 참고) 0(=죽어 있는 것처럼 보이는
+  /// 깨진 상태)이 아니라 정상적인 1레벨 보스로 안전하게 대체한다.
   factory GuildBoss.fromJson(Map<String, dynamic> json) => GuildBoss(
     guildId: json['guild_id'].toString(),
     level: (json['level'] as num?)?.toInt() ?? 1,
-    maxHp: (json['max_hp'] as num?)?.toInt() ?? 0,
-    currentHp: (json['current_hp'] as num?)?.toInt() ?? 0,
+    maxHp: (json['max_hp'] as num?)?.toInt() ?? defaultMaxHp,
+    currentHp: (json['current_hp'] as num?)?.toInt() ?? defaultMaxHp,
   );
 }
 
@@ -44,10 +54,12 @@ class GuildBossAttackResult {
   final bool defeated;
   final int coinReward;
 
+  /// [GuildBoss.fromJson]과 같은 이유로 `new_max_hp`/`new_current_hp`
+  /// null도 0이 아니라 [GuildBoss.defaultMaxHp]로 안전하게 대체한다.
   factory GuildBossAttackResult.fromJson(Map<String, dynamic> json) => GuildBossAttackResult(
     newLevel: (json['new_level'] as num?)?.toInt() ?? 1,
-    newMaxHp: (json['new_max_hp'] as num?)?.toInt() ?? 0,
-    newCurrentHp: (json['new_current_hp'] as num?)?.toInt() ?? 0,
+    newMaxHp: (json['new_max_hp'] as num?)?.toInt() ?? GuildBoss.defaultMaxHp,
+    newCurrentHp: (json['new_current_hp'] as num?)?.toInt() ?? GuildBoss.defaultMaxHp,
     defeated: json['defeated'] as bool? ?? false,
     coinReward: (json['coin_reward'] as num?)?.toInt() ?? 0,
   );

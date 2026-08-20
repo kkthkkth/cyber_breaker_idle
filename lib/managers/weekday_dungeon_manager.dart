@@ -5,14 +5,15 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/consumable_item_model.dart';
+import '../models/dungeon_reward_config_model.dart';
 import '../models/quest_model.dart';
 import '../models/weekday_dungeon_model.dart';
 import '../utils/time_util.dart';
 import 'consumable_manager.dart';
+import 'dungeon_reward_manager.dart';
 import 'game_manager.dart';
 import 'guild_war_manager.dart';
 import 'quest_manager.dart';
-import 'rune_manager.dart';
 import 'skill_manager.dart';
 import 'supabase_manager.dart';
 
@@ -118,20 +119,36 @@ class WeekdayDungeonManager extends ChangeNotifier with WidgetsBindingObserver {
         ConsumableManager.instance.addItem(ConsumableType.enhanceStone, amount);
         return (label: '강화석', amount: amount);
       case WeekdayDungeonRewardType.runeFragment:
-        final int amount = waves * 8;
-        RuneManager.instance.addFragments(amount);
-        return (label: '룬 조각', amount: amount);
+        // 하드코딩된 waves*8 대신 DungeonRewardManager(Supabase
+        // dungeon_rewards_config 테이블) 기반으로 지급한다(요구사항:
+        // "룬의 미궁: 클리어 시... DB 연동 로직을 통해 룬 조각을 지급").
+        // 파도 하나당 한 번씩 독립적으로 굴려서, 파도를 많이 깰수록 더
+        // 많은 기회를 준다는 기존 감각을 유지한다. 룬 조각은 이제 이
+        // 경로가 유일한 획득처다(요구사항: "룬 조각 획득처를 명확히").
+        int totalFragments = 0;
+        for (int i = 0; i < waves; i++) {
+          final List<DungeonRewardGrant> grants =
+              DungeonRewardManager.instance.grantRewardsFor(DungeonRewardManager.runeLabyrinth);
+          for (final DungeonRewardGrant grant in grants) {
+            if (grant.itemType == DungeonRewardItemType.runeFragment) {
+              totalFragments += grant.quantity;
+            }
+          }
+        }
+        return (label: '룬 조각', amount: totalFragments);
       case WeekdayDungeonRewardType.skillCurrency:
         final int amount = (waves / 3).ceil().clamp(1, 1 << 30);
         SkillManager.instance.addSkillPoints(amount);
         return (label: '스킬 포인트', amount: amount);
       case WeekdayDungeonRewardType.combined:
         // 토/일 "통합" 던전 — 평일 한 종류씩 몰아주는 대신 조금씩 전부
-        // 지급한다(요구사항: "선택 또는 통합").
+        // 지급한다(요구사항: "선택 또는 통합"). 룬 조각은 더 이상 여기서
+        // 새지 않는다 — 룬의 미궁(목요일) 하나로 획득처를 명확히 하기
+        // 위해 뺐다(요구사항: "일반 몬스터 사냥에서는... 절대 드랍되지
+        // 않게" 연장선 — 이 통합 던전도 "룬 조각 전용" 던전은 아니므로).
         GameManager.instance.addGold(waves * 80);
         GameManager.instance.addGems((waves / 2).ceil());
-        RuneManager.instance.addFragments((waves * 3));
-        return (label: '골드·보석·룬 조각', amount: waves);
+        return (label: '골드·보석', amount: waves);
     }
   }
 

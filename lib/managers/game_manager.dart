@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/artifact_model.dart';
 import '../models/character_metadata_model.dart';
 import '../models/collection_model.dart';
+import '../models/combat_power_weights_model.dart';
 import '../models/equipment.dart';
 import '../models/equipment_set_model.dart';
 import '../models/pet_stat_metadata_model.dart';
@@ -18,6 +19,7 @@ import 'achievement_manager.dart';
 import 'artifact_manager.dart';
 import 'battle_pass_manager.dart';
 import 'character_metadata_manager.dart';
+import 'config_manager.dart';
 import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'equipment_set_manager.dart';
@@ -125,6 +127,89 @@ class GameManager extends ChangeNotifier {
   // 경로라 서로 영향을 주지 않는다.
   double itemDropRate = 0.0;
 
+  // ── 특수 스탯 10종 뼈대 (2026-08 추가) ────────────────────────────────
+  //
+  // 방치형 성장 극대화를 위해 요청받은 10개 스탯 중 하나([itemDropRate])는
+  // 위에 이미 존재해 그대로 재사용하고, 나머지 9개를 여기 새로 추가한다.
+  // 전부 기본값 0(=효과 없음)이고, 전부 "값을 담아두는 뼈대"일 뿐이다 —
+  // 아직 실제 업그레이드 UI/장비 옵션/보상 지급 로직 어디에도 연결돼
+  // 있지 않다(요구사항: "추후 전투/보상 로직에 반영할 수 있도록 뼈대를
+  // 만들어 달라" — 실제 연결은 각 시스템이 준비되면 그때 진행). 전부
+  // ComprehensiveStatsDialog(프로필 팝업)가 그대로 표시한다.
+  //
+  // [주의] 아래 goldGain/bossDamageBonus는 이미 존재하는 펫 전용 소스
+  // (PetSpecialStat.goldGain/bossDamage, EquipmentManager.equippedPet의
+  // specialStats)와 이름은 겹치지만 완전히 별개의 "계정 단위 일반" 소스다
+  // — 나중에 실제로 연결할 때는 그 펫 전용 값에 곱/가산으로 추가되어야
+  // 하며, 대체해서는 안 된다(이 파일의 다른 모든 다중 소스 스탯과 같은
+  // "여러 출처가 함께 쌓인다" 관례).
+
+  /// 골드 획득량 증가율(%) — 0.1 = 몬스터 처치 골드 +10%.
+  double goldGain = 0.0;
+
+  /// 경험치 획득량 증가율(%) 기초값 — 이 프로젝트엔 아직 "경험치"라는
+  /// 별도 재화 개념이 없어(챕터/스테이지 진행 자체가 성장이다) 지금은
+  /// 실제 소비처가 없다 — 요구사항대로 뼈대만 먼저 마련해 둔다. 실제 값은
+  /// [expGain] getter를 통해 읽는다(유물 [ArtifactStat.expGainPercent] 포함).
+  double baseExpGain = 0.0;
+  double get expGain =>
+      baseExpGain + ArtifactManager.instance.totalBonus(ArtifactStat.expGainPercent);
+
+  /// 이동 속도 배율 기초값 — 0.1 = +10%. IdleGame의 캐릭터 이동/애니메이션
+  /// 속도 계산과 아직 연결되지 않았다. 실제 값은 [moveSpeed] getter를
+  /// 통해 읽는다(유물 [ArtifactStat.moveSpeedPercent] 포함).
+  double baseMoveSpeed = 0.0;
+  double get moveSpeed =>
+      baseMoveSpeed + ArtifactManager.instance.totalBonus(ArtifactStat.moveSpeedPercent);
+
+  /// 흡혈 기초값 — 가한 피해의 이 비율(%)만큼 체력을 회복한다. 0.1 = 가한
+  /// 피해의 10%를 체력으로 환원. 실제 값은 [lifeSteal] getter를 통해
+  /// 읽는다(유물 [ArtifactStat.lifeStealPercent] 포함) — [IdleGame]이 매
+  /// 타격마다 [applyLifeSteal]을 호출해 실제로 체력을 회복시킨다.
+  double baseLifeSteal = 0.0;
+  double get lifeSteal =>
+      baseLifeSteal + ArtifactManager.instance.totalBonus(ArtifactStat.lifeStealPercent);
+
+  /// 초당 체력 자연 회복량 기초값(고정 수치, 비율이 아니다) — IdleGame의
+  /// 매 프레임 currentHp 갱신 루프와 아직 연결되지 않았다. 실제 값은
+  /// [hpRegen] getter를 통해 읽는다(유물 [ArtifactStat.hpRegenFlat] 포함).
+  double baseHpRegen = 0.0;
+  double get hpRegen =>
+      baseHpRegen + ArtifactManager.instance.totalBonus(ArtifactStat.hpRegenFlat);
+
+  /// 보스 몬스터 대상 추가 피해 증가율(%) 기초값 — 이미 존재하는 펫
+  /// 보스뎀 보너스([PetSpecialStat.bossDamage])와는 별개의 계정 단위 일반
+  /// 소스로 설계됐다. 실제 값은 [bossDamageBonus] getter를 통해 읽는다
+  /// (유물 [ArtifactStat.bossDamageBonusPercent] 포함).
+  double baseBossDamageBonus = 0.0;
+  double get bossDamageBonus =>
+      baseBossDamageBonus +
+      ArtifactManager.instance.totalBonus(ArtifactStat.bossDamageBonusPercent);
+
+  /// 방어구 관통율(%) 기초값 — 몬스터의 방어 효율을 이 비율만큼 무시하는
+  /// 용도로 설계됐다(현재 몬스터 쪽에 별도 방어율 개념이 없어 연결 지점만
+  /// 마련해 둔다). 실제 값은 [armorPenetration] getter를 통해 읽는다(유물
+  /// [ArtifactStat.armorPenetrationPercent] 포함).
+  double baseArmorPenetration = 0.0;
+  double get armorPenetration =>
+      baseArmorPenetration +
+      ArtifactManager.instance.totalBonus(ArtifactStat.armorPenetrationPercent);
+
+  /// 스킬 피해량 증가율(%) 기초값 — [SkillManager]의 스킬 데미지 계산에
+  /// 아직 연결되지 않았다. 실제 값은 [skillDamage] getter를 통해 읽는다
+  /// (유물 [ArtifactStat.skillDamagePercent] 포함).
+  double baseSkillDamage = 0.0;
+  double get skillDamage =>
+      baseSkillDamage + ArtifactManager.instance.totalBonus(ArtifactStat.skillDamagePercent);
+
+  /// 명중률(%) 기초값 — 몬스터의 회피 판정에 대응하는 개념으로 설계됐다
+  /// (현재 몬스터에게는 회피 개념이 없어 연결 지점만 마련해 둔다). 실제
+  /// 값은 [accuracy] getter를 통해 읽는다(유물 [ArtifactStat.accuracyPercent]
+  /// 포함).
+  double baseAccuracy = 0.0;
+  double get accuracy =>
+      baseAccuracy + ArtifactManager.instance.totalBonus(ArtifactStat.accuracyPercent);
+
   // ── 플레이어 HP ─────────────────────────────────────────────────
   double baseMaxHp = 200;
 
@@ -155,6 +240,13 @@ class GameManager extends ChangeNotifier {
 
   static const double _monsterBaseCritRate = 0.15;
   static const double _monsterCritMultiplier = 1.5;
+
+  /// 몬스터의 기본 회피율 — [accuracy](명중률, 유물 [ArtifactStat
+  /// .accuracyPercent] 포함)가 이만큼을 깎는다([_monsterBaseCritRate]와
+  /// 같은 "몬스터 기초값 - 플레이어 스탯" 관례). 몬스터 쪽에 별도 회피
+  /// 스탯 개념이 없어(명중률 요구사항 이전엔 항상 100% 명중이었다) 이
+  /// 하나의 상수가 유일한 소스다.
+  static const double _monsterBaseEvasionRate = 0.15;
 
   /// 도감(Collection) 완성 보상으로 쌓이는 영구 스탯 보너스 — 장착/해제와
   /// 무관하게 항상 합산된다. [CollectionManager.register]가 완료 시점에
@@ -350,6 +442,42 @@ class GameManager extends ChangeNotifier {
 
   double get goldPerHour => attackPower * effectiveAttackSpeed * 60;
 
+  // ── 총 전투력 (Combat Power, 2026-08 추가) ──────────────────────────
+  //
+  // 요청받은 계산식 그대로:
+  //   공격 점수 = ATK * ASPD * (1 + (CR * CD)) * (1 + BossDmg + ArmorPen + SkillDmg)
+  //   방어 점수 = HP + (DEF * defWeight) * (1 + Evasion + Block)
+  //   최종 전투력 = (공격 점수 * offenseWeight) + 방어 점수   (소수점 버림, 정수 반환)
+  //
+  // 변수 대응(이 프로젝트의 실제 필드/게터로 매핑):
+  //   ATK=attackPower, ASPD=effectiveAttackSpeed
+  //   CR=effectiveCriticalRate(0~1 확률), CD=effectiveCriticalMultiplier
+  //     (배율 자체, 2.0=200%로 이미 정의돼 있는 기존 필드를 그대로 썼다)
+  //   BossDmg=bossDamageBonus, ArmorPen=armorPenetration, SkillDmg=skillDamage
+  //     (전부 "특수 스탯 10종 뼈대"로 추가한 필드 — 아직 실제 전투 데미지
+  //     계산에는 연결 안 됐지만, 전투력 점수에는 이미 반영된다)
+  //   HP=maxHp, DEF=defensePower
+  //   Evasion=effectiveEvasionRate
+  //   Block: 이 프로젝트엔 아직 별도의 "차단율" 스탯이 없다 — 개념이 가장
+  //     가까운 [effectiveDefenseRate](방어율, 받는 피해를 비율로 깎는 기존
+  //     스탯)를 대신 대응시켰다. 나중에 진짜 Block 스탯이 따로 생기면 이
+  //     자리만 바꾸면 된다.
+  //   defWeight/offenseWeight: 예전엔 20/10으로 하드코딩돼 있었지만, 이제
+  //     [ConfigManager.combatPowerWeights](Supabase `game_config` 테이블,
+  //     id='cp_weights')에서 앱 업데이트 없이 서버가 실시간으로 조정한다 —
+  //     조회 실패 시에도 그 매니저 자체가 안전하게 20.0/10.0으로 시작하므로
+  //     여기서 다시 null-체크할 필요가 없다.
+  int get totalCombatPower {
+    final CombatPowerWeights weights = ConfigManager.instance.combatPowerWeights;
+    final double attackScore = attackPower *
+        effectiveAttackSpeed *
+        (1 + (effectiveCriticalRate * effectiveCriticalMultiplier)) *
+        (1 + bossDamageBonus + armorPenetration + skillDamage);
+    final double defenseScore = maxHp +
+        (defensePower * weights.defWeight) * (1 + effectiveEvasionRate + effectiveDefenseRate);
+    return (attackScore * weights.offenseWeight + defenseScore).floor();
+  }
+
   /// 몬스터 1마리를 처치하는 데 평균적으로 필요한 타격 횟수 — 실제
   /// 스테이지별 몬스터 HP 스케일링을 시뮬레이션하지 않고 [goldPerHour]와
   /// 같은 성격의 단순화된 근사치를 낸다. 정확한 밸런스 데이터가 없어
@@ -395,6 +523,10 @@ class GameManager extends ChangeNotifier {
     // 길드 전쟁 승리 휘장("승리자의 기운") — 만료되지 않은 휘장이 없으면
     // GuildWarManager.badgeGoldRateBonus가 0이라 곱산에 영향이 없다.
     goldReward = (goldReward * (1 + GuildWarManager.instance.badgeGoldRateBonus)).round();
+    // 계정 단위 골드 획득량([goldGain]) — 위 [ArtifactStat.goldGainPercent]와는
+    // 별개 소스라(둘 다 0이 기본값) 곱산이 한 번 더 들어간다(요구사항:
+    // "몬스터 처치 시 지급되는 최종 골드... 계산식에 이 비율을 곱해서").
+    goldReward = (goldReward * (1 + goldGain)).round();
     return goldReward;
   }
 
@@ -536,6 +668,22 @@ class GameManager extends ChangeNotifier {
     return currentHp - before;
   }
 
+  /// [IdleGame]이 몬스터에게 피해를 입힐 때마다 호출 — [lifeSteal](흡혈,
+  /// 유물 [ArtifactStat.lifeStealPercent] 포함)이 0보다 크면 가한 피해의
+  /// 그 비율만큼 체력을 회복시킨다. [healPlayer]와 같은 반환 관례(실제로
+  /// 회복된 절대량)를 따른다 — 흡혈이 없거나(대부분의 경우) 이미
+  /// 풀피면 아무 것도 바꾸지 않고 0을 돌려준다.
+  double applyLifeSteal(double damageDealt) {
+    if (lifeSteal <= 0 || currentHp >= maxHp) {
+      return 0;
+    }
+    final double healAmount = damageDealt * lifeSteal;
+    final double before = currentHp;
+    currentHp = (currentHp + healAmount).clamp(0.0, maxHp);
+    notifyListeners();
+    return currentHp - before;
+  }
+
   /// 절대 스테이지를 1 낮춘다(최소 1-1 고정) — 플레이어 사망/보스전 제한
   /// 시간 초과 양쪽 모두 이 메서드 하나로 수렴한다. 챕터 경계도 자연스럽게
   /// 넘나든다(예: 12-1에서 패배하면 11-10으로 복귀) — 예전에는 stage==1
@@ -590,7 +738,19 @@ class GameManager extends ChangeNotifier {
       // 장착 펫(신규 Pet 모델)의 "보스 데미지 증가" 옵션 — 스킬트리 기반
       // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
       effectiveDamage *= 1 + _petSpecialStat(PetSpecialStat.bossDamage);
+      // 계정 단위 보스 피해 증가([bossDamageBonus], 유물 [ArtifactStat
+      // .bossDamageBonusPercent] 포함) — 지금 잡고 있는 몬스터가 보스일
+      // 때만 곱산으로 들어간다(요구사항: "타격 시 대상이 보스일 경우...
+      // 최종 데미지에 곱연산으로 적용").
+      effectiveDamage *= 1 + bossDamageBonus;
     }
+    // 방어구 관통([armorPenetration], 유물 [ArtifactStat
+    // .armorPenetrationPercent] 포함) — 몬스터 쪽에 별도 방어력 스탯이
+    // 없어(순수 HP만 갖는다) "그 방어력의 N%를 무시"할 대상 자체가 없다.
+    // 대신 방어구를 뚫고 들어간 만큼 더 많은 피해를 입힌다는 것과 최종
+    // 효과가 동일한 직접 데미지 증폭으로 반영한다 — 보스가 아닌 일반
+    // 몬스터에게도 항상 적용된다(보스 한정인 [bossDamageBonus]와 다른 점).
+    effectiveDamage *= 1 + armorPenetration;
 
     monsterHp -= effectiveDamage;
     ({Equipment? droppedItem, int goldReward}) result =
@@ -621,9 +781,15 @@ class GameManager extends ChangeNotifier {
 
     // 배틀패스 BP — 몬스터 처치마다 저확률(BattlePassManager.monsterKillDropChance)로
     // 소량 지급된다. 활성 시즌이 없으면 addBpExp가 스스로 아무 일도 하지
-    // 않으므로 여기서 별도로 시즌 유무를 확인할 필요가 없다.
+    // 않으므로 여기서 별도로 시즌 유무를 확인할 필요가 없다. 이 프로젝트엔
+    // 별도의 "경험치" 재화가 없어(챕터/스테이지 진행 자체가 성장이다),
+    // 몬스터 처치로 얻는 실질적 "경험치"에 가장 가까운 이 BP 지급량에
+    // [expGain](경험치 획득량, 유물 [ArtifactStat.expGainPercent] 포함)을
+    // 곱해 반영한다(요구사항: "몬스터 처치 시 지급되는... 경험치 계산식에
+    // 이 비율을 곱해서").
     if (_random.nextDouble() < BattlePassManager.monsterKillDropChance) {
-      unawaited(BattlePassManager.instance.addBpExp(BattlePassManager.monsterKillDropAmount));
+      final int bpAmount = (BattlePassManager.monsterKillDropAmount * (1 + expGain)).round();
+      unawaited(BattlePassManager.instance.addBpExp(bpAmount));
     }
 
     final int goldReward = goldRewardForKill(chapter: chapter, stage: stage);
@@ -836,11 +1002,20 @@ class GameManager extends ChangeNotifier {
     return true;
   }
 
-  ({double damage, bool isCritical}) rollAttack() {
+  /// 플레이어의 공격 1회를 판정한다 — 명중률([accuracy], 유물 [ArtifactStat
+  /// .accuracyPercent] 포함)이 [_monsterBaseEvasionRate]를 깎아 몬스터의
+  /// 회피 여부를 먼저 정하고([evaded]), 회피가 아니면 기존처럼 크리티컬
+  /// 여부/데미지를 계산한다. 회피면 데미지는 0이고 [IdleGame]이 "회피"
+  /// 텍스트만 띄운 채 골드/드랍/흡혈 등 명중 후속 처리를 전부 건너뛴다.
+  ({double damage, bool isCritical, bool evaded}) rollAttack() {
+    final double monsterEvasionRate = (_monsterBaseEvasionRate - accuracy).clamp(0.0, 1.0);
+    if (_random.nextDouble() < monsterEvasionRate) {
+      return (damage: 0, isCritical: false, evaded: true);
+    }
     final bool isCritical = _random.nextDouble() < effectiveCriticalRate;
     final double damage =
         isCritical ? attackPower * effectiveCriticalMultiplier : attackPower;
-    return (damage: damage, isCritical: isCritical);
+    return (damage: damage, isCritical: isCritical, evaded: false);
   }
 
   static const String _saveKey = 'game_manager_save';
@@ -869,6 +1044,15 @@ class GameManager extends ChangeNotifier {
       'evasionRate': evasionRate,
       'critDefenseRate': critDefenseRate,
       'itemDropRate': itemDropRate,
+      'goldGain': goldGain,
+      'expGain': baseExpGain,
+      'moveSpeed': baseMoveSpeed,
+      'lifeSteal': baseLifeSteal,
+      'hpRegen': baseHpRegen,
+      'bossDamageBonus': baseBossDamageBonus,
+      'armorPenetration': baseArmorPenetration,
+      'skillDamage': baseSkillDamage,
+      'accuracy': baseAccuracy,
       'maxHp': baseMaxHp,
       'collectionBonuses': {
         for (final MapEntry<CollectionStatType, double> entry in collectionBonuses.entries)
@@ -878,6 +1062,31 @@ class GameManager extends ChangeNotifier {
 
     await prefs.setString(_saveKey, jsonEncode(data));
     debugPrint('Game saved: gold=$gold, chapter=$chapter, stage=$stage');
+
+    _syncCombatPowerIfChanged();
+  }
+
+  /// [saveGame]이 마지막으로 서버에 반영한 [totalCombatPower] 값 — null이면
+  /// 아직 한 번도 동기화하지 않은 상태(앱 갓 시작).
+  int? _lastSyncedCombatPower;
+
+  /// 명예의 전당 [전투력] 랭킹([RankingCategory.combatPower])이 읽는
+  /// `profiles.combat_power`를 최신 [totalCombatPower]로 맞춘다
+  /// (요구사항: "Auto-save할 때 함께 저장"). [saveGame]은 골드 변화 등으로
+  /// 매우 자주 불리지만, 총 전투력은 그중 실제 스탯이 바뀌는 드문 호출
+  /// (레벨업/장착 변경 등)에서만 실제로 달라진다 — 그래서 "마지막으로
+  /// 올린 값과 실제로 달라졌을 때만 Supabase에 쓴다"는 이 값-비교 자체가
+  /// 자연스러운 스로틀 역할을 한다(매 saveGame 호출마다 무조건 네트워크
+  /// 요청을 보내지 않는다). 로그인 전이면
+  /// [SupabaseManager.updateCombatPower]가 스스로 조용히 아무 일도 하지
+  /// 않는다.
+  void _syncCombatPowerIfChanged() {
+    final int current = totalCombatPower;
+    if (current == _lastSyncedCombatPower) {
+      return;
+    }
+    _lastSyncedCombatPower = current;
+    unawaited(SupabaseManager.instance.updateCombatPower(current));
   }
 
   Future<void> loadGame() async {
@@ -934,6 +1143,17 @@ class GameManager extends ChangeNotifier {
     critDefenseRate =
         (data['critDefenseRate'] as num?)?.toDouble() ?? critDefenseRate;
     itemDropRate = (data['itemDropRate'] as num?)?.toDouble() ?? itemDropRate;
+    goldGain = (data['goldGain'] as num?)?.toDouble() ?? goldGain;
+    baseExpGain = (data['expGain'] as num?)?.toDouble() ?? baseExpGain;
+    baseMoveSpeed = (data['moveSpeed'] as num?)?.toDouble() ?? baseMoveSpeed;
+    baseLifeSteal = (data['lifeSteal'] as num?)?.toDouble() ?? baseLifeSteal;
+    baseHpRegen = (data['hpRegen'] as num?)?.toDouble() ?? baseHpRegen;
+    baseBossDamageBonus =
+        (data['bossDamageBonus'] as num?)?.toDouble() ?? baseBossDamageBonus;
+    baseArmorPenetration =
+        (data['armorPenetration'] as num?)?.toDouble() ?? baseArmorPenetration;
+    baseSkillDamage = (data['skillDamage'] as num?)?.toDouble() ?? baseSkillDamage;
+    baseAccuracy = (data['accuracy'] as num?)?.toDouble() ?? baseAccuracy;
     baseMaxHp = (data['maxHp'] as num?)?.toDouble() ?? baseMaxHp;
     currentHp = maxHp;
 

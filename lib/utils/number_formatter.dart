@@ -56,4 +56,21 @@ class NumberFormatter {
     }
     return result;
   }
+
+  /// 축약하지 않고 천 단위 구분 쉼표만 넣는다("1234567" → "1,234,567") —
+  /// 총 전투력([GameManager.totalCombatPower])처럼 "자릿수 자체가 위압감을
+  /// 주도록 정확한 값을 그대로 보여주고 싶은" 숫자 전용이다. [format]의
+  /// K/M/B/T 축약과는 반대되는 연출 의도라 별도 메서드로 분리했다.
+  static String formatExact(int value) {
+    final bool isNegative = value < 0;
+    final String digits = value.abs().toString();
+    final StringBuffer buffer = StringBuffer();
+    for (int i = 0; i < digits.length; i++) {
+      if (i > 0 && (digits.length - i) % 3 == 0) {
+        buffer.write(',');
+      }
+      buffer.write(digits[i]);
+    }
+    return '${isNegative ? '-' : ''}$buffer';
+  }
 }

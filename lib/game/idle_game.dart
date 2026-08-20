@@ -11,6 +11,7 @@ import '../constants/character_class_config.dart';
 import '../managers/character_meta_manager.dart';
 import '../managers/consumable_manager.dart';
 import '../managers/dungeon_manager.dart';
+import '../managers/dungeon_reward_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/guild_manager.dart';
@@ -25,6 +26,7 @@ import '../managers/world_boss_manager.dart';
 import '../models/active_skill_model.dart';
 import '../models/character_model.dart';
 import '../models/consumable_item_model.dart';
+import '../models/dungeon_reward_config_model.dart';
 import '../models/equipment.dart';
 import '../models/mission_model.dart';
 import '../models/tower_floor_model.dart';
@@ -39,6 +41,11 @@ enum GameMode {
   petDungeon,
   worldBoss,
   guildDungeon,
+  /// 길드전 승리 전용 길드 던전("승리자의 성소") — [GuildDungeonScreen]이
+  /// 이 값과 [GameMode.guildDungeon]을 모두 다룰 수 있게 `mode` 파라미터로
+  /// 받는다. 입장 자체의 접근 제한(길드전 승리 배지 보유 여부)은 화면 쪽
+  /// [GuildVictorySanctuaryTab]에서 걸고, 여기서는 던전 진행/보상만 다룬다.
+  guildVictorySanctuary,
   weekdayDungeon,
   guildRaid,
   guildWar,
@@ -211,6 +218,11 @@ class IdleGame extends FlameGame {
   /// 되돌린다.
   int _lastKnownAbsoluteStage = 0;
 
+  /// [GameManager.isBossStage] 스냅샷 — 매 프레임 비교해서 false→true로
+  /// "방금" 바뀐 순간에만 [_checkBossStageEntered]가 경고 팝업을 한 번
+  /// 띄운다(요구사항: "보스 몬스터가 등장할 때... 경고 텍스트").
+  bool _lastKnownIsBossStage = false;
+
   // 스킬 히트 플래시만 예외적으로 반투명 색을 잠깐 덮는다 — 평소엔 완전
   // 투명이라 [ScrollingBackground]가 그대로 비쳐 보인다.
   static const Color _normalBackgroundColor = Colors.transparent;
@@ -236,6 +248,10 @@ class IdleGame extends FlameGame {
   /// 금색/청동색으로, "적 길드의 성"이라는 느낌을 준다.
   static const Color _guildWarBaseColor = Color(0xFFB8860B);
 
+  /// 승리자의 성소 전용 — 길드전 승리 배지와 같은 화려한 금색으로,
+  /// "전쟁에서 승리한 길드만 들어올 수 있는 특별한 자리"라는 느낌을 준다.
+  static const Color _guildVictorySanctuaryMonsterColor = Color(0xFFFFD700);
+
   static const double _goldDungeonDuration = 60.0;
   static const double _equipDungeonDuration = 60.0;
   static const double _petDungeonDuration = 60.0;
@@ -252,6 +268,10 @@ class IdleGame extends FlameGame {
   /// "타임아웃=성공"이 아니다 — 요구사항의 "던전 클리어 시 보상 지급"은
   /// 처치가 목표라는 뜻이다).
   static const double _guildDungeonDuration = 60.0;
+
+  /// 승리자의 성소 도전 1회의 제한 시간(초) — 길드 던전과 같은 "처치=클리어"
+  /// 구조를 그대로 쓴다.
+  static const double _guildVictorySanctuaryDuration = 60.0;
 
   /// 길드 레이드 전투 1회의 제한 시간(초) — 요구사항 예시(30초) 그대로.
   /// 월드보스와 같은 "처치가 아니라 누적 데미지가 목표" 구조라, 이 시간
@@ -278,6 +298,12 @@ class IdleGame extends FlameGame {
   /// 있었다. 몬스터가 플레이어 체력을 실제로 깎게 하려면 메인 스테이지
   /// 수준의 양방향 전투 구조가 추가로 필요하다.)
   static const double _guildDungeonMonsterHp = 5000;
+
+  /// 승리자의 성소 몬스터 체력 — 길드전 승리 배지를 가진 유저만 들어올 수
+  /// 있는 특별한 던전인 만큼, 일반 길드 던전(5000)보다 조금 더 도전적인
+  /// 자리표시 값을 잡았다. 정확한 밸런스 데이터가 없어 임의로 정했으니,
+  /// 기획 수치가 정해지면 이 값만 바꾸면 된다.
+  static const double _guildVictorySanctuaryMonsterHp = 8000;
 
   /// 길드 던전 클리어 보상 — "예: 30개"라는 요구사항 그대로. 골드/보석
   /// 값은 명시되지 않아 다른 던전 보상과 비슷한 규모로 임의 설정했다.
@@ -622,6 +648,18 @@ class IdleGame extends FlameGame {
     _lastKnownAbsoluteStage = current;
   }
 
+  /// [GameManager.isBossStage]가 false→true로 방금 바뀐 프레임에만 화면
+  /// 중앙에 경고 문구를 한 번 띄운다 — 매 프레임 상태를 그냥 다시 읽기만
+  /// 하면 보스전 내내(제한시간 동안) 계속 다시 뜨므로, 반드시 "전환
+  /// 순간"만 잡아야 한다([_checkStageRegression]과 같은 스냅샷 비교 관례).
+  void _checkBossStageEntered() {
+    final bool isBoss = manager.isBossStage;
+    if (isBoss && !_lastKnownIsBossStage) {
+      add(BossWarningText(screenSize: size));
+    }
+    _lastKnownIsBossStage = isBoss;
+  }
+
   /// 물약 자동 사용 — 매 프레임 쿨타임을 줄이고, 쿨타임이 다 됐을 때만
   /// [PotionManager.tryAutoUse]에 현재 HP 비율을 넘겨 판정을 위임한다.
   /// 실제로 사용됐으면(null이 아니면) [GameManager.healPlayer]로 회복시키고
@@ -751,6 +789,13 @@ class IdleGame extends FlameGame {
       case GameMode.guildDungeon:
         dungeonTimeRemaining = _guildDungeonDuration;
         _spawnDungeonMonster(hp: _guildDungeonMonsterHp, color: _guildDungeonMonsterColor);
+      case GameMode.guildVictorySanctuary:
+        dungeonTimeRemaining = _guildVictorySanctuaryDuration;
+        _spawnDungeonMonster(
+          hp: _guildVictorySanctuaryMonsterHp,
+          color: _guildVictorySanctuaryMonsterColor,
+          emoji: '👑',
+        );
       case GameMode.weekdayDungeon:
         dungeonTimeRemaining = _weekdayDungeonDuration;
         _weekdayDungeonWaveCleared = 0;
@@ -846,6 +891,7 @@ class IdleGame extends FlameGame {
 
     if (mode == GameMode.mainStage) {
       _checkChapterBackgroundChange();
+      _checkBossStageEntered();
 
       if (_encounterPhase == _EncounterPhase.moving) {
         _updateMovingPhase(combatDt);
@@ -983,7 +1029,7 @@ class IdleGame extends FlameGame {
   /// .attack_type`)가 명시적으로 결정한다 — [classType]은 이제 원거리일 때
   /// 투사체 비주얼([visualFor])을 고르는 용도로만 남는다.
   void _fireProjectile() {
-    final ({double damage, bool isCritical}) result = manager.rollAttack();
+    final ({double damage, bool isCritical, bool evaded}) result = manager.rollAttack();
     final CharacterClass classType = _equippedCharacterClass;
     final AttackType attackType = CharacterMetaManager.instance.attackTypeFor(_equippedCharacterId);
 
@@ -993,7 +1039,8 @@ class IdleGame extends FlameGame {
           Projectile(
             startPosition: _playerCenter,
             targetPosition: _monsterCenter,
-            onHit: () => _resolveHit(result.damage, result.isCritical),
+            onHit: () =>
+                _resolveHit(result.damage, result.isCritical, evaded: result.evaded),
           ),
         );
       case AttackType.ranged:
@@ -1012,13 +1059,14 @@ class IdleGame extends FlameGame {
             startPosition: _playerCenter,
             getTargetPosition: () => _monsterCenter,
             visual: visual,
-            onHit: () => _resolveHit(result.damage, result.isCritical),
+            onHit: () =>
+                _resolveHit(result.damage, result.isCritical, evaded: result.evaded),
           ),
         );
     }
   }
 
-  void _resolveHit(double damage, bool isCritical) {
+  void _resolveHit(double damage, bool isCritical, {bool evaded = false}) {
     if (_isDefeatSequenceActive) {
       // 패배 연출(피격 포즈/페이드) 진행 중엔 화면이 곧 검게 덮이므로,
       // 뒤늦게 도착한 투사체의 타격은 조용히 무시한다 — 중복 데미지/골드
@@ -1032,6 +1080,13 @@ class IdleGame extends FlameGame {
       // 미리 데미지를 받는다.
       return;
     }
+    if (evaded) {
+      // 몬스터가 회피(GameManager.rollAttack, 명중률/ArtifactStat
+      // .accuracyPercent가 못 넘긴 경우) — 데미지/골드/드랍/흡혈 등 명중
+      // 후속 처리를 전부 건너뛰고 "회피" 텍스트만 띄운다.
+      _spawnMonsterDamageText(0, false, evaded: true);
+      return;
+    }
 
     _playHitEffect();
     _spawnMonsterDamageText(damage, isCritical);
@@ -1043,6 +1098,9 @@ class IdleGame extends FlameGame {
     } else {
       unawaited(SoundManager.instance.playHit());
     }
+    // 흡혈(GameManager.lifeSteal, 유물 ArtifactStat.lifeStealPercent 포함) —
+    // 대부분의 경우 0이라 조용히 아무 일도 하지 않는다.
+    manager.applyLifeSteal(damage);
 
     if (mode == GameMode.mainStage) {
       final ({Equipment? droppedItem, int goldReward}) hitResult =
@@ -1242,6 +1300,17 @@ class IdleGame extends FlameGame {
           gemReward: _guildDungeonGemReward,
           guildCoinReward: _guildDungeonCoinReward,
         );
+      case GameMode.guildVictorySanctuary:
+        // 하드코딩된 고정 보상 대신 DungeonRewardManager(Supabase
+        // dungeon_rewards_config 테이블)에서 뽑는다(요구사항: "클리어 시
+        // 마찬가지로 DB 기반 보상(룬 조각 등)을 지급"). 골드/보석
+        // 결과 팝업 필드는 이 던전엔 없어(전부 DB 설정에 맡긴다)
+        // consumableItemReward 한 줄로 지급 내역을 요약해 보여준다.
+        final List<DungeonRewardGrant> grants = DungeonRewardManager.instance
+            .grantRewardsFor(DungeonRewardManager.guildVictorySanctuary);
+        final String? rewardSummary =
+            grants.isEmpty ? null : grants.map((grant) => grant.label).join(', ');
+        _endDungeon(success: true, goldReward: 0, consumableItemReward: rewardSummary);
       case GameMode.weekdayDungeon:
         // 골드 던전/월드보스와 같은 "파도" 구조 — 처치할 때마다 즉시
         // 클리어 종료하지 않고, 다음(조금 더 강한) 몬스터를 곧바로
@@ -1344,6 +1413,12 @@ class IdleGame extends FlameGame {
     _playHitEffect();
     _flashBackground();
     _spawnMonsterDamageText(damage, true);
+    // 액티브 스킬 전용 타격감 연출 — 몬스터 타격 영역 위에 참격 아이콘이
+    // 짧게 나타났다 사라진다(요구사항: "검(참격) 아이콘... Fade/Scale
+    // Transition"). 화면 섬광은 바로 위 [_flashBackground]가 이미 담당한다.
+    add(SkillImpactIcon(position: _monsterCenter));
+    // 스킬 데미지도 일반 타격과 동일하게 흡혈이 적용된다.
+    manager.applyLifeSteal(damage);
 
     if (mode == GameMode.mainStage) {
       final ({Equipment? droppedItem, int goldReward}) hitResult =
@@ -1413,13 +1488,18 @@ class IdleGame extends FlameGame {
         (_random.nextDouble() - 0.5) * 20,
       );
 
-  /// 유저가 몬스터를 타격했을 때 몬스터 머리 위에 띄운다 — 크리티컬이면
-  /// 우선 "Critical N" 스타일로, 아니면 흰색 숫자로.
-  void _spawnMonsterDamageText(double damage, bool isCritical) {
+  /// 유저가 몬스터를 타격(또는 회피당)했을 때 몬스터 머리 위에 띄운다 —
+  /// 회피가 최우선(요구사항: 명중률/ArtifactStat.accuracyPercent가 몬스터
+  /// 회피율을 못 넘기면 "회피"), 그다음 크리티컬이면 "Critical N", 아니면
+  /// 흰색 숫자로.
+  void _spawnMonsterDamageText(double damage, bool isCritical, {bool evaded = false}) {
+    final FloatingTextKind kind = evaded
+        ? FloatingTextKind.evade
+        : (isCritical ? FloatingTextKind.critical : FloatingTextKind.normalDamage);
     add(
       DamageTextComponent(
         position: _monsterCenter + _textJitter(),
-        kind: isCritical ? FloatingTextKind.critical : FloatingTextKind.normalDamage,
+        kind: kind,
         damage: damage,
       ),
     );
@@ -2403,6 +2483,46 @@ class ProjectileImpactEffect extends CircleComponent {
   }
 }
 
+/// 액티브 스킬([IdleGame.castActiveSkill])이 착탄했을 때 몬스터 타격
+/// 영역 위에 짧게 나타났다 사라지는 참격 아이콘 — 작게 시작해 확 커지며
+/// 나타난 뒤(Scale) 페이드아웃된다(요구사항: "검(참격) 아이콘... Fade/Scale
+/// Transition"). 전용 스프라이트 없이(요구사항이 "이미지"를 필수로
+/// 요구하지 않음) 이모지 텍스트로 그린다 — 이 파일의 다른 이모지 기반
+/// 연출([_monsterEmoji]의 🐉/👹/🏰/👑)과 같은 관례라 별도 에셋 없이 바로
+/// 동작한다.
+class SkillImpactIcon extends TextComponent {
+  SkillImpactIcon({required Vector2 position})
+    : super(
+        text: '⚔️',
+        position: position,
+        anchor: Anchor.center,
+        textRenderer: TextPaint(style: const TextStyle(fontSize: 52)),
+      );
+
+  static const double _duration = 0.22;
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+
+    // 작게 시작해서(0.3배) 확 튀어나오듯 커진다(1.3배까지) — 도장 찍듯
+    // 임팩트를 준 뒤, 잠깐 유지하다 사라진다.
+    scale = Vector2.all(0.3);
+    add(
+      ScaleEffect.to(
+        Vector2.all(1.3),
+        EffectController(duration: _duration, curve: Curves.easeOutBack),
+      ),
+    );
+    add(
+      OpacityEffect.fadeOut(
+        EffectController(duration: 0.25, startDelay: 0.15),
+        onComplete: removeFromParent,
+      ),
+    );
+  }
+}
+
 /// 광역 액티브 스킬([SkillManager.onActiveSkillCast]/[IdleGame.castActiveSkill])
 /// 발동 시 하늘에서 떨어지는 이펙트. [skillId]가 주어지면
 /// [AppImages.skillEffect] 전용 스프라이트를 우선 시도하고([onLoad]), 아직
@@ -2575,10 +2695,19 @@ class DamageTextComponent extends TextComponent {
           fontWeight: FontWeight.bold,
         );
       case FloatingTextKind.critical:
+        // 일반 타격 텍스트보다 훨씬 크게, 그리고 TotalCombatPowerBanner와
+        // 같은 관례로 이중 발광(밝은 안쪽 + 넓게 퍼지는 바깥쪽) 그림자를
+        // 겹쳐서 "강렬하게 터지는" 느낌을 낸다 — 요구사항: "데미지
+        // 텍스트의 폰트 스타일도 더 크고 강렬하게".
         return const TextStyle(
           color: Colors.orangeAccent,
-          fontSize: 27,
-          fontWeight: FontWeight.bold,
+          fontSize: 36,
+          fontWeight: FontWeight.w900,
+          shadows: [
+            Shadow(color: Colors.orangeAccent, blurRadius: 8),
+            Shadow(color: Colors.redAccent, blurRadius: 20),
+            Shadow(color: Colors.black87, blurRadius: 4, offset: Offset(1.5, 1.5)),
+          ],
         );
     }
   }
@@ -2702,6 +2831,58 @@ class LootText extends TextComponent {
     add(
       OpacityEffect.fadeOut(
         EffectController(duration: duration, startDelay: 0.3),
+        onComplete: removeFromParent,
+      ),
+    );
+  }
+}
+
+/// 보스 스테이지에 처음 진입했을 때 화면 중앙에 잠깐 띄우는 경고 문구 —
+/// 방치형 특유의 밋밋함을 깨는 가벼운 연출(요구사항: "보스 몬스터가
+/// 등장할 때... 경고 텍스트가 잠깐 깜빡이거나 팝업"). 몇 차례 깜빡이다가
+/// 스스로 페이드아웃하며 제거된다([LootText]와 같은 "두 이펙트를 독립적으로
+/// 추가"하는 관례 — 하나는 시각 효과, 다른 하나는 [removeFromParent]로
+/// 수명을 관리).
+class BossWarningText extends TextComponent {
+  BossWarningText({required Vector2 screenSize})
+      : super(
+          text: '⚠️ BOSS WARNING ⚠️',
+          position: Vector2(screenSize.x / 2, screenSize.y * 0.28),
+          anchor: Anchor.center,
+          textRenderer: TextPaint(
+            style: const TextStyle(
+              color: Colors.redAccent,
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+              shadows: [
+                Shadow(color: Colors.black87, blurRadius: 6, offset: Offset(2, 2)),
+                Shadow(color: Colors.orangeAccent, blurRadius: 16),
+              ],
+            ),
+          ),
+        );
+
+  static const double _blinkStep = 0.25;
+  static const int _blinkCycles = 3;
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+
+    add(
+      SequenceEffect([
+        for (int i = 0; i < _blinkCycles; i++) ...[
+          OpacityEffect.to(0.15, EffectController(duration: _blinkStep)),
+          OpacityEffect.to(1.0, EffectController(duration: _blinkStep)),
+        ],
+      ]),
+    );
+    add(
+      OpacityEffect.fadeOut(
+        EffectController(
+          duration: 0.5,
+          startDelay: _blinkStep * _blinkCycles * 2,
+        ),
         onComplete: removeFromParent,
       ),
     );

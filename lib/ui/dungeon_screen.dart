@@ -56,6 +56,7 @@ class _DungeonScreenState extends State<DungeonScreen> {
       GameMode.mainStage ||
       GameMode.worldBoss ||
       GameMode.guildDungeon ||
+      GameMode.guildVictorySanctuary ||
       GameMode.weekdayDungeon ||
       GameMode.guildRaid ||
       GameMode.guildWar => null,
@@ -881,6 +882,10 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
         // worldBoss와 같은 이유 — 전용 GuildDungeonScreen이 따로 있어
         // 실제로 이 값이 쓰이지 않는다.
         return '길드 던전';
+      case GameMode.guildVictorySanctuary:
+        // worldBoss와 같은 이유 — 전용 GuildDungeonScreen이 따로 있어
+        // 실제로 이 값이 쓰이지 않는다.
+        return '승리자의 성소';
       case GameMode.guildRaid:
         // worldBoss와 같은 이유 — 전용 GuildRaidScreen이 따로 있어
         // 실제로 이 값이 쓰이지 않는다.

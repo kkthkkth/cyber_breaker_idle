@@ -12,6 +12,7 @@ import 'consumable_manager.dart';
 import 'equipment_manager.dart';
 import 'game_manager.dart';
 import 'monster_drop_manager.dart';
+import 'rune_manager.dart';
 import 'supabase_manager.dart';
 
 class OfflineRewardManager with WidgetsBindingObserver {
@@ -19,9 +20,23 @@ class OfflineRewardManager with WidgetsBindingObserver {
 
   static final OfflineRewardManager instance = OfflineRewardManager._internal();
 
-  /// 최소 10분 이상 자리를 비웠을 때만 보상을 계산한다(요구사항).
-  static const int _minOfflineSeconds = 600;
+  /// 최소 1분 이상 자리를 비웠을 때만 보상을 계산한다(요구사항 — 원래
+  /// 10분이었지만, 웹(localhost) 테스트 중 "몇 분만 탭을 닫아도 팝업이
+  /// 안 뜬다"는 피드백을 받아 1분으로 낮췄다). 실제 운영 환경에서 너무
+  /// 자주(예: 앱 전환 잠깐 했다가 돌아올 때마다) 팝업이 뜨는 게 거슬리면
+  /// 이 상수 하나만 다시 올리면 된다.
+  static const int _minOfflineSeconds = 60;
   static const String _lastExitTimeKey = 'offline_reward_last_exit_time';
+
+  /// [startPeriodicAutoSave]가 만드는 반복 타이머 — 웹(localhost 포함)은
+  /// 탭을 그냥 닫을 때 [AppLifecycleState.paused]/[detached]가 신뢰성 있게
+  /// 오지 않는 경우가 많아([didChangeAppLifecycleState] 문서 참고),
+  /// 생명주기 이벤트 하나에만 의존하면 "마지막 접속 시각"이 훨씬 이전
+  /// 값(마지막으로 resumed됐던 시점)에 멈춰 있을 수 있다. 이 타이머는
+  /// 그와 무관하게 주기적으로 "지금"을 계속 저장해 둬서, 탭이 갑자기
+  /// 죽어도 최소한 이 주기 이내의 오차로 마지막 접속 시각을 복구할 수
+  /// 있게 한다.
+  Timer? _periodicSaveTimer;
 
   /// Swappable at runtime once fetched from a real config endpoint — see
   /// [GameConfig.fromJson].
@@ -33,11 +48,16 @@ class OfflineRewardManager with WidgetsBindingObserver {
   /// (see [MonsterDropTableManager.expectedDropsForKills]) — nothing is
   /// actually granted yet; that happens in [claimReward] once the player
   /// dismisses the popup, mirroring how [rewardGold] already worked.
+  /// [bpExpGained]/[runeFragmentsGained]도 같은 관례 — 표시용으로 미리
+  /// 계산해 넘기고, 실제 지급은 [claimReward]가 그대로 이어받는다(요구사항:
+  /// "N시간 M분 동안 방치하여... 경험치(BP), 룬 조각(시간 비례)").
   void Function({
     required int offlineSeconds,
     required int rewardGold,
     required int equipmentCount,
     required Map<ConsumableType, int> consumableDrops,
+    required int bpExpGained,
+    required int runeFragmentsGained,
   })?
   onRewardCalculated;
 
@@ -48,6 +68,23 @@ class OfflineRewardManager with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.resumed) {
       checkOfflineReward();
     }
+  }
+
+  /// main()이 앱 시작 시 한 번 호출 — [_periodicSaveTimer] 문서 참고.
+  ///
+  /// [SupabaseManager.startLastSeenHeartbeat]와 달리 **즉시 한 번 쓰지
+  /// 않는다** — 이 시점(main() 실행 중)엔 아직
+  /// `_MainNavigationScreenState.initState()`의 [checkOfflineReward]가
+  /// 실행되기 전이라, 여기서 곧바로 [_saveExitTime]을 부르면 "이전 세션이
+  /// 남긴 마지막 접속 시각"이 "지금"으로 덮어써져 버려서
+  /// [checkOfflineReward]가 실제 방치 시간을 영원히 0으로 계산하게 된다
+  /// (실측 확인됨 — 매우 심각한 회귀였을 것). 그래서 첫 기록은 [interval]
+  /// 이 한 번 지난 뒤부터 시작한다 — 그때는 이미 [checkOfflineReward]가
+  /// 이전 값을 다 읽고 소비한 뒤이므로 안전하다. 중복 호출해도 안전하도록
+  /// 기존 타이머가 있으면 먼저 취소한다(예: 핫 리스타트).
+  void startPeriodicAutoSave({Duration interval = const Duration(seconds: 30)}) {
+    _periodicSaveTimer?.cancel();
+    _periodicSaveTimer = Timer.periodic(interval, (_) => _saveExitTime());
   }
 
   /// [DateTime.now()](기기 시계) 대신 [getNetworkTime]을 쓰는 이유: 이
@@ -124,12 +161,27 @@ class OfflineRewardManager with WidgetsBindingObserver {
           itemDropRate: GameManager.instance.itemDropRate,
         );
 
-    if (rewardGold > 0 || drops.equipmentCount > 0 || drops.consumables.isNotEmpty) {
+    // BP 경험치/룬 조각도 골드와 같은 "방치 시간에 정비례" 공식이다 —
+    // 여기서 한 번만 계산해서 표시(팝업)와 지급([claimReward])이 항상
+    // 같은 값을 쓰게 한다(예전엔 claimReward가 BP를 따로 다시 계산해서
+    // 팝업에 안 보이는 채로 조용히 지급하고 있었다).
+    final int bpExpGained =
+        (offlineSeconds / 60 * BattlePassManager.bpExpPerOfflineMinute).round();
+    final int runeFragmentsGained =
+        (offlineSeconds / 60 * RuneManager.runeFragmentsPerOfflineMinute).round();
+
+    if (rewardGold > 0 ||
+        drops.equipmentCount > 0 ||
+        drops.consumables.isNotEmpty ||
+        bpExpGained > 0 ||
+        runeFragmentsGained > 0) {
       onRewardCalculated?.call(
         offlineSeconds: offlineSeconds,
         rewardGold: rewardGold,
         equipmentCount: drops.equipmentCount,
         consumableDrops: drops.consumables,
+        bpExpGained: bpExpGained,
+        runeFragmentsGained: runeFragmentsGained,
       );
     }
   }
@@ -139,22 +191,24 @@ class OfflineRewardManager with WidgetsBindingObserver {
   /// [MonsterDropTableManager.equipmentGradesForChapter]와 같은 기준으로
   /// 생성/지급한다. profiles.last_seen도 지금 시각으로 즉시 갱신한다
   /// (요구사항) — 2분 주기 하트비트를 기다리지 않고 바로 최신화해서, 이
-  /// 방치 구간이 다시 이중으로 계산되는 일이 없게 한다. [offlineSeconds]에
-  /// 비례해 배틀패스 BP도 함께 지급한다(요구사항: "방치 시간에 비례해서
-  /// BP 경험치를 획득") — 활성 시즌이 없으면 BattlePassManager.addBpExp가
-  /// 스스로 아무 일도 하지 않는다.
+  /// 방치 구간이 다시 이중으로 계산되는 일이 없게 한다. [bpExpGained]/
+  /// [runeFragmentsGained]는 [checkOfflineReward]가 이미 계산해 넘긴
+  /// 값을 그대로 지급한다(팝업에 보여준 숫자와 실제로 받는 숫자가 항상
+  /// 같도록) — 활성 시즌이 없으면 BattlePassManager.addBpExp가, 0이면
+  /// RuneManager.addFragments가 스스로 아무 일도 하지 않는다.
   void claimReward({
     required int rewardGold,
     required int offlineSeconds,
     int equipmentCount = 0,
     Map<ConsumableType, int> consumableDrops = const {},
+    int bpExpGained = 0,
+    int runeFragmentsGained = 0,
   }) {
     GameManager.instance.addGold(rewardGold);
     unawaited(SupabaseManager.instance.updateLastSeen());
 
-    final int bpExpGained =
-        (offlineSeconds / 60 * BattlePassManager.bpExpPerOfflineMinute).round();
     unawaited(BattlePassManager.instance.addBpExp(bpExpGained));
+    RuneManager.instance.addFragments(runeFragmentsGained);
 
     final List<ItemGrade> grades =
         MonsterDropTableManager.equipmentGradesForChapter(GameManager.instance.chapter);

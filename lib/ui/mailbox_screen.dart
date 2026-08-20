@@ -5,33 +5,6 @@ import '../models/mailbox_item_model.dart';
 import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 
-/// 앱 전역 상단 AppBar([main.dart]의 actions)에서 쓰는 우편함 진입 버튼 —
-/// 수령하지 않은 우편이 있으면 빨간 뱃지를 띄운다. [MailboxManager]가
-/// 갱신될 때마다([refresh]/[claim]/[claimAll]) 자동으로 다시 그려진다.
-class MailboxHudButton extends StatelessWidget {
-  const MailboxHudButton({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: MailboxManager.instance,
-      builder: (context, _) {
-        return IconButton(
-          icon: Badge(
-            isLabelVisible: MailboxManager.instance.hasUnclaimedMail,
-            backgroundColor: Colors.redAccent,
-            smallSize: 10,
-            child: const Icon(Icons.mail, color: Colors.white70),
-          ),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const MailboxScreen()),
-          ),
-        );
-      },
-    );
-  }
-}
-
 /// 우편함 화면 — 수령 가능한 우편을 리스트로 보여주고, 개별 [수령]과
 /// 하단 고정 [모두 수령] 버튼으로 받는다. 서버가 우편 내용을 직접
 /// 생성하는 구조라(월드보스 랭킹 보상 정산 RPC 등) 화면을 열 때마다

@@ -7,8 +7,10 @@ import '../game/idle_game.dart';
 import '../managers/attendance_manager.dart';
 import '../managers/battle_pass_manager.dart';
 import '../managers/game_manager.dart';
+import '../managers/mailbox_manager.dart';
 import '../managers/mission_manager.dart';
 import '../managers/prestige_manager.dart';
+import '../managers/quest_manager.dart';
 import '../managers/skill_manager.dart';
 import '../managers/speed_manager.dart';
 import '../managers/tutorial_manager.dart';
@@ -19,9 +21,11 @@ import '../models/skill_model.dart';
 import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import 'battle_pass_screen.dart';
+import 'mailbox_screen.dart';
 import 'mission_dialog.dart';
 import 'potion_quick_slot.dart';
 import 'prestige_dialog.dart';
+import 'quest_screen.dart';
 import 'ranking_screen.dart';
 import 'world_boss_entry_dialog.dart';
 
@@ -245,17 +249,32 @@ class _BattleView extends StatelessWidget {
                     left: 12,
                     child: _RankingHudButton(),
                   ),
+                  // 예전엔 여기(top:220)에 배틀패스 버튼이 있었지만, 그건
+                  // 물약 슬롯 왼쪽 Row로 옮겨서 이 자리가 비었다 — 대신
+                  // 상단 앱바(main.dart)에서 빠진 일일 퀘스트 진입점을
+                  // 옮겨 왔다(요구사항: "프로필 옆... 스크롤 아이콘은 삭제").
                   const Positioned(
                     top: 220,
                     left: 12,
-                    child: _BattlePassHudButton(),
+                    child: _DailyQuestHudButton(),
                   ),
                   // 상단 AppBar의 보석/코인 재화 표시(main.dart) 바로 아래,
-                  // 화면 우측 상단에 위치한 물약 퀵슬롯.
+                  // 화면 우측 상단에 위치한 유틸리티 버튼 묶음. 원래 상단
+                  // AppBar에 있던 우편함/배틀패스 버튼을 이리로 옮기면서,
+                  // 기존 물약 퀵슬롯 바로 왼쪽에 나란히 붙였다.
                   const Positioned(
                     top: 12,
                     right: 12,
-                    child: PotionQuickSlot(),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _MailboxHudButton(),
+                        SizedBox(width: 8),
+                        _BattlePassHudButton(),
+                        SizedBox(width: 8),
+                        PotionQuickSlot(),
+                      ],
+                    ),
                   ),
                   Positioned(
                     top: 12,
@@ -779,6 +798,62 @@ class _RankingHudButton extends StatelessWidget {
   }
 }
 
+/// 일일 퀘스트 진입 버튼 — [_RankingHudButton] 바로 아래(같은 44px 원
+/// 규격)에 놓인다. 원래 상단 앱바(옛 `DailyQuestHudButton`, main.dart)에
+/// 있었지만, 앱바 개편(요구사항: "프로필 → 배속 → 총 전투력 → 골드 →
+/// 보석"만 남기기)으로 이 자리로 옮겨오면서 다른 HUD 버튼들과 같은 원형
+/// 스타일로 새로 만들었다. 수령 가능한 (배틀패스) 퀘스트가 있으면
+/// [_BattlePassHudButton]과 같은 빨간 점 배지를 띄운다.
+class _DailyQuestHudButton extends StatelessWidget {
+  const _DailyQuestHudButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: QuestManager.instance,
+      builder: (context, _) {
+        final bool hasClaimable = QuestManager.instance.hasClaimableQuest;
+
+        return GestureDetector(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const QuestScreen()),
+          ),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF4F8FE0), width: 1.5),
+                ),
+                alignment: Alignment.center,
+                child: const Text('📜', style: TextStyle(fontSize: 20)),
+              ),
+              if (hasClaimable)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// 배틀패스 진입 버튼 — [_RankingHudButton] 바로 아래(같은 44px 원
 /// 규격)에 놓인다. 지금 레벨에서 아직 안 받은 보상(무료든 프리미엄이든)이
 /// 하나라도 있으면 [_QuestHudButton]과 같은 빨간 점 배지를 띄운다.
@@ -816,6 +891,59 @@ class _BattlePassHudButton extends StatelessWidget {
                 child: const Text('🎫', style: TextStyle(fontSize: 20)),
               ),
               if (hasClaimable)
+                Positioned(
+                  top: -2,
+                  right: -2,
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 우편함 진입 버튼 — 원래 상단 AppBar([main.dart])에 있던 [MailboxHudButton]을
+/// 인게임 화면 쪽으로 옮기면서, [_BattlePassHudButton]과 같은 44px 원 규격에
+/// 맞춰 새로 만들었다. 수령 가능한 우편이 있으면 같은 빨간 점 배지를 띄운다.
+class _MailboxHudButton extends StatelessWidget {
+  const _MailboxHudButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: MailboxManager.instance,
+      builder: (context, _) {
+        final bool hasUnclaimed = MailboxManager.instance.hasUnclaimedMail;
+
+        return GestureDetector(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const MailboxScreen()),
+          ),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
+                ),
+                alignment: Alignment.center,
+                child: const Text('✉️', style: TextStyle(fontSize: 20)),
+              ),
+              if (hasUnclaimed)
                 Positioned(
                   top: -2,
                   right: -2,

@@ -7,35 +7,6 @@ import '../widgets/bouncy_button.dart';
 import '../widgets/center_toast.dart';
 import 'battle_pass_screen.dart';
 
-/// 앱 전역 상단 AppBar([main.dart]의 actions)에서 쓰는 퀘스트 진입
-/// 버튼 — 수령 가능한 퀘스트가 있으면 빨간 뱃지를 띄운다.
-/// [MailboxHudButton]과 같은 관례. 기존 [_QuestHudButton](home_screen.dart,
-/// 미션 다이얼로그를 여는 클립보드 아이콘)과는 별개의 새 배틀패스 일일
-/// 퀘스트 진입점이다 — 이름 충돌을 피하려고 "Daily"를 붙였다.
-class DailyQuestHudButton extends StatelessWidget {
-  const DailyQuestHudButton({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: QuestManager.instance,
-      builder: (context, _) {
-        return IconButton(
-          icon: Badge(
-            isLabelVisible: QuestManager.instance.hasClaimableQuest,
-            backgroundColor: Colors.redAccent,
-            smallSize: 10,
-            child: const Text('📜', style: TextStyle(fontSize: 18)),
-          ),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const QuestScreen()),
-          ),
-        );
-      },
-    );
-  }
-}
-
 /// 퀘스트 화면 — 일일/주간 탭으로 나뉘어 목표 진행도 프로그레스 바를
 /// 보여주고, 달성한 퀘스트는 [받기] 버튼으로 배틀패스 BP 경험치를
 /// 수령한다. 우측 상단 버튼으로 [BattlePassScreen]에 바로 진입할 수 있다.

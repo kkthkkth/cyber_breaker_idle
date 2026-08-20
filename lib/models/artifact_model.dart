@@ -10,12 +10,38 @@ class ArtifactStat {
   static const String goldGainPercent = 'goldGainPercent';
   static const String dropRatePercent = 'dropRatePercent';
 
+  // 아래 8개는 [GameManager]가 이미 "특수 스탯 10종 뼈대"로 정의해 둔
+  // goldGain/itemDropRate(=위 2개, 이미 연결됨)를 제외한 나머지 8종을
+  // 그대로 유물 스탯으로도 노출한 것 — comprehensive_stats_dialog.dart의
+  // 4개 카테고리("성장 및 유틸리티"/"생존 및 유지력"/"특수 공격 능력")에
+  // 이미 표시 자리가 있던 값들이라, 유물이 레벨업할수록 그 화면의 숫자가
+  // 바로 오르는 걸 확인할 수 있다(GameManager.expGain/moveSpeed/accuracy/
+  // lifeSteal/hpRegen/bossDamageBonus/armorPenetration/skillDamage getter
+  // 참고). [hpRegenFlat]만 비율이 아니라 고정 수치(초당 체력)라는 점이
+  // 다르다.
+  static const String expGainPercent = 'expGainPercent';
+  static const String moveSpeedPercent = 'moveSpeedPercent';
+  static const String accuracyPercent = 'accuracyPercent';
+  static const String lifeStealPercent = 'lifeStealPercent';
+  static const String hpRegenFlat = 'hpRegenFlat';
+  static const String bossDamageBonusPercent = 'bossDamageBonusPercent';
+  static const String armorPenetrationPercent = 'armorPenetrationPercent';
+  static const String skillDamagePercent = 'skillDamagePercent';
+
   static const List<String> values = [
     attackPercent,
     defensePercent,
     maxHpPercent,
     goldGainPercent,
     dropRatePercent,
+    expGainPercent,
+    moveSpeedPercent,
+    accuracyPercent,
+    lifeStealPercent,
+    hpRegenFlat,
+    bossDamageBonusPercent,
+    armorPenetrationPercent,
+    skillDamagePercent,
   ];
 
   static String displayName(String key) => switch (key) {
@@ -24,6 +50,14 @@ class ArtifactStat {
     maxHpPercent => '최대 체력 증가',
     goldGainPercent => '골드 획득 증가',
     dropRatePercent => '아이템 드랍률 증가',
+    expGainPercent => '경험치 획득 증가',
+    moveSpeedPercent => '이동 속도 증가',
+    accuracyPercent => '명중률 증가',
+    lifeStealPercent => '흡혈',
+    hpRegenFlat => '초당 체력 회복',
+    bossDamageBonusPercent => '보스 피해 증가',
+    armorPenetrationPercent => '방어구 관통',
+    skillDamagePercent => '스킬 피해량 증가',
     _ => key,
   };
 }

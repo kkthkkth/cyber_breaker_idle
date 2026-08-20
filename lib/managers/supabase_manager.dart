@@ -431,6 +431,31 @@ class SupabaseManager {
     }
   }
 
+  /// 전투력 랭킹([RankingCategory.combatPower]) — `profiles.combat_power`
+  /// 내림차순 상위 [limit]명. [fetchTopRankingProfiles]/
+  /// [fetchTopTowerRankingProfiles]처럼 `.select().order().limit()`을
+  /// 직접 쓰지 않고, Postgres RPC `get_combat_power_ranking`(SECURITY
+  /// DEFINER)을 호출한다 — [주의] `ranking_blacklist`에 등록된 user_id를
+  /// 결과에서 완전히 제외해야 하는데, 그 제외를 클라이언트가 블랙리스트
+  /// 목록을 통째로 받아와서(`.not('id','in', [...])`) 처리하면 (1) 블랙리스트
+  /// 자체가 클라이언트에 노출되고 (2) 목록이 커질수록 쿼리도 느려진다.
+  /// RPC 안에서 `NOT EXISTS` 서브쿼리로 서버 쪽에서 걸러서, 클라이언트는
+  /// 이미 필터링된 결과만 받는다(SQL은 `supabase/combat_power_ranking.sql`
+  /// 참고). 실패하면(RPC 미배포/오프라인 등) 빈 리스트 — 호출부
+  /// ([RankingManager])가 이전에 캐시해 둔 값을 그대로 유지한다.
+  Future<List<Map<String, dynamic>>> fetchCombatPowerRanking({int limit = 100}) async {
+    try {
+      final dynamic result = await _client.rpc(
+        'get_combat_power_ranking',
+        params: {'result_limit': limit},
+      );
+      return (result as List<dynamic>).cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 전투력 랭킹 조회 실패: $error');
+      return const [];
+    }
+  }
+
   /// [userIds]에 속한 유저들의 소속 길드명 — `guild_members`를
   /// `guilds(name)` 임베드로 조회한다(한 유저는 최대 한 길드에만 속하므로
   /// 1:1 매핑). 길드가 없는 유저는 결과에 아예 나타나지 않는다.
@@ -657,25 +682,46 @@ class SupabaseManager {
     }
   }
 
-  /// 현재 유저의 `user_pets` 행을 [pets]로 통째로 맞춘다(기존 행 전부
-  /// 삭제 후 재삽입) — 펫은 수십 마리 수준으로 적어 부분 갱신보다 훨씬
-  /// 단순하고, 뽑기로 새로 생긴/분해로 사라진 펫이 서버에 밀린 채로 남는
-  /// 일이 없다. [EquipmentManager.saveEquipment]가 호출될 때마다(=펫이든
-  /// 아니든 장비 상태가 바뀔 때마다) 함께 호출된다.
+  /// 현재 유저의 `user_pets` 행을 [pets]로 맞춘다 — 더 이상 보유하지 않은
+  /// 펫(뽑기 분해 등으로 사라짐)만 정확히 골라 지우고, 나머지는
+  /// upsert(있으면 갱신, 없으면 삽입)한다. [EquipmentManager.saveEquipment]
+  /// 가 호출될 때마다(=펫이든 아니든 장비 상태가 바뀔 때마다) 함께
+  /// 호출된다.
+  ///
+  /// [주의] 예전엔 "기존 행 전부 삭제 후 재삽입"이었다 — 의도(사라진
+  /// 펫이 서버에 밀린 채로 남지 않게 함) 자체는 맞지만, `saveEquipment`가
+  /// 여러 번 겹쳐(`unawaited`) 짧은 간격으로 불리면 두 호출의 delete/insert
+  /// 순서가 뒤섞일 수 있었다 — A가 지운 뒤 아직 넣기 전에 B도 지우고
+  /// 넣고, 그 다음 A도 같은 id로 또 넣으면서
+  /// `duplicate key value violates unique constraint "user_pets_pkey"`가
+  /// 났다(실측 확인됨). 삭제 범위를 "이제 없는 것"으로만 좁히고 나머지를
+  /// upsert로 바꾸면, 같은 두 호출이 겹쳐도 upsert는 이미 있는 행을 그냥
+  /// 덮어쓸 뿐 절대 실패하지 않는다 — 같은 id를 두 번 insert하는 경로
+  /// 자체가 사라진다.
   Future<void> syncUserPets(List<Map<String, dynamic>> pets) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
         return;
       }
-      await _client.from(_userPetsTable).delete().eq('user_id', userId);
       if (pets.isEmpty) {
+        await _client.from(_userPetsTable).delete().eq('user_id', userId);
         return;
       }
-      await _client.from(_userPetsTable).insert([
+
+      final List<Object> currentPetIds = [
+        for (final Map<String, dynamic> pet in pets) pet['id'] as Object,
+      ];
+      await _client
+          .from(_userPetsTable)
+          .delete()
+          .eq('user_id', userId)
+          .not('id', 'in', currentPetIds);
+
+      await _client.from(_userPetsTable).upsert([
         for (final Map<String, dynamic> pet in pets)
           {'id': pet['id'], 'user_id': userId, 'data': pet},
-      ]);
+      ], onConflict: 'id');
     } catch (error) {
       debugPrint('[SupabaseManager] 펫 목록 동기화 실패: $error');
     }
@@ -1173,6 +1219,23 @@ class SupabaseManager {
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 몬스터 드랍 테이블 조회 실패: $error');
+      return const [];
+    }
+  }
+
+  static const String _dungeonRewardsConfigTable = 'dungeon_rewards_config';
+
+  /// 던전 클리어 보상 설정(던전 타입/아이템 타입/확률/최소·최대 수량)
+  /// 전체를 내려받는다 — [fetchMonsterDropTable]과 같은 성격의 공개
+  /// 데이터라 `currentUserId` 체크 없이 그대로 조회한다. 실패하면(오프라인
+  /// 등) 빈 리스트 — 호출부([DungeonRewardManager])가 이전에 캐시해 둔
+  /// 설정을 그대로 유지한다.
+  Future<List<Map<String, dynamic>>> fetchDungeonRewardsConfig() async {
+    try {
+      final List<dynamic> rows = await _client.from(_dungeonRewardsConfigTable).select();
+      return rows.cast<Map<String, dynamic>>();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 던전 보상 설정 조회 실패: $error');
       return const [];
     }
   }
@@ -2520,6 +2583,34 @@ class SupabaseManager {
       return await _client.from(_guildWarConfigTable).select().eq('id', 1).maybeSingle();
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 전쟁 설정 조회 실패: $error');
+      return null;
+    }
+  }
+
+  // ── 총 전투력 가중치 (ConfigManager 전용) ──────────────────────────
+  //
+  // `game_config` 테이블 한 행(id='cp_weights')에 담긴 서버 조정 가중치 —
+  // 컬럼: id(text, PK), def_weight(numeric), offense_weight(numeric).
+  // `id` 컬럼이 있는 이유는 이 테이블이 (guild_war_config처럼) 앞으로
+  // 여러 설정 그룹을 같은 테이블의 다른 행으로 담을 수 있게 설계됐기
+  // 때문이다 — 실제 컬럼명이 다르면 이 섹션과 [CombatPowerWeights]
+  // .fromJson만 고치면 된다.
+  static const String _gameConfigTable = 'game_config';
+
+  /// [ConfigManager.loadConfig]가 앱 시작 시 한 번 호출 — 로그인 여부와
+  /// 무관한 공개 데이터라 `currentUserId` 체크 없이 그대로 조회한다
+  /// ([fetchGuildWarConfig]와 같은 성격). 실패하면(오프라인 등) null —
+  /// 호출부가 [CombatPowerWeights]의 기본값(20.0/10.0)으로 안전하게
+  /// 대체한다.
+  Future<Map<String, dynamic>?> fetchCombatPowerWeights() async {
+    try {
+      return await _client
+          .from(_gameConfigTable)
+          .select()
+          .eq('id', 'cp_weights')
+          .maybeSingle();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 전투력 가중치 설정 조회 실패: $error');
       return null;
     }
   }

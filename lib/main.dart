@@ -15,7 +15,9 @@ import 'managers/character_manifest_manager.dart';
 import 'managers/character_meta_manager.dart';
 import 'managers/character_metadata_manager.dart';
 import 'managers/collection_manager.dart';
+import 'managers/config_manager.dart';
 import 'managers/dungeon_manager.dart';
+import 'managers/dungeon_reward_manager.dart';
 import 'managers/encyclopedia_manager.dart';
 import 'managers/equipment_manager.dart';
 import 'managers/equipment_set_manager.dart';
@@ -53,23 +55,21 @@ import 'models/consumable_item_model.dart';
 import 'models/equipment.dart';
 import 'models/story_model.dart';
 import 'widgets/tutorial_overlay.dart';
-import 'ui/character_illustration_dialog.dart';
 import 'ui/character_screen.dart';
+import 'ui/comprehensive_stats_dialog.dart';
 import 'ui/dungeon_screen.dart';
 import 'ui/guild_screen.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
-import 'ui/mailbox_screen.dart';
 import 'ui/nickname_screen.dart';
 import 'ui/offline_reward_dialog.dart';
-import 'ui/quest_screen.dart';
-import 'ui/settings_dialog.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_screen.dart';
 import 'ui/top_bar.dart';
 import 'utils/number_formatter.dart';
 import 'widgets/center_toast.dart';
 import 'widgets/story_dialog_widget.dart';
+import 'widgets/total_combat_power_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -86,6 +86,12 @@ Future<void> main() async {
   // no-op하다가, 로그인 후 다음 주기(SupabaseManager.lastSeenInterval)부터
   // 실제로 갱신되기 시작한다.
   SupabaseManager.instance.startLastSeenHeartbeat();
+  // 오프라인 보상의 "마지막 접속 시각" 마커를 30초마다 갱신한다 —
+  // AppLifecycleState.paused/detached(앱 종료 시점)에만 의존하면, 웹
+  // 브라우저에서 탭을 그냥 닫을 때는 그 생명주기 이벤트가 신뢰성 있게
+  // 오지 않아 마커가 훨씬 이전 값에 멈춰 있을 수 있다
+  // (OfflineRewardManager.startPeriodicAutoSave 문서 참고).
+  OfflineRewardManager.instance.startPeriodicAutoSave();
   // SFX 프리로드 — 실패해도(assets/audio/ 파일 없음 등) 조용히 넘어가므로
   // 다른 매니저들의 await 체인을 막지 않는다.
   unawaited(SoundManager.instance.init());
@@ -142,6 +148,10 @@ Future<void> main() async {
   // 온라인 사냥(GameManager._onMonsterDefeated)이 곧바로 드랍 테이블을
   // 읽으므로, 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
   await MonsterDropTableManager.instance.loadData();
+  // 룬의 미궁/승리자의 성소 클리어(IdleGame._damageDungeonMonster)가 곧바로
+  // DungeonRewardManager.grantRewardsFor를 읽으므로, 던전 화면이 열리기
+  // 전(runApp 이전)에 끝나 있어야 한다.
+  await DungeonRewardManager.instance.loadData();
   // IdleGame._fireProjectile이 공격마다 근접/원거리를 판정할 때 곧바로
   // 읽으므로, 마찬가지로 전투가 시작되기 전에 끝나 있어야 한다.
   await CharacterMetaManager.instance.loadData();
@@ -149,6 +159,11 @@ Future<void> main() async {
   // 장착 캐릭터의 기본 스탯을 읽으므로(character_metadata 기반), 전투가
   // 시작되기 전에 끝나 있어야 한다.
   await CharacterMetadataManager.instance.loadData();
+  // GameManager.totalCombatPower가 곧바로 이 가중치(defWeight/offenseWeight)를
+  // 읽으므로, 전투력 배너가 뜨는 화면(프로필 팝업 등)이 열리기 전에 끝나
+  // 있어야 한다 — 실패해도 ConfigManager.combatPowerWeights가 안전한
+  // 기본값(20.0/10.0)을 이미 들고 있어 게임 진행에는 영향이 없다.
+  await ConfigManager.instance.loadConfig();
   await SpeedManager.instance.loadBoost();
   await StoryManager.instance.loadData();
   await MainStoryManager.instance.loadData();
@@ -440,6 +455,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     required int rewardGold,
     required int equipmentCount,
     required Map<ConsumableType, int> consumableDrops,
+    required int bpExpGained,
+    required int runeFragmentsGained,
   }) {
     if (!mounted || _isOfflineRewardShowing) {
       return;
@@ -452,6 +469,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         rewardGold: rewardGold,
         equipmentCount: equipmentCount,
         consumableDrops: consumableDrops,
+        bpExpGained: bpExpGained,
+        runeFragmentsGained: runeFragmentsGained,
       ),
     ).then((_) {
       OfflineRewardManager.instance.claimReward(
@@ -459,6 +478,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         offlineSeconds: offlineSeconds,
         equipmentCount: equipmentCount,
         consumableDrops: consumableDrops,
+        bpExpGained: bpExpGained,
+        runeFragmentsGained: runeFragmentsGained,
       );
       _isOfflineRewardShowing = false;
     });
@@ -591,16 +612,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     }
   }
 
-  void _showCharacterIllustration() {
-    final Equipment? equippedCharacter =
-        EquipmentManager.instance.equippedItems[EquipType.character];
-    if (equippedCharacter == null) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('장착된 캐릭터가 없습니다.')));
-      return;
-    }
-
+  /// 좌측 상단 '내 프로필' 버튼 — 예전엔 캐릭터 일러스트 팝업
+  /// ([CharacterIllustrationDialog])을 띄웠지만, 그 팝업은 이제 캐릭터
+  /// 탭의 성급(★) 갤러리에서만 연다(item_detail_dialog.dart의
+  /// `_StarIllustrationGallery` 참고) — 이 버튼은 대신 종합 스탯 정보창
+  /// ([ComprehensiveStatsDialog])을 연다(요구사항: "UI 스크롤 압박 해결").
+  void _showComprehensiveStats() {
     // 연타 방지 — 이미 다른 라우트가 최상단으로 올라간 상태(직전 탭으로
     // 이미 이 다이얼로그나 다른 화면이 뜬 상태)라면 중복으로 또 띄우지
     // 않는다.
@@ -611,7 +628,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
     showDialog<void>(
       context: context,
-      builder: (context) => CharacterIllustrationDialog(character: equippedCharacter),
+      builder: (context) => const ComprehensiveStatsDialog(),
     );
   }
 
@@ -635,22 +652,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF1B1B26),
         elevation: 0,
-        leadingWidth: 104,
-        leading: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const CircleAvatar(
-                backgroundColor: Color(0xFF2C2C3A),
-                child: Icon(Icons.person, color: Colors.white70),
-              ),
-              onPressed: _showCharacterIllustration,
-            ),
-            IconButton(
-              icon: const Icon(Icons.settings, color: Colors.white70),
-              onPressed: () => showSettingsDialog(context),
-            ),
-          ],
+        // 프로필 아이콘 하나만 남는다 — 예전엔 그 옆에 설정(톱니바퀴)
+        // 아이콘도 있었지만, 새 레이아웃 순서(요구사항: "프로필 → 배속 →
+        // 총 전투력 → 골드 → 보석")엔 그 자리가 없다. 설정 진입점을 아예
+        // 없애지 않도록 [ComprehensiveStatsDialog]([_showComprehensiveStats],
+        // 이 프로필 버튼이 여는 화면) 헤더 안에 톱니바퀴를 옮겨 뒀다.
+        leading: IconButton(
+          icon: const CircleAvatar(
+            backgroundColor: Color(0xFF2C2C3A),
+            child: Icon(Icons.person, color: Colors.white70),
+          ),
+          onPressed: _showComprehensiveStats,
         ),
         title: const Text(
           'Cyber Breaker Idle',
@@ -661,17 +673,38 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
         ),
         centerTitle: true,
+        // 일일 퀘스트(옛 DailyQuestHudButton, 📜) 진입점은 인게임 화면의
+        // 좌측 아이콘 열([_DailyQuestHudButton], home_screen.dart)로
+        // 옮겼다 — 이 앱바에는 더 이상 없다.
         actions: [
-          const DailyQuestHudButton(),
-          const MailboxHudButton(),
           const SpeedButton(),
+          // 상단바 정중앙에 총 전투력을 크게 강조한다(요구사항: "프로필 →
+          // 배속 → 총 전투력(중앙) → 골드 → 보석"). 좁은 앱바 공간에서
+          // 잘리지 않도록 Flexible + TotalCombatPowerBanner 내부의
+          // FittedBox(scaleDown)가 함께 크기를 줄인다. ConfigManager도
+          // 함께 구독해야 전투력 가중치가 바뀌어도 실시간으로 갱신된다.
+          Flexible(
+            child: AnimatedBuilder(
+              animation: Listenable.merge([GameManager.instance, ConfigManager.instance]),
+              builder: (context, _) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: TotalCombatPowerBanner(
+                  combatPower: GameManager.instance.totalCombatPower,
+                  fontSize: 15,
+                  // 좁은 앱바 공간에 맞춰 "총 전투력:" 글씨 없이 숫자만
+                  // 심플하게 보여준다(요구사항: "⚔️ 133,760"처럼).
+                  showLabel: false,
+                ),
+              ),
+            ),
+          ),
           // Flexible로 감싸는 이유: 예전엔 이 통화 표시 Container가
           // AppBar.actions의 다른 자식들처럼 자기 콘텐츠 크기만큼 무한정
           // 늘어날 수 있었다 — 숫자가 커지면(수억~수조 단위) 좌측의
-          // DailyQuestHudButton/MailboxHudButton/SpeedButton을 화면 밖으로
-          // 밀어내거나 AppBar 자체가 오버플로우될 수 있었다. Flexible이
-          // AppBar 내부 Row가 실제로 줄 수 있는 만큼만 차지하도록 제한하고,
-          // 그 안의 Text들도 ellipsis로 방어한다 — 다만 NumberFormatter의
+          // SpeedButton/전투력 배너를 화면 밖으로 밀어내거나 AppBar
+          // 자체가 오버플로우될 수 있었다. Flexible이 AppBar 내부 Row가
+          // 실제로 줄 수 있는 만큼만 차지하도록 제한하고, 그 안의
+          // Text들도 ellipsis로 방어한다 — 다만 NumberFormatter의
           // K/M/B/T 축약 덕분에 실제로 이 한계에 걸릴 일은 거의 없다.
           Flexible(
             child: AnimatedBuilder(
@@ -701,7 +734,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      // 골드 충전 버튼 — 상점을 "충전" 탭으로 곧장 연다
+                      // (요구사항).
+                      _CurrencyAddButton(
+                        onTap: () =>
+                            showShopDialog(context, initialTabIndex: shopChargeTabIndex),
+                      ),
+                      const SizedBox(width: 8),
                       const Icon(Icons.diamond, color: Colors.cyanAccent, size: 16),
                       const SizedBox(width: 4),
                       Flexible(
@@ -714,6 +753,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
+                      ),
+                      // 보석 충전 버튼 — 골드 쪽과 동일하게 "충전" 탭으로
+                      // 곧장 연다.
+                      _CurrencyAddButton(
+                        onTap: () =>
+                            showShopDialog(context, initialTabIndex: shopChargeTabIndex),
                       ),
                     ],
                   ),
@@ -775,4 +820,25 @@ class _NavTab {
   final IconData icon;
   final String label;
   final Widget screen;
+}
+
+/// 골드/보석 텍스트 바로 옆의 작고 둥근 재화 충전 버튼 — 탭하면
+/// [showShopDialog]로 상점을 "충전" 탭까지 곧장 열어 준다(요구사항).
+class _CurrencyAddButton extends StatelessWidget {
+  const _CurrencyAddButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: const Padding(
+        // 골드/보석 숫자와 너무 붙지 않도록 아주 약간의 여백만 준다 —
+        // Container 전체가 이미 Flexible이라 폭을 아껴야 한다.
+        padding: EdgeInsets.only(left: 2),
+        child: Icon(Icons.add_circle_outline, color: Colors.white54, size: 16),
+      ),
+    );
+  }
 }

@@ -14,7 +14,9 @@ import 'supabase_manager.dart';
 /// 룬 인벤토리/장착/레벨업/합성을 관장하는 싱글턴 — 이 프로젝트의 다른
 /// 매니저들과 같은 관례: **로컬(SharedPreferences)이 유일한 신뢰
 /// 소스**이고, Supabase는 그 위에 얹는 부가적인 백업/동기화 계층이다.
-/// 룬 조각(재화)은 요일 던전([WeekdayDungeonManager])이 지급한다.
+/// 룬 조각(재화)은 요일 던전(목요일 "룬의 미궁", [DungeonRewardManager]
+/// 경유), 상점(보석 구매), [OfflineRewardManager](방치 시간 비례) 세
+/// 경로로 지급된다.
 class RuneManager extends ChangeNotifier {
   RuneManager._internal();
 
@@ -29,6 +31,13 @@ class RuneManager extends ChangeNotifier {
   /// 룬 하나를 새로 만드는 데 드는 룬 조각 — 결과 스탯은 [type] 안에서
   /// 무작위([RuneCatalog]).
   static const int craftCostFragments = 50;
+
+  /// 오프라인 방치 보상 수령 시 분당 룬 조각 지급량 —
+  /// [OfflineRewardManager.checkOfflineReward]가 방치 시간(분)에 곱해서
+  /// 계산한다([BattlePassManager.bpExpPerOfflineMinute]과 같은 관례). 정확한
+  /// 밸런스 데이터가 없어 임의로 정한 값이니, 기획 수치가 정해지면 이
+  /// 상수만 바꾸면 된다.
+  static const double runeFragmentsPerOfflineMinute = 0.5;
 
   int runeFragments = 0;
   List<Rune> runes = [];

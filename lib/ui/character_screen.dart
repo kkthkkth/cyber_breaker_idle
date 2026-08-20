@@ -5,10 +5,8 @@ import '../managers/collection_manager.dart';
 import '../managers/encyclopedia_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/equipment_set_manager.dart';
-import '../managers/game_manager.dart';
 import '../models/equipment.dart';
 import '../models/equipment_set_model.dart';
-import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/character_face_portrait.dart';
 import '../widgets/character_idle_preview.dart';
@@ -108,7 +106,12 @@ class _CharacterScreenState extends State<CharacterScreen> {
           child: Column(
             children: [
               SizedBox(
-                height: 340,
+                // 340 → 380: 중앙 캐릭터 카드(Expanded)가 하단 유물/펫
+                // 슬롯 Row와 세로 공간을 나눠 쓰다 보니 여유가 부족해
+                // Stack의 기본 클립(hardEdge)에 캐릭터 머리 쪽이 눌려
+                // 잘려 보이는 문제가 있었다 — 여유 높이를 더 준다
+                // (요구사항: "부모 컨테이너의 높이를 충분히 늘리거나...").
+                height: 380,
                 child: EquipArea(
                   equippedItems: _manager.equippedItems,
                   onSlotTap: _showItemDetail,
@@ -124,7 +127,14 @@ class _CharacterScreenState extends State<CharacterScreen> {
                 badge: _manager.equippedItems[EquipType.badge],
                 onTap: _showItemDetail,
               ),
-              const StatPanel(),
+              // 예전엔 여기에 총 전투력 배너(TotalCombatPowerBanner)가
+              // 있었지만, 상단 앱바에 이미 실시간 전투력이 표시되고 있어
+              // 중복이라 삭제했다(요구사항: "총 전투력 배너는 삭제해줘").
+              // 세트 효과 표시(_ActiveSetBonusRow)만 그대로 남긴다.
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: _ActiveSetBonusRow(),
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                 child: Row(
@@ -723,6 +733,49 @@ class _SpecialEquipRow extends StatelessWidget {
   }
 }
 
+/// 지금 발동 중인 세트 효과를 칩으로 나열 — 하나도 없으면(장착 중인 세트
+/// 장비가 2부위 미만이면) 자리 자체를 차지하지 않는다.
+class _ActiveSetBonusRow extends StatelessWidget {
+  const _ActiveSetBonusRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final List<ActiveSetBonus> bonuses = EquipmentSetManager.instance
+        .activeBonuses(EquipmentManager.instance.equippedSetCounts);
+    if (bonuses.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final ActiveSetBonus bonus in bonuses)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF6C4FCE).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFF8A6FE0)),
+              ),
+              child: Text(
+                bonus.label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class EquipSlot extends StatelessWidget {
   const EquipSlot({
     super.key,
@@ -841,236 +894,6 @@ class EquipSlot extends StatelessWidget {
   }
 }
 
-class StatPanel extends StatelessWidget {
-  const StatPanel({super.key});
-
-  /// 스탯 수치를 강조하는 메인 네온 컬러 3종 — 공격 계열은 청록, 크리티컬
-  /// 계열은 노랑, 방어/생존 계열은 민트그린으로 묶어서 잡다한 팔레트 대신
-  /// 통일감을 준다.
-  static const Color _neonCyan = Color(0xFF22E5D8);
-  static const Color _neonYellow = Color(0xFFFFE14D);
-  static const Color _neonMint = Color(0xFF4DFFB0);
-
-  @override
-  Widget build(BuildContext context) {
-    final GameManager manager = GameManager.instance;
-
-    return AnimatedBuilder(
-      animation: manager,
-      builder: (context, _) {
-        // 예전엔 이 Container를 고정 높이(140) SizedBox 안에 넣고 Column을
-        // spaceEvenly로 4행에 억지로 펼쳐서, 좁은 화면/큰 글꼴 설정에서
-        // 실제 필요한 높이가 그 140을 넘으면 "Bottom Overflowed" 경고가
-        // 났었다. 높이를 강제하지 않는 것만으로도 대부분의 경우 해결되지만
-        // (바깥 CharacterScreen 본문이 이미 SingleChildScrollView라 스스로
-        // 스크롤을 감당함), 이 패널이 나중에 높이가 제한된 다이얼로그 등
-        // 다른 곳에 재사용될 가능성까지 방어하기 위해 Column 자체를
-        // SingleChildScrollView로 한 번 더 감싼다 — 부모가 준 세로 공간이
-        // 얼마든(무제한이든 특정 값으로 제한되든) 절대 노란 빗금 오버플로가
-        // 나지 않고, 정말 모자랄 때만 조용히 스크롤된다. 평소(공간이 충분할
-        // 때)는 스크롤이 필요 없도록 행 사이 간격/여백도 함께 줄였다.
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF24242E),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF34344A), width: 1),
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatItem(
-                        label: '총 공격력',
-                        value: NumberFormatter.format(manager.attackPower),
-                        icon: Icons.local_fire_department,
-                        color: _neonCyan,
-                      ),
-                    ),
-                    Expanded(
-                      child: _StatItem(
-                        label: '공격 속도',
-                        value: '${manager.effectiveAttackSpeed.toStringAsFixed(2)}/s',
-                        icon: Icons.bolt,
-                        color: _neonCyan,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatItem(
-                        label: '크리티컬 확률',
-                        value:
-                            '${(manager.criticalRate * 100).toStringAsFixed(0)}%',
-                        icon: Icons.flash_on,
-                        color: _neonYellow,
-                      ),
-                    ),
-                    Expanded(
-                      child: _StatItem(
-                        label: '크리티컬 데미지',
-                        value:
-                            '${(manager.criticalMultiplier * 100).toStringAsFixed(0)}%',
-                        icon: Icons.whatshot,
-                        color: _neonYellow,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatItem(
-                        label: '방어력',
-                        value: NumberFormatter.format(manager.defensePower),
-                        icon: Icons.shield,
-                        color: _neonMint,
-                      ),
-                    ),
-                    Expanded(
-                      child: _StatItem(
-                        label: '방어율',
-                        value: '${(manager.effectiveDefenseRate * 100).toStringAsFixed(0)}%',
-                        icon: Icons.security,
-                        color: _neonMint,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatItem(
-                        label: '회피율',
-                        value: '${(manager.effectiveEvasionRate * 100).toStringAsFixed(0)}%',
-                        icon: Icons.directions_run,
-                        color: _neonMint,
-                      ),
-                    ),
-                    Expanded(
-                      child: _StatItem(
-                        label: '크리티컬 방어율',
-                        value:
-                            '${(manager.effectiveCritDefenseRate * 100).toStringAsFixed(0)}%',
-                        icon: Icons.gpp_good,
-                        color: _neonMint,
-                      ),
-                    ),
-                  ],
-                ),
-                const _ActiveSetBonusRow(),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// 지금 발동 중인 세트 효과를 칩으로 나열 — 하나도 없으면(장착 중인 세트
-/// 장비가 2부위 미만이면) 자리 자체를 차지하지 않는다.
-class _ActiveSetBonusRow extends StatelessWidget {
-  const _ActiveSetBonusRow();
-
-  @override
-  Widget build(BuildContext context) {
-    final List<ActiveSetBonus> bonuses = EquipmentSetManager.instance
-        .activeBonuses(EquipmentManager.instance.equippedSetCounts);
-    if (bonuses.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        children: [
-          for (final ActiveSetBonus bonus in bonuses)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFF6C4FCE).withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF8A6FE0)),
-              ),
-              child: Text(
-                bonus.label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatItem extends StatelessWidget {
-  const _StatItem({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  label,
-                  style: const TextStyle(color: Colors.white54, fontSize: 11),
-                ),
-              ),
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  value,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 class InventoryArea extends StatelessWidget {
   const InventoryArea({

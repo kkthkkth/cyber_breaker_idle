@@ -29,8 +29,11 @@ class GuildRaidManager extends ChangeNotifier {
 
   /// 서버에 아직 이 길드의 보스 행이 없을 때(최초 진입) 클라이언트가
   /// 임시로 보여줄 1레벨 기본값 — 실제 값은 [refreshBoss]가 서버에서
-  /// 받아오는 순간 덮어써진다.
-  static const int defaultBossMaxHp = 100000;
+  /// 받아오는 순간 덮어써진다. [GuildBoss.defaultMaxHp]와 값을 공유한다
+  /// (그쪽은 서버 응답 자체가 손상됐을 때의 폴백, 이쪽은 행이 아예 없을
+  /// 때의 폴백 — 두 경우 모두 같은 기본값을 쓰는 게 자연스러워 상수를
+  /// 하나로 합쳤다).
+  static const int defaultBossMaxHp = GuildBoss.defaultMaxHp;
 
   GuildBoss? boss;
   int remainingAttemptsToday = maxDailyAttempts;
