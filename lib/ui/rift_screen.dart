@@ -35,7 +35,9 @@ class RiftScreen extends StatelessWidget {
   void _selectBattleCard(BuildContext context, RiftCard card) {
     RiftManager.instance.beginBattle(card.type);
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => RiftBattleScreen(cardType: card.type)),
+      MaterialPageRoute<void>(
+        builder: (_) => RiftBattleScreen(cardType: card.type),
+      ),
     );
   }
 
@@ -53,14 +55,16 @@ class RiftScreen extends StatelessWidget {
             foregroundColor: Colors.white,
             title: const Text(
               '차원의 균열',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             centerTitle: true,
           ),
-          body: rift.isActive ? _RunView(rift: rift, onSelectBattle: _selectBattleCard) : _EntryView(
-            rift: rift,
-            onStart: () => _start(context),
-          ),
+          body: rift.isActive
+              ? _RunView(rift: rift, onSelectBattle: _selectBattleCard)
+              : _EntryView(rift: rift, onStart: () => _start(context)),
         );
       },
     );
@@ -85,7 +89,11 @@ class _EntryView extends StatelessWidget {
             const SizedBox(height: 16),
             const Text(
               '차원의 균열',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 22,
+              ),
             ),
             const SizedBox(height: 10),
             Text(
@@ -103,10 +111,17 @@ class _EntryView extends StatelessWidget {
                 foregroundColor: Colors.white,
                 disabledBackgroundColor: const Color(0xFF3A3A4A),
                 disabledForegroundColor: Colors.white38,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 14,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: Text(rift.hasFreeEntryToday ? '탐험 시작 (오늘 1회)' : '오늘의 입장을 모두 사용했습니다'),
+              child: Text(
+                rift.hasFreeEntryToday ? '탐험 시작 (오늘 1회)' : '오늘의 입장을 모두 사용했습니다',
+              ),
             ),
           ],
         ),
@@ -127,7 +142,9 @@ class _RunView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double hpRatio = rift.riftMaxHp <= 0 ? 0 : (rift.riftHp / rift.riftMaxHp).clamp(0.0, 1.0);
+    final double hpRatio = rift.riftMaxHp <= 0
+        ? 0
+        : (rift.riftHp / rift.riftMaxHp).clamp(0.0, 1.0);
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -135,7 +152,11 @@ class _RunView extends StatelessWidget {
         children: [
           Text(
             '${rift.floor} / ${RiftManager.maxFloor}층',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 20,
+            ),
           ),
           const SizedBox(height: 10),
           ClipRRect(
@@ -159,7 +180,11 @@ class _RunView extends StatelessWidget {
           const SizedBox(height: 24),
           const Text(
             '갈림길 — 카드를 하나 선택하세요',
-            style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.white54,
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 12),
           Expanded(
@@ -268,7 +293,6 @@ class RiftBattleScreen extends StatefulWidget {
 
 class _RiftBattleScreenState extends State<RiftBattleScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
 
   void Function(double damage)? _previousDamageHandler;
@@ -280,7 +304,10 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
     _game = IdleGame();
     _game.onDungeonComplete = _handleBattleComplete;
     _game.startDungeon(GameMode.dimensionalRift);
-    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+    // [퍼포먼스 감사 2026-08-21] 이 화면 전체를 100ms마다 다시 그리던
+    // 폴링 타이머는 제거했다 — [_RiftBattleHud]가 몬스터/내 체력 바만
+    // 담당해 스스로 틱한다([_DungeonBattleScreen]과 같은 이유의 같은
+    // 수정).
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -290,11 +317,16 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
-    if (identical(SkillManager.instance.damageHandler, _game.applySkillDamage)) {
+    if (identical(
+      SkillManager.instance.damageHandler,
+      _game.applySkillDamage,
+    )) {
       SkillManager.instance.damageHandler = _previousDamageHandler;
     }
-    if (identical(SkillManager.instance.onActiveSkillCast, _game.castActiveSkill)) {
+    if (identical(
+      SkillManager.instance.onActiveSkillCast,
+      _game.castActiveSkill,
+    )) {
       SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
     }
     _game.detachListeners();
@@ -313,8 +345,13 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _resolveOutcome(success: success));
+    // [퍼포먼스 감사 2026-08-21] 폴링 타이머를 없앴으므로([_RiftBattleHud]
+    // 참고) 뒤로가기 버튼 활성화를 반영하려면 명시적으로 setState해야
+    // 한다 — [_DungeonBattleScreen]과 같은 이유의 같은 수정.
+    setState(() => _resultShown = true);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _resolveOutcome(success: success),
+    );
   }
 
   Future<void> _resolveOutcome({required bool success}) async {
@@ -376,16 +413,24 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              success ? '${RiftManager.maxFloor}층까지 모두 돌파했습니다!' : '체력이 다해 탐험이 끝났습니다.',
+              success
+                  ? '${RiftManager.maxFloor}층까지 모두 돌파했습니다!'
+                  : '체력이 다해 탐험이 끝났습니다.',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 10),
             if (grants.isEmpty)
-              const Text('획득한 보상이 없습니다.', style: TextStyle(color: Colors.white38))
+              const Text(
+                '획득한 보상이 없습니다.',
+                style: TextStyle(color: Colors.white38),
+              )
             else
               Text(
                 '획득: ${grants.map((grant) => grant.label).join(', ')}',
-                style: const TextStyle(color: Color(0xFFFFD700), fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
           ],
         ),
@@ -406,13 +451,6 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double monsterHpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
-    final double riftHpRatio = RiftManager.instance.riftMaxHp <= 0
-        ? 0
-        : (RiftManager.instance.riftHp / RiftManager.instance.riftMaxHp).clamp(0.0, 1.0);
-
     return PopScope(
       canPop: _resultShown,
       child: Scaffold(
@@ -437,7 +475,9 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
                         style: TextStyle(
                           color: widget.isBoss
                               ? const Color(0xFFFF4D4D)
-                              : (widget.isElite ? const Color(0xFFE05A9E) : Colors.white),
+                              : (widget.isElite
+                                    ? const Color(0xFFE05A9E)
+                                    : Colors.white),
                           fontWeight: FontWeight.bold,
                           fontSize: 22,
                         ),
@@ -450,7 +490,9 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
                           Icons.arrow_back,
                           color: _resultShown ? Colors.white : Colors.white24,
                         ),
-                        onPressed: _resultShown ? () => Navigator.pop(context) : null,
+                        onPressed: _resultShown
+                            ? () => Navigator.pop(context)
+                            : null,
                       ),
                     ),
                   ],
@@ -480,42 +522,7 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            '몬스터',
-                            style: TextStyle(color: Colors.white54, fontSize: 11),
-                          ),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: monsterHpRatio,
-                              minHeight: 12,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          const Text(
-                            '내 체력 (riftHp)',
-                            style: TextStyle(color: Colors.white54, fontSize: 11),
-                          ),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: riftHpRatio,
-                              minHeight: 12,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(Colors.greenAccent),
-                            ),
-                          ),
-                          if (RiftManager.instance.equippedRelics.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            RiftRelicBar(relics: RiftManager.instance.equippedRelics),
-                          ],
-                        ],
-                      ),
+                      child: _RiftBattleHud(game: _game),
                     ),
                   ],
                 ),
@@ -524,6 +531,89 @@ class _RiftBattleScreenState extends State<RiftBattleScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 몬스터 HP 바 + 내 체력(riftHp) 바 + 유물 목록 — 예전엔 화면 전체를
+/// 다시 그리는 100ms 폴링 타이머의 부산물로 갱신됐다. 이제 이 위젯이
+/// 직접 자기 몫의 타이머를 들고 스스로만 다시 그린다(레이아웃/여백/
+/// 순서는 전혀 바뀌지 않았다).
+class _RiftBattleHud extends StatefulWidget {
+  const _RiftBattleHud({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_RiftBattleHud> createState() => _RiftBattleHudState();
+}
+
+class _RiftBattleHudState extends State<_RiftBattleHud> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double monsterHpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    final double riftHpRatio = RiftManager.instance.riftMaxHp <= 0
+        ? 0
+        : (RiftManager.instance.riftHp / RiftManager.instance.riftMaxHp).clamp(
+            0.0,
+            1.0,
+          );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          '몬스터',
+          style: TextStyle(color: Colors.white54, fontSize: 11),
+        ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: monsterHpRatio,
+            minHeight: 12,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+          ),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          '내 체력 (riftHp)',
+          style: TextStyle(color: Colors.white54, fontSize: 11),
+        ),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: riftHpRatio,
+            minHeight: 12,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.greenAccent),
+          ),
+        ),
+        if (RiftManager.instance.equippedRelics.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          RiftRelicBar(relics: RiftManager.instance.equippedRelics),
+        ],
+      ],
     );
   }
 }
@@ -555,18 +645,26 @@ class RiftRelicBar extends StatelessWidget {
                 child: Tooltip(
                   message: '${relic.name}: ${relic.description}',
                   child: GestureDetector(
-                    onTap: () =>
-                        showCenterToast(context, '${relic.name}: ${relic.description}'),
+                    onTap: () => showCenterToast(
+                      context,
+                      '${relic.name}: ${relic.description}',
+                    ),
                     child: Container(
                       width: 34,
                       height: 34,
                       decoration: BoxDecoration(
                         color: const Color(0xFF20202C),
                         shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFF6C4FCE), width: 1.2),
+                        border: Border.all(
+                          color: const Color(0xFF6C4FCE),
+                          width: 1.2,
+                        ),
                       ),
                       alignment: Alignment.center,
-                      child: Text(relic.icon, style: const TextStyle(fontSize: 16)),
+                      child: Text(
+                        relic.icon,
+                        style: const TextStyle(fontSize: 16),
+                      ),
                     ),
                   ),
                 ),
@@ -592,7 +690,10 @@ class _RelicChoiceDialog extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Text(
         '승리! 임시 유물을 선택하세요',
-        style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          color: Colors.amberAccent,
+          fontWeight: FontWeight.bold,
+        ),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -608,7 +709,10 @@ class _RelicChoiceDialog extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: const Color(0xFF20202C),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.2),
+                  border: Border.all(
+                    color: const Color(0xFF6C4FCE),
+                    width: 1.2,
+                  ),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -625,7 +729,10 @@ class _RelicChoiceDialog extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       relic.description,
-                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),

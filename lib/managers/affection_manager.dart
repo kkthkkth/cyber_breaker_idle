@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -7,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/affection_model.dart';
 import '../models/consumable_item_model.dart';
 import '../models/shop_consumable_model.dart';
+import '../utils/time_util.dart';
 import 'consumable_manager.dart';
 import 'potion_manager.dart';
 
@@ -21,9 +23,9 @@ import 'potion_manager.dart';
 /// ([_applyGain] 참고) — "누적 퍼센트로 레벨을 역산"하던 예전 방식은
 /// 완전히 제거했다.
 ///
-/// 날짜 판정은 지금은 기기 로컬 시각([DateTime.now])을 쓴다 — 서버 시간
-/// 기준 자정 리셋([MidnightResetManager])과 통일하려면 나중에
-/// [_isSameDay] 호출부를 네트워크 시간으로 바꾸면 된다.
+/// 날짜 판정([_resetIfNewDay])은 [_currentReferenceNow]가 주기적으로
+/// 새로고침하는 NTP 캐시를 기준으로 한다(기기 시계를 되돌려 하루 대화
+/// 제한을 우회하는 것을 막기 위함 — 2026-08-21 보안 감사에서 추가).
 class AffectionManager extends ChangeNotifier {
   AffectionManager._internal();
 
@@ -126,12 +128,48 @@ class AffectionManager extends ChangeNotifier {
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  /// [_lastNtpSync] 이후 이만큼 지나면 다음 [_currentReferenceNow] 호출에서
+  /// NTP를 다시 왕복한다 — 매 호출마다 네트워크 요청을 하지 않으면서도
+  /// 기기 시계 조작으로부터 하루 대화 제한을 지킨다.
+  static const Duration _ntpRefreshInterval = Duration(minutes: 5);
+
+  DateTime? _cachedNtpNow;
+  DateTime? _lastNtpSync;
+  bool _ntpFetchInFlight = false;
+
+  /// [보안 감사 2026-08-21] 예전엔 [_resetIfNewDay]가 기기 로컬 시각
+  /// ([DateTime.now])만 봤다 — 클래스 문서에도 이미 "나중에 네트워크
+  /// 시간으로 바꾸면 된다"고 적혀 있던 알려진 한계였다. 기기 시계를
+  /// 과거로 돌리면 [AffectionData.lastChatDate]가 "아직 오늘"로 계속
+  /// 남아 있어 하루 대화 횟수([maxChatsPerDay]) 제한을 무한히 우회할 수
+  /// 있었다(대화는 아직 실제 전투 스탯에 연결돼 있지 않아 파급력은
+  /// 작지만, 그래도 게이지 축적 자체를 무제한으로 만들 수 있는 결함).
+  /// [GuildWarManager]의 배지 만료 캐시와 같은 방식으로, 매 호출마다
+  /// NTP를 왕복하지 않고도([beginChat]/[remainingChatsToday]는 UI가 자주
+  /// 부르는 동기 메서드라 async로 바꾸기 부담스럽다) 주기적으로만
+  /// 새로고침한 서버 시간을 기준으로 판정해 기기 시계 조작을 막는다.
+  DateTime _currentReferenceNow() {
+    final DateTime deviceNow = DateTime.now();
+    final bool stale =
+        _lastNtpSync == null || deviceNow.difference(_lastNtpSync!) > _ntpRefreshInterval;
+    if (stale && !_ntpFetchInFlight) {
+      _ntpFetchInFlight = true;
+      unawaited(
+        getNetworkTime().then((DateTime now) {
+          _cachedNtpNow = now;
+          _lastNtpSync = DateTime.now();
+        }).whenComplete(() => _ntpFetchInFlight = false),
+      );
+    }
+    return _cachedNtpNow ?? deviceNow;
+  }
+
   void _resetIfNewDay(AffectionData data) {
     final DateTime? last = data.lastChatDate;
     if (last == null) {
       return;
     }
-    if (!_isSameDay(last, DateTime.now())) {
+    if (!_isSameDay(last, _currentReferenceNow())) {
       data.chatCountToday = 0;
     }
   }
@@ -161,7 +199,7 @@ class AffectionManager extends ChangeNotifier {
       return null;
     }
     data.chatCountToday += 1;
-    data.lastChatDate = DateTime.now();
+    data.lastChatDate = _currentReferenceNow();
     _saveData();
     notifyListeners();
     return _dialogueLines[_random.nextInt(_dialogueLines.length)];

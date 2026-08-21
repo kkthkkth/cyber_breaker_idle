@@ -24,52 +24,63 @@ class FriendManager extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
 
-    final List<Map<String, dynamic>> rows =
-        await SupabaseManager.instance.fetchMyFriendshipRows();
-    final String? myId = SupabaseManager.instance.currentUserId;
+    // [보안 감사 2026-08-21] 이 메서드는 main() 부팅 시/friend_screen에서
+    // 전부 `unawaited(...)`로 fire-and-forget 호출된다 — 중간에 뭔가
+    // 하나라도 throw하면(예상 밖 프로필 shape 등) 예외가 그냥 버려지고
+    // [isLoading]이 true로 영원히 멈춰, 친구 화면이 로딩 스피너에서
+    // 다시는 빠져나오지 못했다. try/finally로 감싸서 성공하든 실패하든
+    // 반드시 [isLoading]이 풀리게 한다(이 프로젝트의 다른 매니저들이
+    // 이미 따르는 관례).
+    try {
+      final List<Map<String, dynamic>> rows =
+          await SupabaseManager.instance.fetchMyFriendshipRows();
+      final String? myId = SupabaseManager.instance.currentUserId;
 
-    final List<String> acceptedOtherIds = [];
-    final List<String> pendingRequesterIds = [];
-    for (final Map<String, dynamic> row in rows) {
-      final String requesterId = row['user_id'] as String;
-      final String targetId = row['friend_id'] as String;
-      final String status = row['status'] as String? ?? '';
-      if (status == FriendshipStatus.accepted) {
-        acceptedOtherIds.add(requesterId == myId ? targetId : requesterId);
-      } else if (status == FriendshipStatus.pending && targetId == myId) {
-        pendingRequesterIds.add(requesterId);
+      final List<String> acceptedOtherIds = [];
+      final List<String> pendingRequesterIds = [];
+      for (final Map<String, dynamic> row in rows) {
+        final String requesterId = row['user_id'] as String;
+        final String targetId = row['friend_id'] as String;
+        final String status = row['status'] as String? ?? '';
+        if (status == FriendshipStatus.accepted) {
+          acceptedOtherIds.add(requesterId == myId ? targetId : requesterId);
+        } else if (status == FriendshipStatus.pending && targetId == myId) {
+          pendingRequesterIds.add(requesterId);
+        }
       }
+
+      final List<Map<String, dynamic>> profiles = await SupabaseManager.instance
+          .fetchProfilesByIds([...acceptedOtherIds, ...pendingRequesterIds]);
+      final Map<String, Map<String, dynamic>> profileById = {
+        for (final Map<String, dynamic> profile in profiles) profile['id'] as String: profile,
+      };
+
+      friends =
+          [
+            for (final String id in acceptedOtherIds)
+              if (profileById[id] case final Map<String, dynamic> profile)
+                FriendEntry.fromProfileJson(profile),
+          ]
+          // 온라인인 친구를 위로, 그 안에서는 닉네임 순으로 — 접속 기록이
+          // 없는 친구(lastSeen null)는 항상 맨 아래로 밀린다.
+          ..sort((a, b) {
+            if (a.isOnline != b.isOnline) {
+              return a.isOnline ? -1 : 1;
+            }
+            return a.nickname.compareTo(b.nickname);
+          });
+
+      incomingRequests = [
+        for (final String id in pendingRequesterIds)
+          if (profileById[id] case final Map<String, dynamic> profile)
+            FriendRequestEntry.fromProfileJson(profile),
+      ];
+    } catch (error) {
+      debugPrint('[FriendManager] loadAll 실패: $error');
+    } finally {
+      isLoading = false;
+      notifyListeners();
     }
-
-    final List<Map<String, dynamic>> profiles = await SupabaseManager.instance
-        .fetchProfilesByIds([...acceptedOtherIds, ...pendingRequesterIds]);
-    final Map<String, Map<String, dynamic>> profileById = {
-      for (final Map<String, dynamic> profile in profiles) profile['id'] as String: profile,
-    };
-
-    friends =
-        [
-          for (final String id in acceptedOtherIds)
-            if (profileById[id] case final Map<String, dynamic> profile)
-              FriendEntry.fromProfileJson(profile),
-        ]
-        // 온라인인 친구를 위로, 그 안에서는 닉네임 순으로 — 접속 기록이
-        // 없는 친구(lastSeen null)는 항상 맨 아래로 밀린다.
-        ..sort((a, b) {
-          if (a.isOnline != b.isOnline) {
-            return a.isOnline ? -1 : 1;
-          }
-          return a.nickname.compareTo(b.nickname);
-        });
-
-    incomingRequests = [
-      for (final String id in pendingRequesterIds)
-        if (profileById[id] case final Map<String, dynamic> profile)
-          FriendRequestEntry.fromProfileJson(profile),
-    ];
-
-    isLoading = false;
-    notifyListeners();
   }
 
   /// 닉네임/유저 id로 검색하고, 검색 결과 각각에 이미 친구거나 요청을

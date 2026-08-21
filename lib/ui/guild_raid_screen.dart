@@ -28,7 +28,6 @@ class GuildRaidScreen extends StatefulWidget {
 
 class _GuildRaidScreenState extends State<GuildRaidScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
   bool _isSubmitting = false;
 
@@ -46,10 +45,13 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
   void initState() {
     super.initState();
     _game = IdleGame();
-    _game.guildRaidBossHp = (GuildRaidManager.instance.boss?.currentHp ?? 0).toDouble();
+    _game.guildRaidBossHp = (GuildRaidManager.instance.boss?.currentHp ?? 0)
+        .toDouble();
     _game.onDungeonComplete = _handleDungeonComplete;
     _game.startDungeon(GameMode.guildRaid);
-    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+    // [퍼포먼스 감사 2026-08-21] 화면 전체를 다시 그리던 폴링 타이머 제거
+    // — [_GuildRaidTimerBadge]/[_GuildRaidBossHpBar]가 각자 스스로 틱한다
+    // ([_DungeonBattleScreen]과 같은 수정).
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -59,11 +61,16 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
-    if (identical(SkillManager.instance.damageHandler, _game.applySkillDamage)) {
+    if (identical(
+      SkillManager.instance.damageHandler,
+      _game.applySkillDamage,
+    )) {
       SkillManager.instance.damageHandler = _previousDamageHandler;
     }
-    if (identical(SkillManager.instance.onActiveSkillCast, _game.castActiveSkill)) {
+    if (identical(
+      SkillManager.instance.onActiveSkillCast,
+      _game.castActiveSkill,
+    )) {
       SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
     }
     _game.detachListeners();
@@ -86,7 +93,9 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
+    // [퍼포먼스 감사 2026-08-21] 폴링 타이머를 없앴으므로 뒤로가기 버튼
+    // 활성화를 반영하려면 명시적으로 setState해야 한다.
+    setState(() => _resultShown = true);
     WidgetsBinding.instance.addPostFrameCallback((_) => _submitAndShowResult());
   }
 
@@ -96,7 +105,8 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
     }
     setState(() => _isSubmitting = true);
     final int totalDamage = _game.guildRaidDamageDealt.round();
-    final GuildBossAttackResult? result = await GuildRaidManager.instance.submitDamage(totalDamage);
+    final GuildBossAttackResult? result = await GuildRaidManager.instance
+        .submitDamage(totalDamage);
     if (!mounted) {
       return;
     }
@@ -104,7 +114,10 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
     _showResultDialog(totalDamage: totalDamage, result: result);
   }
 
-  void _showResultDialog({required int totalDamage, required GuildBossAttackResult? result}) {
+  void _showResultDialog({
+    required int totalDamage,
+    required GuildBossAttackResult? result,
+  }) {
     if (!mounted) {
       return;
     }
@@ -114,10 +127,15 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             '레이드 결과',
-            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Colors.redAccent,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -179,10 +197,6 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
-
     return PopScope(
       canPop: _resultShown,
       child: Scaffold(
@@ -212,10 +226,13 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
                       child: IconButton(
                         icon: Icon(
                           Icons.arrow_back,
-                          color: (_resultShown && !_isSubmitting) ? Colors.white : Colors.white24,
+                          color: (_resultShown && !_isSubmitting)
+                              ? Colors.white
+                              : Colors.white24,
                         ),
-                        onPressed:
-                            (_resultShown && !_isSubmitting) ? () => Navigator.pop(context) : null,
+                        onPressed: (_resultShown && !_isSubmitting)
+                            ? () => Navigator.pop(context)
+                            : null,
                       ),
                     ),
                   ],
@@ -230,54 +247,27 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
                       top: 12,
                       left: 0,
                       right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: Center(child: _GuildRaidTimerBadge(game: _game)),
                     ),
-                    const Positioned(bottom: 90, left: 0, right: 0, child: SkillTreeQuickBar()),
+                    const Positioned(
+                      bottom: 90,
+                      left: 0,
+                      right: 0,
+                      child: SkillTreeQuickBar(),
+                    ),
                     Positioned(
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: hpRatio,
-                              minHeight: 14,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
-                            '${_game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                        ],
-                      ),
+                      child: _GuildRaidBossHpBar(game: _game),
                     ),
                     if (_isSubmitting)
                       Container(
                         color: Colors.black54,
                         alignment: Alignment.center,
-                        child: const CircularProgressIndicator(color: Colors.redAccent),
+                        child: const CircularProgressIndicator(
+                          color: Colors.redAccent,
+                        ),
                       ),
                   ],
                 ),
@@ -286,6 +276,111 @@ class _GuildRaidScreenState extends State<GuildRaidScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "남은 시간" 배지 — 스스로만 100ms마다 다시 그린다([_DungeonTimerBadge]
+/// 와 같은 이유의 같은 패턴).
+class _GuildRaidTimerBadge extends StatefulWidget {
+  const _GuildRaidTimerBadge({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildRaidTimerBadge> createState() => _GuildRaidTimerBadgeState();
+}
+
+class _GuildRaidTimerBadgeState extends State<_GuildRaidTimerBadge> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '남은 시간 ${widget.game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+        style: const TextStyle(
+          color: Colors.orangeAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 길드 보스 HP 바 — [_GuildRaidTimerBadge]와 같은 이유로 분리.
+class _GuildRaidBossHpBar extends StatefulWidget {
+  const _GuildRaidBossHpBar({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildRaidBossHpBar> createState() => _GuildRaidBossHpBarState();
+}
+
+class _GuildRaidBossHpBarState extends State<_GuildRaidBossHpBar> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: hpRatio,
+            minHeight: 14,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${widget.game.dungeonMonsterHp.clamp(0, widget.game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
+          '${widget.game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }
@@ -340,9 +435,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
         ..showSnackBar(const SnackBar(content: Text('오늘 도전 횟수를 모두 사용했어요.')));
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const GuildRaidScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const GuildRaidScreen()));
     if (mounted) {
       await GuildRaidManager.instance.refreshBoss();
     }
@@ -366,13 +461,18 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF20202C),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6)),
+                  border: Border.all(
+                    color: Colors.redAccent.withValues(alpha: 0.6),
+                  ),
                 ),
                 child: boss == null
                     ? const Padding(
                         padding: EdgeInsets.symmetric(vertical: 24),
                         child: Center(
-                          child: Text('보스 정보를 불러오는 중입니다...', style: TextStyle(color: Colors.white54)),
+                          child: Text(
+                            '보스 정보를 불러오는 중입니다...',
+                            style: TextStyle(color: Colors.white54),
+                          ),
                         ),
                       )
                     : Column(
@@ -383,7 +483,10 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                             children: [
                               const Text(
                                 '길드 레이드 보스',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                               Text(
                                 'Lv.${boss.level}',
@@ -412,7 +515,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                               value: boss.hpRatio,
                               minHeight: 22,
                               backgroundColor: Colors.white12,
-                              valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+                              valueColor: const AlwaysStoppedAnimation(
+                                Colors.redAccent,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -422,7 +527,10 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                               '${NumberFormatter.format(boss.currentHp.toDouble())} / '
                               '${NumberFormatter.format(boss.maxHp.toDouble())}',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white54, fontSize: 12),
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
                         ],
@@ -443,7 +551,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
               const SizedBox(height: 20),
               ElevatedButton.icon(
                 onPressed: withTapHaptic(
-                  (manager.hasAttemptsLeft && !_isEntering && boss != null) ? _enter : null,
+                  (manager.hasAttemptsLeft && !_isEntering && boss != null)
+                      ? _enter
+                      : null,
                 ),
                 icon: const Icon(Icons.sports_kabaddi),
                 label: Text(
@@ -458,7 +568,9 @@ class _GuildRaidTabState extends State<GuildRaidTab> {
                   foregroundColor: Colors.white,
                   disabledBackgroundColor: const Color(0xFF3A3A4A),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
               const SizedBox(height: 28),
@@ -506,7 +618,11 @@ class _RaidLeaderboard extends StatelessWidget {
               SizedBox(width: 6),
               Text(
                 '누적 딜량 랭킹',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
             ],
           ),
@@ -530,7 +646,8 @@ class _RaidLeaderboard extends StatelessWidget {
                       child: Text(
                         '${i + 1}',
                         style: TextStyle(
-                          color: _rankColors[i.clamp(0, _rankColors.length - 1)],
+                          color:
+                              _rankColors[i.clamp(0, _rankColors.length - 1)],
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
                         ),
@@ -541,11 +658,16 @@ class _RaidLeaderboard extends StatelessWidget {
                         contributions[i].nickname,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
                       ),
                     ),
                     Text(
-                      NumberFormatter.format(contributions[i].totalDamageDealt.toDouble()),
+                      NumberFormatter.format(
+                        contributions[i].totalDamageDealt.toDouble(),
+                      ),
                       style: const TextStyle(
                         color: Colors.redAccent,
                         fontWeight: FontWeight.bold,

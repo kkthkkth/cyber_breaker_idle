@@ -161,6 +161,14 @@ class ExpeditionManager extends ChangeNotifier {
     if (!mission.isCompleteAt(now)) {
       return null;
     }
+    // [보안 감사 2026-08-21] [DispatchManager.claimReward]와 같은 이유로
+    // 추가 — 위 await 사이에 같은 지역에 대해 이 메서드가 다시 불렸을
+    // 수 있으므로, 실제 지급 직전에 아직 이 임무가 그대로 남아 있는지
+    // 재확인하고 곧바로(그 사이 await 없이) 제거해 중복 지급을 막는다.
+    if (!identical(_missionsByRegionId[regionId], mission)) {
+      return null;
+    }
+    _missionsByRegionId.remove(regionId);
 
     for (final ExpeditionReward reward in region.rewards) {
       switch (reward.type) {
@@ -173,7 +181,6 @@ class ExpeditionManager extends ChangeNotifier {
       }
     }
 
-    _missionsByRegionId.remove(regionId);
     notifyListeners();
     unawaited(_saveLocal());
     unawaited(SupabaseManager.instance.syncExpeditionCollected(regionId));

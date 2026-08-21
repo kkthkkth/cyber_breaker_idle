@@ -63,7 +63,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    if (identical(WorldBossManager.instance.onBossAppeared, _onWorldBossAppeared)) {
+    if (identical(
+      WorldBossManager.instance.onBossAppeared,
+      _onWorldBossAppeared,
+    )) {
       WorldBossManager.instance.onBossAppeared = null;
     }
     super.dispose();
@@ -110,10 +113,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SkillTreeQuickBar(),
                 const ActiveSkillQuickBar(),
-                Expanded(
-                  flex: 1,
-                  child: _UpgradeView(manager: _manager),
-                ),
+                Expanded(flex: 1, child: _UpgradeView(manager: _manager)),
               ],
             ),
             Positioned.fill(child: DefeatFadeOverlay(game: _idleGame)),
@@ -132,273 +132,441 @@ class _BattleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // [퍼포먼스 감사 2026-08-21] 예전엔 이 전체 서브트리(LayoutBuilder +
+    // GameWidget + HUD 버튼들 + Stack)가 [AnimatedBuilder]에 감싸여
+    // 있어서, 전투 중 몬스터를 때릴 때마다(GameManager.notifyListeners,
+    // 초당 여러 번) 여기 아래 전부가 매번 다시 빌드됐다 — 그런데 실제로
+    // `manager`를 읽어서 프레임마다 달라지는 건 HP 바 두 개/챕터 라벨/
+    // 보스 타이머, 딱 4곳뿐이고 나머지(GameWidget, HUD 버튼, 레이아웃
+    // 계산)는 화면 크기가 바뀔 때만 달라진다. 그래서 이 바깥 래퍼는
+    // 이제 [LayoutBuilder]뿐이고(그마저도 리사이즈 때만 다시 빌드),
+    // `manager`를 실제로 구독하는 건 아래 4개의 작은 위젯
+    // ([_PlayerHpBar]/[_ChapterLabel]/[_BossTimerBadge]/
+    // [_MonsterHpBar]) 각각이 자기 몫만 [AnimatedBuilder]로 감싸서
+    // 진행한다. Stack의 Positioned/여백/Z-순서/시각적 결과물은 전혀
+    // 바뀌지 않았다 — 무엇이 언제 다시 빌드되는지만 좁혔다.
     return Container(
       color: const Color(0xFF0F0F17),
-      child: AnimatedBuilder(
-        animation: manager,
-        builder: (context, _) {
-          final double hpRatio = manager.monsterMaxHp <= 0
-              ? 0
-              : (manager.monsterHp / manager.monsterMaxHp).clamp(0.0, 1.0);
-          final double playerHpRatio = manager.maxHp <= 0
-              ? 0
-              : (manager.currentHp / manager.maxHp).clamp(0.0, 1.0);
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // IdleGame.playerXRatio/groundYRatio와 반드시 같은 값을
+          // 써야 한다 — 여기(Flutter 오버레이: HP 바/펫 아이콘)와
+          // Flame 쪽(PlayerAnimationComponent/RectangleComponent 몬스터)
+          // 이 서로 다른 비율을 쓰면 해상도가 바뀔 때마다 둘이 어긋난다.
+          final double playerX = constraints.maxWidth * IdleGame.playerXRatio;
+          final double playerY = constraints.maxHeight * IdleGame.groundYRatio;
+          // PlayerAnimationComponent.boxSize와 반드시 같은 값을 써야
+          // 한다 — 상자 크기가 바뀌면(56 → 180 → 120 → 60으로 조정돼
+          // 온 이력) 이 HP 바 위치도 함께 따라가지 않으면 캐릭터
+          // 머리와 겹쳐 보인다. 상수를 직접 참조하므로(하드코딩된
+          // 숫자가 아니라) boxSize가 바뀌는 순간 이 위치도 자동으로
+          // 따라간다.
+          const double spriteSize = PlayerAnimationComponent.boxSize;
+          // 머리 꼭대기(발밑에서 얼마나 위인지)는 상자 전체 높이가
+          // 아니라 표준 캔버스 규격(800x720, 콘텐츠 50%)에서 유도한
+          // [contentTopHeightRatio]로 계산해야 한다 — 상자 전체
+          // (spriteSize)를 그대로 쓰면 공격 이펙트용 여백까지 캐릭터
+          // 키에 포함시켜, 실제 머리보다 훨씬 위(텅 빈 여백 위)에
+          // 체력바가 뜬다.
+          final double headTopY =
+              playerY -
+              spriteSize * PlayerAnimationComponent.contentTopHeightRatio;
+          // 머리에 딱 붙지 않도록 살짝 여유를 둔다.
+          const double playerHpBarBreathingRoom = 12;
+          // 체력바 블록 자체의 높이(진행바 8 + 간격 2 + "200/200" 텍스트
+          // 한 줄 약 13, 아래 Column 구성과 맞춘 값) — Positioned.top은
+          // 이 블록의 "위쪽 끝"을 가리키고 블록은 거기서부터 아래로
+          // 그려지므로, top을 머리 바로 위 선에만 맞추면 블록 자체가
+          // 아래로 자라나며 머리와 겹친다. 블록 높이만큼 한 번 더
+          // 끌어올려야 블록 전체(진행바+텍스트)가 머리 위 여백에 뜬다.
+          const double playerHpBarBlockHeight = 8 + 2 + 13;
+          // 위 계산(contentTopHeightRatio 기반 이론값)만으로는 실제
+          // 화면에서 여전히 머리와 겹쳐 보인다는 피드백을 받아, 눈으로
+          // 확인 가능한 여유가 생기도록 추가로 더 끌어올리는 보정치 —
+          // 이론적으로 유도한 값이 아니라 실측 피드백에 따라 수동으로
+          // 얹은 값이다.
+          const double playerHpBarExtraLift = 24;
 
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              // IdleGame.playerXRatio/groundYRatio와 반드시 같은 값을
-              // 써야 한다 — 여기(Flutter 오버레이: HP 바/펫 아이콘)와
-              // Flame 쪽(PlayerAnimationComponent/RectangleComponent 몬스터)
-              // 이 서로 다른 비율을 쓰면 해상도가 바뀔 때마다 둘이 어긋난다.
-              final double playerX = constraints.maxWidth * IdleGame.playerXRatio;
-              final double playerY = constraints.maxHeight * IdleGame.groundYRatio;
-              // PlayerAnimationComponent.boxSize와 반드시 같은 값을 써야
-              // 한다 — 상자 크기가 바뀌면(56 → 180 → 120 → 60으로 조정돼
-              // 온 이력) 이 HP 바 위치도 함께 따라가지 않으면 캐릭터
-              // 머리와 겹쳐 보인다. 상수를 직접 참조하므로(하드코딩된
-              // 숫자가 아니라) boxSize가 바뀌는 순간 이 위치도 자동으로
-              // 따라간다.
-              const double spriteSize = PlayerAnimationComponent.boxSize;
-              // 머리 꼭대기(발밑에서 얼마나 위인지)는 상자 전체 높이가
-              // 아니라 표준 캔버스 규격(800x720, 콘텐츠 50%)에서 유도한
-              // [contentTopHeightRatio]로 계산해야 한다 — 상자 전체
-              // (spriteSize)를 그대로 쓰면 공격 이펙트용 여백까지 캐릭터
-              // 키에 포함시켜, 실제 머리보다 훨씬 위(텅 빈 여백 위)에
-              // 체력바가 뜬다.
-              final double headTopY =
-                  playerY - spriteSize * PlayerAnimationComponent.contentTopHeightRatio;
-              // 머리에 딱 붙지 않도록 살짝 여유를 둔다.
-              const double playerHpBarBreathingRoom = 12;
-              // 체력바 블록 자체의 높이(진행바 8 + 간격 2 + "200/200" 텍스트
-              // 한 줄 약 13, 아래 Column 구성과 맞춘 값) — Positioned.top은
-              // 이 블록의 "위쪽 끝"을 가리키고 블록은 거기서부터 아래로
-              // 그려지므로, top을 머리 바로 위 선에만 맞추면 블록 자체가
-              // 아래로 자라나며 머리와 겹친다. 블록 높이만큼 한 번 더
-              // 끌어올려야 블록 전체(진행바+텍스트)가 머리 위 여백에 뜬다.
-              const double playerHpBarBlockHeight = 8 + 2 + 13;
-              // 위 계산(contentTopHeightRatio 기반 이론값)만으로는 실제
-              // 화면에서 여전히 머리와 겹쳐 보인다는 피드백을 받아, 눈으로
-              // 확인 가능한 여유가 생기도록 추가로 더 끌어올리는 보정치 —
-              // 이론적으로 유도한 값이 아니라 실측 피드백에 따라 수동으로
-              // 얹은 값이다.
-              const double playerHpBarExtraLift = 24;
+          // 몬스터는 항상 화면 가로 중앙(전투 위치)에서 싸운다 — 몬스터
+          // HP 바를 그 머리 위, 몬스터 폭의 1.2배 너비로만 짧게 띄운다.
+          final double monsterCenterX = constraints.maxWidth / 2;
+          final double monsterTopY = playerY - IdleGame.monsterSize;
+          final double monsterHpBarWidth = IdleGame.monsterSize * 1.2;
 
-              // 몬스터는 항상 화면 가로 중앙(전투 위치)에서 싸운다 — 몬스터
-              // HP 바를 그 머리 위, 몬스터 폭의 1.2배 너비로만 짧게 띄운다.
-              final double monsterCenterX = constraints.maxWidth / 2;
-              final double monsterTopY = playerY - IdleGame.monsterSize;
-              final double monsterHpBarWidth = IdleGame.monsterSize * 1.2;
+          // 기존 80px는 캐릭터 체형(60px 상자) 대비 길어 보인다는
+          // 피드백으로 약 19% 줄였다.
+          const double playerHpBarWidth = 65;
 
-              // 기존 80px는 캐릭터 체형(60px 상자) 대비 길어 보인다는
-              // 피드백으로 약 19% 줄였다.
-              const double playerHpBarWidth = 65;
+          // 장착 중인 칭호(PlayerTitle) — 체력바보다 한 단계 더 위, 머리
+          // 바로 위에 띄운다(요구사항: "내 캐릭터 머리 위에 장착 중인
+          // 칭호를 띄워줘"). 폭이 이름 길이에 따라 달라지므로 체력바와
+          // 달리 고정 폭을 주지 않고, 최대 폭 안에서 내용 크기만큼만
+          // 차지하게 한 뒤 [playerX] 기준으로 가운데 정렬한다.
+          const double titleBadgeHeight = 20;
+          const double titleBadgeGap = 4;
+          const double titleBadgeMaxWidth = 140;
+          final double titleBadgeTop =
+              headTopY -
+              playerHpBarBreathingRoom -
+              playerHpBarBlockHeight -
+              playerHpBarExtraLift -
+              titleBadgeHeight -
+              titleBadgeGap;
 
-              // 장착 중인 칭호(PlayerTitle) — 체력바보다 한 단계 더 위, 머리
-              // 바로 위에 띄운다(요구사항: "내 캐릭터 머리 위에 장착 중인
-              // 칭호를 띄워줘"). 폭이 이름 길이에 따라 달라지므로 체력바와
-              // 달리 고정 폭을 주지 않고, 최대 폭 안에서 내용 크기만큼만
-              // 차지하게 한 뒤 [playerX] 기준으로 가운데 정렬한다.
-              const double titleBadgeHeight = 20;
-              const double titleBadgeGap = 4;
-              const double titleBadgeMaxWidth = 140;
-              final double titleBadgeTop = headTopY -
-                  playerHpBarBreathingRoom -
-                  playerHpBarBlockHeight -
-                  playerHpBarExtraLift -
-                  titleBadgeHeight -
-                  titleBadgeGap;
-
-              return Stack(
-                children: [
-                  // 챕터 배경은 이제 IdleGame 안의 다중 레이어 패럴랙스
-                  // (ParallaxBackLayer: 정지된 먼 배경 + ParallaxGroundLayer:
-                  // 빠르게 스크롤되는 바닥)가 직접 그린다 — GameWidget 캔버스
-                  // 자체가 투명해서(_normalBackgroundColor) 그 위에
-                  // 몬스터/이펙트가 자연스럽게 겹쳐 보인다.
-                  Positioned.fill(child: GameWidget(game: game)),
-                  const Positioned.fill(child: SkillEffectOverlay()),
-                  Positioned.fill(child: PlayerHitFlashOverlay(game: game)),
-                  if (TitleManager.instance.equippedTitle case final PlayerTitle equippedTitle)
-                    Positioned(
-                      left: (playerX - titleBadgeMaxWidth / 2)
-                          .clamp(0, constraints.maxWidth - titleBadgeMaxWidth),
-                      top: titleBadgeTop,
-                      width: titleBadgeMaxWidth,
-                      child: Center(
-                        child: TitleBadge(title: equippedTitle, height: titleBadgeHeight),
-                      ),
-                    ),
-                  Positioned(
-                    left: (playerX - playerHpBarWidth / 2)
-                        .clamp(0, constraints.maxWidth - playerHpBarWidth),
-                    // 캐릭터가 바닥에 서 있으므로 HP 바는 발밑이 아니라
-                    // 머리 위에 띄운다 — 블록 높이(playerHpBarBlockHeight)
-                    // 만큼 더 끌어올려야 블록의 "아래쪽 끝"이 머리 위
-                    // 여유선에 맞고, 그 위에 [playerHpBarExtraLift]만큼
-                    // 한 번 더 끌어올려 시원한 여백을 확보한다(위 주석
-                    // 참고).
-                    top: headTopY -
-                        playerHpBarBreathingRoom -
-                        playerHpBarBlockHeight -
-                        playerHpBarExtraLift,
-                    child: SizedBox(
-                      width: playerHpBarWidth,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(6),
-                            child: LinearProgressIndicator(
-                              value: playerHpRatio,
-                              minHeight: 8,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(Colors.greenAccent),
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${NumberFormatter.format(manager.currentHp.clamp(0, manager.maxHp))} / ${NumberFormatter.format(manager.maxHp)}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 10),
-                          ),
-                        ],
-                      ),
+          return Stack(
+            children: [
+              // 챕터 배경은 이제 IdleGame 안의 다중 레이어 패럴랙스
+              // (ParallaxBackLayer: 정지된 먼 배경 + ParallaxGroundLayer:
+              // 빠르게 스크롤되는 바닥)가 직접 그린다 — GameWidget 캔버스
+              // 자체가 투명해서(_normalBackgroundColor) 그 위에
+              // 몬스터/이펙트가 자연스럽게 겹쳐 보인다.
+              Positioned.fill(child: GameWidget(game: game)),
+              const Positioned.fill(child: SkillEffectOverlay()),
+              Positioned.fill(child: PlayerHitFlashOverlay(game: game)),
+              if (TitleManager.instance.equippedTitle
+                  case final PlayerTitle equippedTitle)
+                Positioned(
+                  left: (playerX - titleBadgeMaxWidth / 2).clamp(
+                    0,
+                    constraints.maxWidth - titleBadgeMaxWidth,
+                  ),
+                  top: titleBadgeTop,
+                  width: titleBadgeMaxWidth,
+                  child: Center(
+                    child: TitleBadge(
+                      title: equippedTitle,
+                      height: titleBadgeHeight,
                     ),
                   ),
-                  const Positioned(
-                    top: 12,
-                    left: 12,
-                    child: _QuestHudButton(),
+                ),
+              Positioned(
+                left: (playerX - playerHpBarWidth / 2).clamp(
+                  0,
+                  constraints.maxWidth - playerHpBarWidth,
+                ),
+                // 캐릭터가 바닥에 서 있으므로 HP 바는 발밑이 아니라
+                // 머리 위에 띄운다 — 블록 높이(playerHpBarBlockHeight)
+                // 만큼 더 끌어올려야 블록의 "아래쪽 끝"이 머리 위
+                // 여유선에 맞고, 그 위에 [playerHpBarExtraLift]만큼
+                // 한 번 더 끌어올려 시원한 여백을 확보한다(위 주석
+                // 참고).
+                top:
+                    headTopY -
+                    playerHpBarBreathingRoom -
+                    playerHpBarBlockHeight -
+                    playerHpBarExtraLift,
+                child: SizedBox(
+                  width: playerHpBarWidth,
+                  child: _PlayerHpBar(manager: manager),
+                ),
+              ),
+              const Positioned(top: 12, left: 12, child: _QuestHudButton()),
+              const Positioned(top: 64, left: 12, child: _WorldBossHudButton()),
+              const Positioned(top: 116, left: 12, child: _PrestigeHudButton()),
+              const Positioned(top: 168, left: 12, child: _RankingHudButton()),
+              // 예전엔 여기(top:220)에 배틀패스 버튼이 있었지만, 그건
+              // 물약 슬롯 왼쪽 Row로 옮겨서 이 자리가 비었다 — 대신
+              // 상단 앱바(main.dart)에서 빠진 일일 퀘스트 진입점을
+              // 옮겨 왔다(요구사항: "프로필 옆... 스크롤 아이콘은 삭제").
+              const Positioned(
+                top: 220,
+                left: 12,
+                child: _DailyQuestHudButton(),
+              ),
+              // 상단 AppBar의 보석/코인 재화 표시(main.dart) 바로 아래,
+              // 화면 우측 상단에 위치한 유틸리티 버튼 묶음. 원래 상단
+              // AppBar에 있던 우편함/배틀패스 버튼을 이리로 옮기면서,
+              // 기존 물약 퀵슬롯 바로 왼쪽에 나란히 붙였다.
+              const Positioned(
+                top: 12,
+                right: 12,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MailboxHudButton(),
+                    SizedBox(width: 8),
+                    _BattlePassHudButton(),
+                    SizedBox(width: 8),
+                    PotionQuickSlot(),
+                  ],
+                ),
+              ),
+              Positioned(
+                top: 12,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _ChapterLabel(manager: manager),
+                      const SizedBox(width: 8),
+                      _HardModeToggleButton(manager: manager),
+                    ],
                   ),
-                  const Positioned(
-                    top: 64,
-                    left: 12,
-                    child: _WorldBossHudButton(),
-                  ),
-                  const Positioned(
-                    top: 116,
-                    left: 12,
-                    child: _PrestigeHudButton(),
-                  ),
-                  const Positioned(
-                    top: 168,
-                    left: 12,
-                    child: _RankingHudButton(),
-                  ),
-                  // 예전엔 여기(top:220)에 배틀패스 버튼이 있었지만, 그건
-                  // 물약 슬롯 왼쪽 Row로 옮겨서 이 자리가 비었다 — 대신
-                  // 상단 앱바(main.dart)에서 빠진 일일 퀘스트 진입점을
-                  // 옮겨 왔다(요구사항: "프로필 옆... 스크롤 아이콘은 삭제").
-                  const Positioned(
-                    top: 220,
-                    left: 12,
-                    child: _DailyQuestHudButton(),
-                  ),
-                  // 상단 AppBar의 보석/코인 재화 표시(main.dart) 바로 아래,
-                  // 화면 우측 상단에 위치한 유틸리티 버튼 묶음. 원래 상단
-                  // AppBar에 있던 우편함/배틀패스 버튼을 이리로 옮기면서,
-                  // 기존 물약 퀵슬롯 바로 왼쪽에 나란히 붙였다.
-                  const Positioned(
-                    top: 12,
-                    right: 12,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _MailboxHudButton(),
-                        SizedBox(width: 8),
-                        _BattlePassHudButton(),
-                        SizedBox(width: 8),
-                        PotionQuickSlot(),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    top: 12,
-                    left: 0,
-                    right: 0,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.black54,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          manager.isBossStage
-                              ? '${manager.chapter}-${manager.stage} 보스!'
-                              : '${manager.chapter}-${manager.stage}',
-                          style: TextStyle(
-                            color: manager.isBossStage ? Colors.redAccent : Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (manager.isBossStage)
-                    Positioned(
-                      top: 52,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Colors.black45,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            '남은 시간 ${manager.bossTimeRemaining.clamp(0, GameManager.bossTimeLimit).toStringAsFixed(1)}s',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  Positioned(
-                    // 몬스터 머리 바로 위(TopCenter에서 약간 더 위로)에
-                    // 짧고 깔끔하게 — 예전처럼 화면 하단을 가로로 다 덮지
-                    // 않는다. 몬스터는 항상 전투 위치(화면 가로 중앙,
-                    // groundY 위)에서 싸우므로(IdleGame._enterBattlePhase),
-                    // Flame 쪽 실제 position을 매 프레임 동기화하는 대신
-                    // 전투가 실제로 벌어지는 이 고정 좌표를 그대로
-                    // 재사용한다(플레이어 스프라이트 오버레이도 같은
-                    // 방식으로 이미 groundY/playerXRatio를 공유한다).
-                    top: monsterTopY - 40,
-                    left: monsterCenterX - monsterHpBarWidth / 2,
-                    width: monsterHpBarWidth,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: LinearProgressIndicator(
-                            value: hpRatio,
-                            minHeight: 10,
-                            backgroundColor: Colors.white24,
-                            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${NumberFormatter.format(manager.monsterHp.clamp(0, manager.monsterMaxHp))} / ${NumberFormatter.format(manager.monsterMaxHp)}',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                            shadows: [Shadow(color: Colors.black, blurRadius: 4)],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
+                ),
+              ),
+              // isBossStage가 false인 동안은 [_BossTimerBadge]가 내부에서
+              // SizedBox.shrink()를 돌려주므로, 예전 `if (manager
+              // .isBossStage) Positioned(...)`와 똑같이 화면에는 아무것도
+              // 그려지지 않는다 — 다만 이제 Stack.children 목록 자체는
+              // 리사이즈 때만 다시 만들어지고, 보이고/숨는 판단은 이
+              // 위젯이 매 틱마다 스스로 다시 한다.
+              _BossTimerBadge(manager: manager),
+              Positioned(
+                // 몬스터 머리 바로 위(TopCenter에서 약간 더 위로)에
+                // 짧고 깔끔하게 — 예전처럼 화면 하단을 가로로 다 덮지
+                // 않는다. 몬스터는 항상 전투 위치(화면 가로 중앙,
+                // groundY 위)에서 싸우므로(IdleGame._enterBattlePhase),
+                // Flame 쪽 실제 position을 매 프레임 동기화하는 대신
+                // 전투가 실제로 벌어지는 이 고정 좌표를 그대로
+                // 재사용한다(플레이어 스프라이트 오버레이도 같은
+                // 방식으로 이미 groundY/playerXRatio를 공유한다).
+                top: monsterTopY - 40,
+                left: monsterCenterX - monsterHpBarWidth / 2,
+                width: monsterHpBarWidth,
+                child: _MonsterHpBar(manager: manager),
+              ),
+            ],
           );
         },
       ),
+    );
+  }
+}
+
+/// 플레이어 HP 바(진행바+수치 텍스트)만 담당 — [_BattleView]가 통째로
+/// [manager]를 구독하던 시절엔 이 텍스트 하나 바뀌자고 GameWidget/HUD
+/// 버튼까지 매 틱 다시 빌드됐다. 이제 이 작은 서브트리만
+/// [AnimatedBuilder]로 [manager]를 구독한다 — 표시 결과(진행바 색/두께,
+/// 텍스트 스타일)는 예전과 완전히 동일하다.
+class _PlayerHpBar extends StatelessWidget {
+  const _PlayerHpBar({required this.manager});
+
+  final GameManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        final double playerHpRatio = manager.maxHp <= 0
+            ? 0
+            : (manager.currentHp / manager.maxHp).clamp(0.0, 1.0);
+        return Column(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: playerHpRatio,
+                minHeight: 8,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation(Colors.greenAccent),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${NumberFormatter.format(manager.currentHp.clamp(0, manager.maxHp))} / ${NumberFormatter.format(manager.maxHp)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 10),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 하드 모드 전용 강조 색 — [_ChapterLabel]/[_HardModeToggleButton]이
+/// 공유한다(요구사항: "하드 모드일 때는 UI... 붉은색 계열로 바꿔서
+/// 시각적으로 위험해 보이게").
+const Color _hardModeRed = Color(0xFFFF1744);
+
+/// 챕터-스테이지 라벨("3-12" / "3-12 보스!" / 하드 모드면 "⚠️ 하드
+/// 100-3") — [manager.chapter]/[manager.stage]/[manager.isBossStage]/
+/// [manager.isHardMode]가 바뀔 때만 다시 그려진다. 정상 모드에서는 pill
+/// 아래에 지역명·챕터명(예: "3지역 · 폐허가 된 왕도 외곽")을 함께
+/// 보여준다(요구사항: "각 챕터 진입 시 UI에 표시되는 지역명과 챕터명") —
+/// 하드 모드는 챕터/지역 개념이 없는 구간이라 이 줄을 생략한다.
+class _ChapterLabel extends StatelessWidget {
+  const _ChapterLabel({required this.manager});
+
+  final GameManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        final bool hard = manager.isHardMode;
+        final Color textColor = hard
+            ? _hardModeRed
+            : (manager.isBossStage ? Colors.redAccent : Colors.white);
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(20),
+            border: hard
+                ? Border.all(color: _hardModeRed.withValues(alpha: 0.6))
+                : null,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                hard
+                    ? '⚠️ 하드 ${manager.chapter}-${manager.stage}'
+                    : (manager.isBossStage
+                          ? '${manager.chapter}-${manager.stage} 보스!'
+                          : '${manager.chapter}-${manager.stage}'),
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+              if (!hard) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '${manager.regionName} · ${manager.chapterName}',
+                  style: const TextStyle(color: Colors.white54, fontSize: 10),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 하드 모드 해금 후에만 나타나는 [일반 ↔ 하드] 전환 버튼 —
+/// [_BossTimerBadge]와 같은 자기-숨김 패턴([manager.hardModeUnlocked]가
+/// false면 [SizedBox.shrink]). 탭하면 [GameManager.setHardMode]가 즉시
+/// (몬스터/체력 포함) 다른 모드로 리로드한다.
+class _HardModeToggleButton extends StatelessWidget {
+  const _HardModeToggleButton({required this.manager});
+
+  final GameManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        if (!manager.hardModeUnlocked) {
+          return const SizedBox.shrink();
+        }
+        final bool hard = manager.isHardMode;
+        return GestureDetector(
+          onTap: () => manager.setHardMode(!hard),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: hard
+                  ? _hardModeRed.withValues(alpha: 0.25)
+                  : Colors.black54,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: hard ? _hardModeRed : Colors.white38),
+            ),
+            child: Text(
+              hard ? '하드 → 일반' : '일반 → 하드',
+              style: TextStyle(
+                color: hard ? _hardModeRed : Colors.white70,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 보스 스테이지에서만 뜨는 남은 시간 배지 — 매 틱 카운트다운되므로 가장
+/// 자주 다시 그려지는 위젯이다. [manager.isBossStage]가 false면
+/// [SizedBox.shrink]를 돌려주는데, Stack의 비-Positioned 자식으로서
+/// 크기가 0이라 예전 `if (manager.isBossStage) Positioned(...)`(Stack
+/// children 목록에서 아예 빠짐)와 화면상 차이가 없다.
+class _BossTimerBadge extends StatelessWidget {
+  const _BossTimerBadge({required this.manager});
+
+  final GameManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        if (!manager.isBossStage) {
+          return const SizedBox.shrink();
+        }
+        return Positioned(
+          top: 52,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black45,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '남은 시간 ${manager.bossTimeRemaining.clamp(0, GameManager.bossTimeLimit).toStringAsFixed(1)}s',
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 몬스터 HP 바(진행바+수치 텍스트) — [_PlayerHpBar]와 같은 이유로 분리.
+class _MonsterHpBar extends StatelessWidget {
+  const _MonsterHpBar({required this.manager});
+
+  final GameManager manager;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: manager,
+      builder: (context, _) {
+        final double hpRatio = manager.monsterMaxHp <= 0
+            ? 0
+            : (manager.monsterHp / manager.monsterMaxHp).clamp(0.0, 1.0);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: hpRatio,
+                minHeight: 10,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '${NumberFormatter.format(manager.monsterHp.clamp(0, manager.monsterMaxHp))} / ${NumberFormatter.format(manager.monsterMaxHp)}',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 10,
+                shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -501,9 +669,16 @@ class _SkillEffectOverlayState extends State<SkillEffectOverlay> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: node.element.color.withValues(alpha: 0.35),
-                          border: Border.all(color: node.element.color, width: 3),
+                          border: Border.all(
+                            color: node.element.color,
+                            width: 3,
+                          ),
                         ),
-                        child: Icon(node.element.icon, color: node.element.color, size: 48),
+                        child: Icon(
+                          node.element.icon,
+                          color: node.element.color,
+                          size: 48,
+                        ),
                       ),
                       const SizedBox(height: 6),
                       _activeIsCritical
@@ -658,11 +833,16 @@ class _QuestHudButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([MissionManager.instance, AttendanceManager.instance]),
+      animation: Listenable.merge([
+        MissionManager.instance,
+        AttendanceManager.instance,
+      ]),
       builder: (context, _) {
         final bool hasClaimableMission = MissionManager.instance.activeMissions
             .any((mission) => mission.isCleared && !mission.isRewardClaimed);
-        final bool showBadge = hasClaimableMission || AttendanceManager.instance.hasClaimableReward;
+        final bool showBadge =
+            hasClaimableMission ||
+            AttendanceManager.instance.hasClaimableReward;
 
         return GestureDetector(
           onTap: () => showDialog<void>(
@@ -678,9 +858,16 @@ class _QuestHudButton extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
+                  border: Border.all(
+                    color: const Color(0xFF6C4FCE),
+                    width: 1.5,
+                  ),
                 ),
-                child: const Icon(Icons.assignment, color: Colors.white, size: 22),
+                child: const Icon(
+                  Icons.assignment,
+                  color: Colors.white,
+                  size: 22,
+                ),
               ),
               if (showBadge)
                 Positioned(
@@ -692,7 +879,10 @@ class _QuestHudButton extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.redAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                      border: Border.all(
+                        color: const Color(0xFF0F0F17),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -730,7 +920,9 @@ class _WorldBossHudButton extends StatelessWidget {
       animation: WorldBossManager.instance,
       builder: (context, _) {
         final WorldBossManager manager = WorldBossManager.instance;
-        final Color accent = manager.isActive ? Colors.redAccent : const Color(0xFF6C4FCE);
+        final Color accent = manager.isActive
+            ? Colors.redAccent
+            : const Color(0xFF6C4FCE);
 
         return GestureDetector(
           onTap: () => showWorldBossEntryDialog(context),
@@ -754,7 +946,9 @@ class _WorldBossHudButton extends StatelessWidget {
                 child: const Text('🐉', style: TextStyle(fontSize: 22)),
               ),
               const SizedBox(height: 2),
-              _OutlinedCountdownText(text: _shortCountdown(manager.timeRemaining)),
+              _OutlinedCountdownText(
+                text: _shortCountdown(manager.timeRemaining),
+              ),
             ],
           ),
         );
@@ -778,7 +972,10 @@ class _PrestigeHudButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([PrestigeManager.instance, GameManager.instance]),
+      animation: Listenable.merge([
+        PrestigeManager.instance,
+        GameManager.instance,
+      ]),
       builder: (context, _) {
         final PrestigeManager prestige = PrestigeManager.instance;
         final bool ready = prestige.canPrestige;
@@ -801,7 +998,10 @@ class _PrestigeHudButton extends StatelessWidget {
                       border: Border.all(color: accent, width: 1.5),
                     ),
                     alignment: Alignment.center,
-                    child: Text('⚡', style: TextStyle(fontSize: 22, color: accent)),
+                    child: Text(
+                      '⚡',
+                      style: TextStyle(fontSize: 22, color: accent),
+                    ),
                   ),
                   if (ready)
                     Positioned(
@@ -813,7 +1013,10 @@ class _PrestigeHudButton extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: Colors.greenAccent,
                           shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                          border: Border.all(
+                            color: const Color(0xFF0F0F17),
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),
@@ -873,9 +1076,9 @@ class _DailyQuestHudButton extends StatelessWidget {
         final bool hasClaimable = QuestManager.instance.hasClaimableQuest;
 
         return GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const QuestScreen()),
-          ),
+          onTap: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute<void>(builder: (_) => const QuestScreen())),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -885,7 +1088,10 @@ class _DailyQuestHudButton extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF4F8FE0), width: 1.5),
+                  border: Border.all(
+                    color: const Color(0xFF4F8FE0),
+                    width: 1.5,
+                  ),
                 ),
                 alignment: Alignment.center,
                 child: const Text('📜', style: TextStyle(fontSize: 20)),
@@ -900,7 +1106,10 @@ class _DailyQuestHudButton extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.redAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                      border: Border.all(
+                        color: const Color(0xFF0F0F17),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -943,7 +1152,10 @@ class _BattlePassHudButton extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
+                  border: Border.all(
+                    color: const Color(0xFF6C4FCE),
+                    width: 1.5,
+                  ),
                 ),
                 alignment: Alignment.center,
                 child: const Text('🎫', style: TextStyle(fontSize: 20)),
@@ -958,7 +1170,10 @@ class _BattlePassHudButton extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.redAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                      border: Border.all(
+                        color: const Color(0xFF0F0F17),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -996,7 +1211,10 @@ class _MailboxHudButton extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF6C4FCE), width: 1.5),
+                  border: Border.all(
+                    color: const Color(0xFF6C4FCE),
+                    width: 1.5,
+                  ),
                 ),
                 alignment: Alignment.center,
                 child: const Text('✉️', style: TextStyle(fontSize: 20)),
@@ -1011,7 +1229,10 @@ class _MailboxHudButton extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: Colors.redAccent,
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF0F0F17), width: 1.5),
+                      border: Border.all(
+                        color: const Color(0xFF0F0F17),
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -1122,7 +1343,8 @@ class ActiveSkillQuickBar extends StatelessWidget {
     return AnimatedBuilder(
       animation: SkillManager.instance,
       builder: (context, _) {
-        final List<ActiveSkill> equipped = SkillManager.instance.equippedActiveSkills;
+        final List<ActiveSkill> equipped =
+            SkillManager.instance.equippedActiveSkills;
 
         if (equipped.isEmpty) {
           return const SizedBox.shrink();
@@ -1141,7 +1363,10 @@ class ActiveSkillQuickBar extends StatelessWidget {
                 final ActiveSkill skill = equipped[index];
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: _ActiveSkillSlot(key: ValueKey(skill.id), skillId: skill.id),
+                  child: _ActiveSkillSlot(
+                    key: ValueKey(skill.id),
+                    skillId: skill.id,
+                  ),
                 );
               },
             ),
@@ -1170,7 +1395,10 @@ class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+    _timer = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
   }
 
   @override
@@ -1187,13 +1415,19 @@ class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
       return const SizedBox.shrink();
     }
 
-    final double effectiveCooldown = manager.effectiveActiveSkillCooldown(skill);
-    final double remaining = manager.activeSkillCooldownRemaining(widget.skillId);
+    final double effectiveCooldown = manager.effectiveActiveSkillCooldown(
+      skill,
+    );
+    final double remaining = manager.activeSkillCooldownRemaining(
+      widget.skillId,
+    );
     final bool isOnCooldown = remaining > 0;
-    final double progress =
-        effectiveCooldown <= 0 ? 1 : (1 - remaining / effectiveCooldown).clamp(0.0, 1.0);
-    final Color accent =
-        skill.type == ActiveSkillType.buff ? Colors.cyanAccent : Colors.orangeAccent;
+    final double progress = effectiveCooldown <= 0
+        ? 1
+        : (1 - remaining / effectiveCooldown).clamp(0.0, 1.0);
+    final Color accent = skill.type == ActiveSkillType.buff
+        ? Colors.cyanAccent
+        : Colors.orangeAccent;
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
@@ -1402,7 +1636,10 @@ class _UpgradeViewState extends State<_UpgradeView> {
                   // tap shouldn't count towards "N회 강화" missions.
                   onTap: () {
                     if (manager.upgradeAttack()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1410,13 +1647,17 @@ class _UpgradeViewState extends State<_UpgradeView> {
                 _UpgradeButton(
                   title: '공격속도',
                   level: manager.attackSpeedLevel,
-                  valueLabel: '${manager.effectiveAttackSpeed.toStringAsFixed(2)}/s',
+                  valueLabel:
+                      '${manager.effectiveAttackSpeed.toStringAsFixed(2)}/s',
                   cost: manager.speedUpgradeCost,
                   gold: manager.gold,
                   icon: Icons.bolt,
                   onTap: () {
                     if (manager.upgradeAttackSpeed()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1424,13 +1665,17 @@ class _UpgradeViewState extends State<_UpgradeView> {
                 _UpgradeButton(
                   title: '크리티컬 확률',
                   level: manager.criticalRateLevel,
-                  valueLabel: '${(manager.criticalRate * 100).toStringAsFixed(0)}%',
+                  valueLabel:
+                      '${(manager.criticalRate * 100).toStringAsFixed(0)}%',
                   cost: manager.criticalUpgradeCost,
                   gold: manager.gold,
                   icon: Icons.flash_on,
                   onTap: () {
                     if (manager.upgradeCriticalRate()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1444,7 +1689,10 @@ class _UpgradeViewState extends State<_UpgradeView> {
                   icon: Icons.shield,
                   onTap: () {
                     if (manager.upgradeDefense()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1452,13 +1700,17 @@ class _UpgradeViewState extends State<_UpgradeView> {
                 _UpgradeButton(
                   title: '방어율',
                   level: manager.defenseRateLevel,
-                  valueLabel: '${(manager.effectiveDefenseRate * 100).toStringAsFixed(0)}%',
+                  valueLabel:
+                      '${(manager.effectiveDefenseRate * 100).toStringAsFixed(0)}%',
                   cost: manager.defenseRateUpgradeCost,
                   gold: manager.gold,
                   icon: Icons.security,
                   onTap: () {
                     if (manager.upgradeDefenseRate()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1466,13 +1718,17 @@ class _UpgradeViewState extends State<_UpgradeView> {
                 _UpgradeButton(
                   title: '회피율',
                   level: manager.evasionRateLevel,
-                  valueLabel: '${(manager.effectiveEvasionRate * 100).toStringAsFixed(0)}%',
+                  valueLabel:
+                      '${(manager.effectiveEvasionRate * 100).toStringAsFixed(0)}%',
                   cost: manager.evasionRateUpgradeCost,
                   gold: manager.gold,
                   icon: Icons.directions_run,
                   onTap: () {
                     if (manager.upgradeEvasionRate()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1480,13 +1736,17 @@ class _UpgradeViewState extends State<_UpgradeView> {
                 _UpgradeButton(
                   title: '크리티컬 방어율',
                   level: manager.critDefenseRateLevel,
-                  valueLabel: '${(manager.effectiveCritDefenseRate * 100).toStringAsFixed(0)}%',
+                  valueLabel:
+                      '${(manager.effectiveCritDefenseRate * 100).toStringAsFixed(0)}%',
                   cost: manager.critDefenseRateUpgradeCost,
                   gold: manager.gold,
                   icon: Icons.gpp_good,
                   onTap: () {
                     if (manager.upgradeCritDefenseRate()) {
-                      MissionManager.instance.updateProgress(ActionType.upgrade, 1);
+                      MissionManager.instance.updateProgress(
+                        ActionType.upgrade,
+                        1,
+                      );
                     }
                   },
                 ),
@@ -1532,7 +1792,9 @@ class _UpgradeButton extends StatelessWidget {
           color: const Color(0xFF20202C),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: affordable ? const Color(0xFF6C4FCE) : const Color(0xFF3A3A4A),
+            color: affordable
+                ? const Color(0xFF6C4FCE)
+                : const Color(0xFF3A3A4A),
             width: 1.2,
           ),
         ),
@@ -1546,7 +1808,10 @@ class _UpgradeButton extends StatelessWidget {
                 children: [
                   Text(
                     '$title Lv.$level ($valueLabel)',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -1559,11 +1824,13 @@ class _UpgradeButton extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.arrow_upward, color: affordable ? Colors.white : Colors.white24),
+            Icon(
+              Icons.arrow_upward,
+              color: affordable ? Colors.white : Colors.white24,
+            ),
           ],
         ),
       ),
     );
   }
 }
-

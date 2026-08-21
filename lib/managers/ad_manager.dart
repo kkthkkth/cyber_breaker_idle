@@ -222,40 +222,58 @@ class AdManager extends ChangeNotifier {
       return false;
     }
 
-    final RewardedAd ad = _rewardedAd!;
+    // [보안 감사 2026-08-21] [canWatchAd]를 진입 시 한 번 확인했지만, 그
+    // 뒤 두 번의 await(getNetworkTime/_checkAndResetDaily) 사이에 같은
+    // 메서드가 다시 호출되면(오늘날 UI는 공유 [_isWatching] 플래그로
+    // 막고 있지만, 이 매니저 자체는 재진입을 막지 않는다) 먼저 들어온
+    // 호출이 이미 [_rewardedAd]를 null로 비운 뒤라 `_rewardedAd!`가 null
+    // 역참조로 죽을 수 있었다 — 여기서 다시 확인해 조용히 실패시킨다.
+    // 이 파일은 이 프로젝트에서 유일하게 try/catch가 전혀 없던
+    // 매니저 메서드였다(다른 모든 매니저는 플러그인/네트워크 호출을
+    // try/catch로 감싸는 관례를 따른다) — 이제 그 관례를 맞춘다.
+    final RewardedAd? ad = _rewardedAd;
+    if (ad == null) {
+      return false;
+    }
     _rewardedAd = null;
 
-    bool earned = false;
-    final Completer<bool> completer = Completer<bool>();
-    ad.fullScreenContentCallback = FullScreenContentCallback(
-      onAdDismissedFullScreenContent: (dismissedAd) {
-        dismissedAd.dispose();
-        _loadRewardedAd();
-        if (!completer.isCompleted) {
-          completer.complete(earned);
-        }
-      },
-      onAdFailedToShowFullScreenContent: (failedAd, error) {
-        debugPrint('[AdManager] 보상형 광고 표시 실패: $error');
-        failedAd.dispose();
-        _loadRewardedAd();
-        if (!completer.isCompleted) {
-          completer.complete(false);
-        }
-      },
-    );
+    try {
+      bool earned = false;
+      final Completer<bool> completer = Completer<bool>();
+      ad.fullScreenContentCallback = FullScreenContentCallback(
+        onAdDismissedFullScreenContent: (dismissedAd) {
+          dismissedAd.dispose();
+          _loadRewardedAd();
+          if (!completer.isCompleted) {
+            completer.complete(earned);
+          }
+        },
+        onAdFailedToShowFullScreenContent: (failedAd, error) {
+          debugPrint('[AdManager] 보상형 광고 표시 실패: $error');
+          failedAd.dispose();
+          _loadRewardedAd();
+          if (!completer.isCompleted) {
+            completer.complete(false);
+          }
+        },
+      );
 
-    await ad.show(
-      onUserEarnedReward: (adWithoutView, reward) {
-        earned = true;
-      },
-    );
+      await ad.show(
+        onUserEarnedReward: (adWithoutView, reward) {
+          earned = true;
+        },
+      );
 
-    final bool success = await completer.future;
-    if (success) {
-      await _recordAdWatched();
+      final bool success = await completer.future;
+      if (success) {
+        await _recordAdWatched();
+      }
+      return success;
+    } catch (e) {
+      debugPrint('[AdManager] 보상형 광고 표시 중 오류: $e');
+      _loadRewardedAd();
+      return false;
     }
-    return success;
   }
 
   Future<void> _recordAdWatched() async {

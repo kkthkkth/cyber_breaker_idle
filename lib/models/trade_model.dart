@@ -91,8 +91,27 @@ class TradeItemEntry {
       tradeId: json['trade_id'].toString(),
       ownerUserId: json['owner_user_id'] as String,
       equipmentId: json['equipment_id'].toString(),
-      item: data == null ? null : Equipment.fromJson(data),
+      // [보안 감사 2026-08-21] 상대방(내가 통제할 수 없는 클라이언트)이
+      // 쓴 user_equipment.data를 그대로 파싱한다 — Equipment.fromJson이
+      // enum 파싱은 이제 안전해졌지만(EquipType/ItemGrade/CharacterClass
+      // 전부 폴백 처리), id/name처럼 여전히 non-null cast인 필드가
+      // 예상 밖으로 비어 있는 경우까지 완전히 배제할 수는 없다 — 이
+      // try/catch가 "표시용 정보 못 구하면 null"이라는 이 필드의 원래
+      // 문서화된 계약을 실제로 지켜서, 거래 상대의 데이터 하나가 이상해도
+      // TradeScreen 전체가 죽지 않고 그 아이템만 placeholder로 보이게 한다.
+      item: _tryParseEquipment(data),
     );
+  }
+
+  static Equipment? _tryParseEquipment(Map<String, dynamic>? data) {
+    if (data == null) {
+      return null;
+    }
+    try {
+      return Equipment.fromJson(data);
+    } catch (_) {
+      return null;
+    }
   }
 }
 

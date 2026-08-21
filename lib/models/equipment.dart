@@ -452,8 +452,8 @@ class Equipment {
     return Equipment(
       id: json['id'] as String,
       name: json['name'] as String,
-      type: EquipType.values.byName(json['type'] as String),
-      grade: _parseGrade(json['grade'] as String),
+      type: _parseType(json['type'] as String?),
+      grade: _parseGrade(json['grade'] as String? ?? ''),
       statMultiplier: (json['statMultiplier'] as num).toDouble(),
       isEquipped: json['isEquipped'] as bool,
       level: json['level'] as int? ?? 0,
@@ -470,9 +470,7 @@ class Equipment {
               ?.map((entry) => EquipmentOption.fromJson(entry as Map<String, dynamic>))
               .toList() ??
           const [],
-      classType: json['classType'] != null
-          ? CharacterClass.values.byName(json['classType'] as String)
-          : null,
+      classType: _parseClassType(json['classType'] as String?),
       // 이 필드가 생기기 전에 저장된 기존 데이터(펫 포함)는 이 키 자체가
       // 없다 — 그런 경우 빈 맵으로 안전하게 대체한다(신규 필드 추가 시
       // 항상 지키는 JSON 호환성 관례).
@@ -494,6 +492,41 @@ class Equipment {
       }
     }
     return ItemGrade.n;
+  }
+
+  /// [보안 감사 2026-08-21] [_parseGrade]와 같은 이유로 추가 — 예전엔
+  /// `EquipType.values.byName(json['type'] as String)`을 그대로 써서,
+  /// 이 값이 null이거나(예: 다른 유저의 손상된/예전 스키마 행) enum
+  /// 이름과 정확히 일치하지 않으면 `Equipment.fromJson` 전체가 예외를
+  /// 던졌다. 이제는 `user_equipment`를 거쳐 다른 유저의 데이터를
+  /// 그대로 읽는 거래 화면([TradeItemEntry.fromJson])처럼 이 프로젝트가
+  /// 통제할 수 없는 외부 데이터를 파싱하는 경로가 생겨서, 그 값 하나
+  /// 때문에 화면 전체가 죽는 일이 없도록 [ItemGrade]와 같은 관례로
+  /// 통일한다.
+  static EquipType _parseType(String? name) {
+    if (name != null) {
+      for (final EquipType type in EquipType.values) {
+        if (type.name == name) {
+          return type;
+        }
+      }
+    }
+    return EquipType.weapon;
+  }
+
+  /// [classType]은 원래도 nullable이라, 못 알아보는 값이면 그냥 null로
+  /// 안전하게 대체한다(캐릭터가 아닌 부위는 애초에 항상 null이므로 이
+  /// 폴백이 자연스럽다).
+  static CharacterClass? _parseClassType(String? name) {
+    if (name == null) {
+      return null;
+    }
+    for (final CharacterClass classType in CharacterClass.values) {
+      if (classType.name == name) {
+        return classType;
+      }
+    }
+    return null;
   }
 }
 

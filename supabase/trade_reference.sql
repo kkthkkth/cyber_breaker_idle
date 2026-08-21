@@ -146,12 +146,27 @@ begin
 
   -- 하루 거래 횟수 재검증(양쪽 다) — 클라이언트가 보여주는 카운트를
   -- 신뢰하지 않고 여기서 다시 확인한다.
+  --
+  -- [보안 감사 2026-08-21] 맨 위의 `select ... for update`는 trade_id
+  -- 단위로만 잠근다 — 같은 유저가 서로 다른 상대와 동시에 진행 중인
+  -- 거래 두 건(각자 다른 trade_id)을 몇 밀리초 차이로 함께 confirm하면,
+  -- 둘 다 이 지점에서 "아직 2건"을 읽고 통과해 하루 한도(3건)를 넘길 수
+  -- 있었다(고전적인 read-then-write TOCTOU). 먼저 행이 반드시 존재하게
+  -- 만든 뒤 `for update`로 그 유저의 오늘 카운트 행 자체를 잠가서, 두
+  -- 번째 트랜잭션은 첫 번째가 커밋할 때까지 여기서 대기했다가 갱신된
+  -- 값을 보게 한다.
+  insert into trade_daily_count (user_id, trade_date, count)
+  values (v_trade.user_a, v_today, 0), (v_trade.user_b, v_today, 0)
+  on conflict (user_id, trade_date) do nothing;
+
   if (
-    select coalesce(count, 0) from trade_daily_count
+    select count from trade_daily_count
     where user_id = v_trade.user_a and trade_date = v_today
+    for update
   ) >= 3 or (
-    select coalesce(count, 0) from trade_daily_count
+    select count from trade_daily_count
     where user_id = v_trade.user_b and trade_date = v_today
+    for update
   ) >= 3 then
     raise exception 'daily trade limit reached';
   end if;
@@ -167,8 +182,10 @@ begin
 
   update trades set status = 'completed' where id = p_trade_id;
 
-  insert into trade_daily_count (user_id, trade_date, count)
-  values (v_trade.user_a, v_today, 1), (v_trade.user_b, v_today, 1)
-  on conflict (user_id, trade_date) do update set count = trade_daily_count.count + 1;
+  -- 위에서 이미 행을 잠가 뒀으므로 여기서는 단순 증가만 하면 된다.
+  update trade_daily_count set count = count + 1
+  where user_id = v_trade.user_a and trade_date = v_today;
+  update trade_daily_count set count = count + 1
+  where user_id = v_trade.user_b and trade_date = v_today;
 end;
 $$;

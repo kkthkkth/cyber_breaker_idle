@@ -193,6 +193,7 @@ class GuildWarManager extends ChangeNotifier {
   /// (길드가 이번 주 전쟁에 참여했다면) 길드 금고/휘장을 반영한다.
   Future<void> checkAndSettleIfDue() async {
     final DateTime now = await getNetworkTime();
+    _cachedNtpNow = now;
     if (now.weekday != DateTime.monday) {
       return;
     }
@@ -239,16 +240,34 @@ class GuildWarManager extends ChangeNotifier {
   /// 별개로, 자정 타이머를 기다리지 않고 시작 시점에 한 번 더 확인).
   Future<void> syncBadgeOnStartup() async {
     final DateTime now = await getNetworkTime();
+    _cachedNtpNow = now;
     await _materializeBadgeIfGranted(now);
     EquipmentManager.instance.removeExpiredBadge(now);
   }
+
+  /// [checkAndSettleIfDue]/[syncBadgeOnStartup]가 이미 왕복한 NTP 시간을
+  /// 저장해 둔 캐시 — [badgeGoldRateBonus]/[badgeCritDamageBonus]가 매
+  /// 킬마다(핫 패스) 매번 `await getNetworkTime()`을 하지 않고도 기기
+  /// 시계 대신 이 값을 쓸 수 있게 한다.
+  ///
+  /// [보안 감사 2026-08-21] 원래 이 두 getter는 [Equipment.isExpired](기기
+  /// 시계, 동기)를 썼다 — [Equipment.isExpiredAt]의 문서가 이미 경고하듯,
+  /// 기기 시계를 휘장 만료 이전으로 되돌리면 실제 회수([removeExpiredBadge])
+  /// 는 자정 스윕이 NTP로 언젠가 처리하지만, 그 전까지는 전투 버프
+  /// (골드/크리티컬 데미지)를 계속 받을 수 있었다(최대 자정 스윕
+  /// 주기만큼의 악용 창). 매 킬마다 NTP를 왕복하면 핫 패스가 async가
+  /// 되어야 하므로([Equipment.isExpired]의 문서에 있던 원래 설계 이유),
+  /// 대신 이미 NTP 왕복이 일어나는 두 지점(자정 스윕/시작 시 동기화)에서
+  /// 캐시해 두고 그 사이 구간만 소폭 보수적으로("최근에 확인한 서버
+  /// 시간" 기준) 판정한다 — 기기 시계 조작으로는 더 이상 우회할 수 없다.
+  DateTime? _cachedNtpNow;
 
   /// 지금 유효한(만료되지 않은) 휘장이 있을 때만 [GuildWarConfig
   /// .badgeBuffGoldRate]를, 없으면 0을 돌려준다 — [GameManager
   /// .goldRewardForKill]이 곱산 체인에 그대로 더한다.
   double get badgeGoldRateBonus {
     final currentBadge = EquipmentManager.instance.equippedBadge;
-    if (currentBadge == null || currentBadge.isExpired) {
+    if (currentBadge == null || currentBadge.isExpiredAt(_cachedNtpNow ?? DateTime.now())) {
       return 0;
     }
     return config.badgeBuffGoldRate;
@@ -258,7 +277,7 @@ class GuildWarManager extends ChangeNotifier {
   /// .effectiveCriticalMultiplier]가 더한다.
   double get badgeCritDamageBonus {
     final currentBadge = EquipmentManager.instance.equippedBadge;
-    if (currentBadge == null || currentBadge.isExpired) {
+    if (currentBadge == null || currentBadge.isExpiredAt(_cachedNtpNow ?? DateTime.now())) {
       return 0;
     }
     return config.badgeBuffCritDmg;

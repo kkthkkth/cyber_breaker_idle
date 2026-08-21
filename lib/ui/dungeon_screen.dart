@@ -17,11 +17,87 @@ import '../models/equipment.dart';
 import '../models/tower_floor_model.dart';
 import '../models/weekday_dungeon_model.dart';
 import 'arena_screen.dart';
+import 'daily_dungeon_screen.dart';
 import 'home_screen.dart' show SkillEffectOverlay, SkillTreeQuickBar;
 import 'rift_screen.dart';
 import 'top_bar.dart';
 import 'world_boss_entry_dialog.dart';
 import 'world_boss_ranking_dialog.dart';
+
+/// 요일 던전 전용 입장 진입점 — 무료 입장이 남아있으면 그것부터 쓰고,
+/// 다 썼으면 보석 [WeekdayDungeonManager.extraEntryCostGems]개를 소모할지
+/// 확인 팝업을 띄운다. 이 화면([DungeonScreen])의 "요일 던전" 카드와
+/// [DailyDungeonScreen](daily_dungeon_screen.dart)의 7개 리스트 양쪽에서
+/// 공유하는 진입 로직이라 top-level 함수로 뺐다(예전엔
+/// `_DungeonScreenState`의 private 메서드였다).
+Future<void> enterWeekdayDungeon(BuildContext context) async {
+  final WeekdayDungeonManager manager = WeekdayDungeonManager.instance;
+
+  if (manager.canEnterFree) {
+    final bool consumed = await manager.consumeFreeEntry();
+    if (!context.mounted || !consumed) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            const DungeonBattleScreen(mode: GameMode.weekdayDungeon),
+      ),
+    );
+    return;
+  }
+
+  final bool? confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      backgroundColor: const Color(0xFF1B1B26),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text(
+        '추가 입장',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: Text(
+        '오늘의 무료 입장을 모두 사용했습니다.\n'
+        '보석 ${WeekdayDungeonManager.extraEntryCostGems}개를 소모해 추가로 입장할까요?',
+        style: const TextStyle(color: Colors.white70),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('취소'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.cyanAccent,
+            foregroundColor: Colors.black87,
+          ),
+          child: const Text('입장하기'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) {
+    return;
+  }
+
+  final bool consumed = await manager.consumeEntryWithGems();
+  if (!context.mounted) {
+    return;
+  }
+  if (!consumed) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(content: Text('보석이 부족합니다')));
+    return;
+  }
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (context) =>
+          const DungeonBattleScreen(mode: GameMode.weekdayDungeon),
+    ),
+  );
+}
 
 class DungeonScreen extends StatefulWidget {
   const DungeonScreen({super.key});
@@ -81,74 +157,7 @@ class _DungeonScreenState extends State<DungeonScreen> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) =>
-            _DungeonBattleScreen(mode: mode, isSweepMode: isSweepMode),
-      ),
-    );
-  }
-
-  /// 요일 던전 전용 입장 진입점 — 무료 입장이 남아있으면 그것부터 쓰고,
-  /// 다 썼으면 보석 [WeekdayDungeonManager.extraEntryCostGems]개를 소모할지
-  /// 확인 팝업을 띄운다.
-  Future<void> _enterWeekdayDungeon(BuildContext context) async {
-    final WeekdayDungeonManager manager = WeekdayDungeonManager.instance;
-
-    if (manager.canEnterFree) {
-      final bool consumed = await manager.consumeFreeEntry();
-      if (!context.mounted || !consumed) {
-        return;
-      }
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (context) => const _DungeonBattleScreen(mode: GameMode.weekdayDungeon),
-        ),
-      );
-      return;
-    }
-
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF1B1B26),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('추가 입장', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: Text(
-          '오늘의 무료 입장을 모두 사용했습니다.\n'
-          '보석 ${WeekdayDungeonManager.extraEntryCostGems}개를 소모해 추가로 입장할까요?',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('취소'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.cyanAccent,
-              foregroundColor: Colors.black87,
-            ),
-            child: const Text('입장하기'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) {
-      return;
-    }
-
-    final bool consumed = await manager.consumeEntryWithGems();
-    if (!context.mounted) {
-      return;
-    }
-    if (!consumed) {
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(const SnackBar(content: Text('보석이 부족합니다')));
-      return;
-    }
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => const _DungeonBattleScreen(mode: GameMode.weekdayDungeon),
+            DungeonBattleScreen(mode: mode, isSweepMode: isSweepMode),
       ),
     );
   }
@@ -158,7 +167,9 @@ class _DungeonScreenState extends State<DungeonScreen> {
     final int currentFloor = dungeonManager.currentFloor;
     // 예전엔 여기서 sweepGoldRewardForFloor()/firstClearGemRewardForFloor()
     // 하드코딩 공식을 불렀다 — 이제 tower_floors 테이블 값을 그대로 읽는다.
-    final TowerFloor? currentFloorData = TowerFloorManager.instance.floorData(currentFloor);
+    final TowerFloor? currentFloorData = TowerFloorManager.instance.floorData(
+      currentFloor,
+    );
 
     // 요구사항: 도전할 층수의 데이터가 DB에 아직 없으면(예: 100층까지만
     // 등록됐는데 101층에 도전) 입장 팝업 자체를 열지 않고 안내만 띄운다 —
@@ -170,8 +181,9 @@ class _DungeonScreenState extends State<DungeonScreen> {
       return;
     }
 
-    final TowerFloor? sweepFloorData =
-        currentFloor > 1 ? TowerFloorManager.instance.floorData(currentFloor - 1) : null;
+    final TowerFloor? sweepFloorData = currentFloor > 1
+        ? TowerFloorManager.instance.floorData(currentFloor - 1)
+        : null;
 
     showDialog<void>(
       context: context,
@@ -225,11 +237,16 @@ class _DungeonScreenState extends State<DungeonScreen> {
   @override
   Widget build(BuildContext context) {
     final DungeonManager dungeonManager = DungeonManager.instance;
-    final WeekdayDungeonManager weekdayDungeonManager = WeekdayDungeonManager.instance;
+    final WeekdayDungeonManager weekdayDungeonManager =
+        WeekdayDungeonManager.instance;
     final RiftManager riftManager = RiftManager.instance;
 
     return AnimatedBuilder(
-      animation: Listenable.merge([dungeonManager, weekdayDungeonManager, riftManager]),
+      animation: Listenable.merge([
+        dungeonManager,
+        weekdayDungeonManager,
+        riftManager,
+      ]),
       builder: (context, _) {
         return Scaffold(
           backgroundColor: const Color(0xFF14141C),
@@ -264,7 +281,9 @@ class _DungeonScreenState extends State<DungeonScreen> {
                 accentColor: const Color(0xFF8C1F8C),
                 buttonLabel: riftManager.isActive
                     ? '이어하기'
-                    : (riftManager.hasFreeEntryToday ? '입장 (오늘 1회)' : '오늘 입장 완료'),
+                    : (riftManager.hasFreeEntryToday
+                          ? '입장 (오늘 1회)'
+                          : '오늘 입장 완료'),
                 enabled: riftManager.isActive || riftManager.hasFreeEntryToday,
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(builder: (_) => const RiftScreen()),
@@ -272,17 +291,20 @@ class _DungeonScreenState extends State<DungeonScreen> {
               ),
               const SizedBox(height: 16),
               _DungeonCard(
-                title: weekdayDungeonManager.todayConfig.name,
+                title: '요일 던전 📅',
                 description:
-                    '오늘의 요일 던전 — 클리어 파도만큼 ${weekdayDungeonManager.todayConfig.rewardType.resourceLabel} 획득! '
-                    '(60초 제한, 5파도마다 보스)',
+                    '오늘은 ${weekdayDungeonManager.todayConfig.name}(${weekdayDungeonManager.todayConfig.rewardType.resourceLabel})이 열렸어요! '
+                    '요일마다 다른 7개 던전이 순환합니다. (60초 제한, 5파도마다 보스)',
                 icon: weekdayDungeonManager.todayConfig.rewardType.icon,
                 accentColor: weekdayDungeonManager.todayConfig.rewardType.color,
-                buttonLabel: weekdayDungeonManager.canEnterFree
-                    ? '입장 (${weekdayDungeonManager.remainingFreeEntries}/${WeekdayDungeonManager.maxDailyFreeEntries})'
-                    : '보석으로 입장',
+                buttonLabel:
+                    '${weekdayDungeonManager.remainingFreeEntries}/${WeekdayDungeonManager.maxDailyFreeEntries}',
                 enabled: true,
-                onTap: () => _enterWeekdayDungeon(context),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const DailyDungeonScreen(),
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               _DungeonCard(
@@ -460,7 +482,11 @@ class _TowerEntryBanner extends StatelessWidget {
 }
 
 class _RewardChip extends StatelessWidget {
-  const _RewardChip({required this.icon, required this.text, required this.color});
+  const _RewardChip({
+    required this.icon,
+    required this.text,
+    required this.color,
+  });
 
   final IconData icon;
   final String text;
@@ -475,7 +501,11 @@ class _RewardChip extends StatelessWidget {
         const SizedBox(width: 3),
         Text(
           text,
-          style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12),
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -523,12 +553,17 @@ class _WorldBossBanner extends StatelessWidget {
                 // 고정 높이를 없애고 패딩만으로 크기를 잡으면, 폰트 크기나
                 // 텍스트 접근성 배율이 달라져도 항상 내용에 맞게 늘어나서
                 // 구조적으로 오버플로우가 날 수 없다.
-                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 14,
+                ),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(colors: gradient),
                   borderRadius: BorderRadius.circular(18),
                   border: Border.all(
-                    color: manager.isActive ? Colors.redAccent : const Color(0xFF6C4FCE),
+                    color: manager.isActive
+                        ? Colors.redAccent
+                        : const Color(0xFF6C4FCE),
                     width: 1.6,
                   ),
                 ),
@@ -558,7 +593,9 @@ class _WorldBossBanner extends StatelessWidget {
                           Text(
                             manager.isActive ? '보스 등장 중! 남은 시간' : '다음 등장까지',
                             style: TextStyle(
-                              color: manager.isActive ? Colors.redAccent : Colors.white54,
+                              color: manager.isActive
+                                  ? Colors.redAccent
+                                  : Colors.white54,
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
@@ -566,7 +603,9 @@ class _WorldBossBanner extends StatelessWidget {
                           Text(
                             _formatCountdown(manager.timeRemaining),
                             style: TextStyle(
-                              color: manager.isActive ? Colors.redAccent : Colors.white70,
+                              color: manager.isActive
+                                  ? Colors.redAccent
+                                  : Colors.white70,
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
                             ),
@@ -576,7 +615,9 @@ class _WorldBossBanner extends StatelessWidget {
                     ),
                     Icon(
                       Icons.chevron_right,
-                      color: manager.isActive ? Colors.redAccent : Colors.white38,
+                      color: manager.isActive
+                          ? Colors.redAccent
+                          : Colors.white38,
                     ),
                   ],
                 ),
@@ -585,7 +626,9 @@ class _WorldBossBanner extends StatelessWidget {
             Positioned(
               top: 8,
               right: 8,
-              child: _RankingTrophyButton(onTap: () => showWorldBossRankingDialog(context)),
+              child: _RankingTrophyButton(
+                onTap: () => showWorldBossRankingDialog(context),
+              ),
             ),
           ],
         );
@@ -616,7 +659,11 @@ class _RankingTrophyButton extends StatelessWidget {
           border: Border.all(color: Colors.amberAccent, width: 1.2),
         ),
         alignment: Alignment.center,
-        child: const Icon(Icons.emoji_events, color: Colors.amberAccent, size: 18),
+        child: const Icon(
+          Icons.emoji_events,
+          color: Colors.amberAccent,
+          size: 18,
+        ),
       ),
     );
   }
@@ -698,19 +745,27 @@ class _DungeonCard extends StatelessWidget {
   }
 }
 
-class _DungeonBattleScreen extends StatefulWidget {
-  const _DungeonBattleScreen({required this.mode, this.isSweepMode = false});
+/// 던전형 전투 화면의 공용 뼈대 — 골드/장비/펫/무한의 탑/요일 던전이
+/// 전부 이 위젯 하나를 공유한다([mode]로 분기). [DailyDungeonScreen]
+/// (daily_dungeon_screen.dart)도 요일 던전 전투에 이 위젯을 그대로
+/// 재사용하므로, 다른 파일에서 접근할 수 있도록 공개(public) 이름을
+/// 쓴다(예전엔 `_DungeonBattleScreen`으로 이 파일 전용이었다).
+class DungeonBattleScreen extends StatefulWidget {
+  const DungeonBattleScreen({
+    super.key,
+    required this.mode,
+    this.isSweepMode = false,
+  });
 
   final GameMode mode;
   final bool isSweepMode;
 
   @override
-  State<_DungeonBattleScreen> createState() => _DungeonBattleScreenState();
+  State<DungeonBattleScreen> createState() => _DungeonBattleScreenState();
 }
 
-class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
+class _DungeonBattleScreenState extends State<DungeonBattleScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
 
   // Whatever the skill damage target was before this screen (normally the
@@ -730,10 +785,12 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
     _game = IdleGame();
     _game.onDungeonComplete = _handleDungeonComplete;
     _game.startDungeon(widget.mode, isSweepMode: widget.isSweepMode);
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 100),
-      (_) => setState(() {}),
-    );
+    // [퍼포먼스 감사 2026-08-21] 예전엔 여기서 100ms마다 이 화면 전체를
+    // setState하는 타이머를 돌렸다 — TopBar/제목/GameWidget까지 초당 10번
+    // 다시 빌드됐지만, 실제로 그 주기로 바뀌는 건 몬스터 HP 바와 남은
+    // 시간 텍스트뿐이다. 이제 그 두 위젯([_DungeonMonsterHpBar]/
+    // [_DungeonTimerBadge])이 각자 자기 몫의 타이머를 들고 스스로만
+    // setState한다 — 이 화면 자체는 더 이상 폴링 타이머가 필요 없다.
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -744,7 +801,6 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
     if (identical(
       SkillManager.instance.damageHandler,
       _game.applySkillDamage,
@@ -777,7 +833,13 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
+    // [퍼포먼스 감사 2026-08-21] 예전엔 폴링 타이머가 100ms마다 이 화면
+    // 전체를 어차피 다시 그렸기 때문에 여기서 setState 없이 필드만
+    // 바꿔도 곧 반영됐다(뒤로가기 버튼 활성화가 최대 100ms 늦게 나타나는
+    // 정도). 이제 그 폴링 타이머를 없앴으므로, 이 변경을 화면에 실제로
+    // 반영하려면 명시적으로 setState해야 한다 — 오히려 지연 없이 즉시
+    // 반영되어 이전보다 더 정확하다.
+    setState(() => _resultShown = true);
 
     // advanceFloor()가 이미 실행된 뒤라, 방금 클리어한 층은 현재 층수 - 1.
     final int clearedFloor = DungeonManager.instance.currentFloor - 1;
@@ -803,67 +865,69 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
             //동시에(예: 탑 층 클리어의 보석+골드+아이템) 뜨거나 접근성
             // 글자 크기가 커진 상태에서 이 Column이 다이얼로그 높이를
             // 넘어서도(RenderFlex overflow 대신) 안전하게 스크롤되게 한다.
-            constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.6,
+            ),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (gemReward > 0)
-                Text(
-                  '무한의 탑 $clearedFloor층 클리어! 보석 $gemReward개를 획득했습니다.',
-                  style: const TextStyle(
-                    color: Colors.cyanAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              if (goldReward > 0)
-                Text(
-                  '획득 골드: $goldReward G',
-                  style: const TextStyle(color: Colors.white70),
-                ),
-              if (itemReward != null)
-                Text(
-                  '획득 장비: ${itemReward.name}',
-                  style: TextStyle(
-                    color: getGradeColor(itemReward.grade),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              if (pawprintReward > 0)
-                Text(
-                  '펫 산책로 클리어! 발바닥 $pawprintReward개를 획득했습니다.',
-                  style: const TextStyle(
-                    color: Color(0xFFFF9F5A),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              if (guildCoinReward > 0)
-                Text(
-                  '길드 던전 클리어! 길드 주화 $guildCoinReward개를 획득했습니다.',
-                  style: const TextStyle(
-                    color: Color(0xFF6C4FCE),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              if (consumableItemReward != null)
-                Text(
-                  '획득 아이템: $consumableItemReward',
-                  style: const TextStyle(
-                    color: Colors.orangeAccent,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              if (goldReward <= 0 &&
-                  gemReward <= 0 &&
-                  itemReward == null &&
-                  pawprintReward <= 0 &&
-                  guildCoinReward <= 0 &&
-                  consumableItemReward == null)
-                const Text(
-                  '보상이 없습니다. 다시 도전해보세요!',
-                  style: TextStyle(color: Colors.white70),
-                ),
+                    Text(
+                      '무한의 탑 $clearedFloor층 클리어! 보석 $gemReward개를 획득했습니다.',
+                      style: const TextStyle(
+                        color: Colors.cyanAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (goldReward > 0)
+                    Text(
+                      '획득 골드: $goldReward G',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  if (itemReward != null)
+                    Text(
+                      '획득 장비: ${itemReward.name}',
+                      style: TextStyle(
+                        color: getGradeColor(itemReward.grade),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (pawprintReward > 0)
+                    Text(
+                      '펫 산책로 클리어! 발바닥 $pawprintReward개를 획득했습니다.',
+                      style: const TextStyle(
+                        color: Color(0xFFFF9F5A),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (guildCoinReward > 0)
+                    Text(
+                      '길드 던전 클리어! 길드 주화 $guildCoinReward개를 획득했습니다.',
+                      style: const TextStyle(
+                        color: Color(0xFF6C4FCE),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (consumableItemReward != null)
+                    Text(
+                      '획득 아이템: $consumableItemReward',
+                      style: const TextStyle(
+                        color: Colors.orangeAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (goldReward <= 0 &&
+                      gemReward <= 0 &&
+                      itemReward == null &&
+                      pawprintReward <= 0 &&
+                      guildCoinReward <= 0 &&
+                      consumableItemReward == null)
+                    const Text(
+                      '보상이 없습니다. 다시 도전해보세요!',
+                      style: TextStyle(color: Colors.white70),
+                    ),
                 ],
               ),
             ),
@@ -937,9 +1001,6 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
         // 무한의 탑도 이제 45초 타임어택이라(_towerDungeonDuration) 남은
         // 시간 HUD를 보여준다 — 예전엔 무제한(-1)이라 이 목록에 없었다.
         widget.mode == GameMode.towerOfInfinity;
-    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
 
     return PopScope(
       canPop: _resultShown,
@@ -991,26 +1052,7 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
                         top: 12,
                         left: 0,
                         right: 0,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text(
-                              '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
-                              style: const TextStyle(
-                                color: Colors.orangeAccent,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                        ),
+                        child: Center(child: _DungeonTimerBadge(game: _game)),
                       ),
                     const Positioned(
                       bottom: 90,
@@ -1022,30 +1064,7 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: hpRatio,
-                              minHeight: 14,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(
-                                Colors.redAccent,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
-                            '${_game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: _DungeonMonsterHpBar(game: _game),
                     ),
                   ],
                 ),
@@ -1054,6 +1073,112 @@ class _DungeonBattleScreenState extends State<_DungeonBattleScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// [DungeonBattleScreen]의 "남은 시간" 배지 — 100ms마다 스스로만
+/// 다시 그린다(예전엔 화면 전체를 다시 그리는 타이머의 부산물이었다).
+class _DungeonTimerBadge extends StatefulWidget {
+  const _DungeonTimerBadge({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_DungeonTimerBadge> createState() => _DungeonTimerBadgeState();
+}
+
+class _DungeonTimerBadgeState extends State<_DungeonTimerBadge> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '남은 시간 ${widget.game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+        style: const TextStyle(
+          color: Colors.orangeAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// [DungeonBattleScreen]의 몬스터 HP 바 — [_DungeonTimerBadge]와 같은
+/// 이유로 분리, 100ms마다 스스로만 다시 그린다.
+class _DungeonMonsterHpBar extends StatefulWidget {
+  const _DungeonMonsterHpBar({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_DungeonMonsterHpBar> createState() => _DungeonMonsterHpBarState();
+}
+
+class _DungeonMonsterHpBarState extends State<_DungeonMonsterHpBar> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: hpRatio,
+            minHeight: 14,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${widget.game.dungeonMonsterHp.clamp(0, widget.game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
+          '${widget.game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }

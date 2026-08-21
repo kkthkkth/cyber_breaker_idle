@@ -30,15 +30,20 @@ class _SettingsDialog extends StatelessWidget {
     _notify(message);
   }
 
-  /// 대소문자 구분 없이 코드를 매칭한다 — 지금은 테스트용 재화 쿠폰
-  /// "test1" 하나뿐이지만, 새 쿠폰이 늘어나도 이 맵에 한 줄만 추가하면
-  /// 된다.
-  static final Map<String, VoidCallback> _couponRewards = {
-    'test1': () {
-      GameManager.instance.addGold(100000000);
-      GameManager.instance.addGems(100000000);
-    },
-  };
+  /// 대소문자 구분 없이 코드를 매칭한다 — 새 쿠폰이 생기면 이 맵에 한 줄만
+  /// 추가하면 된다.
+  ///
+  /// [보안 감사 2026-08-21] 여기 있던 테스트용 쿠폰 "test1"(골드 1억 +
+  /// 보석 1억 지급)을 제거했다 — 서버 검증도, 1회 제한도, 유저별 사용
+  /// 기록도 전혀 없는 순수 클라이언트 로컬 로직이라, 이 문자열을 아는
+  /// 누구나(빌드를 디컴파일하지 않아도 그냥 입력만 하면) 몇 번이고
+  /// 반복 입력해 무제한으로 재화를 복제할 수 있었다 — 실서비스에 남아
+  /// 있으면 안 되는 개발용 백도어였다. 이 맵 구조 자체는 남겨 둔다
+  /// (실제 쿠폰 기능을 추가할 때를 위한 뼈대) — 다만 향후 쿠폰은 반드시
+  /// 서버 측에서 1회성/유효기간을 검증하는 RPC를 거쳐야 한다(지금처럼
+  /// 클라이언트가 보상을 직접 결정해 로컬에서 바로 지급하는 방식은
+  /// 똑같은 문제를 반복한다).
+  static final Map<String, VoidCallback> _couponRewards = {};
 
   void _openCouponDialog(BuildContext context) {
     Navigator.of(context).pop();

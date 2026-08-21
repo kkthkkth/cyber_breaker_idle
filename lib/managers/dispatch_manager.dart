@@ -181,6 +181,17 @@ class DispatchManager extends ChangeNotifier {
     if (!mission.isCompleteAt(now)) {
       return null;
     }
+    // [보안 감사 2026-08-21] 위 await 사이에 같은 슬롯에 대해 이 메서드가
+    // 다시 호출됐을 수 있다(예: UI 가드가 없는 새 호출부가 생기거나,
+    // 우회된 클라이언트가 연속 호출) — 그 경우 슬롯이 이미 비워졌을
+    // 것이므로 여기서 재확인해 두 번째 호출이 보상을 중복 지급하지
+    // 않도록 막는다. 슬롯을 비우는 시점도 보상 지급 "전"으로 당겨서,
+    // 이 재확인과 실제 지급 사이에는 await이 전혀 없다(Dart 단일
+    // 스레드 모델에서 그 사이에 다른 호출이 끼어들 수 없다는 뜻).
+    if (!identical(_missions[slotIndex], mission)) {
+      return null;
+    }
+    _missions[slotIndex] = null;
 
     final int gold = _goldRewardFor(mission);
     final int exp = _expRewardFor(mission);
@@ -191,7 +202,6 @@ class DispatchManager extends ChangeNotifier {
       ConsumableManager.instance.addItem(type, 1);
     }
 
-    _missions[slotIndex] = null;
     _updateTicking();
     _saveData();
     notifyListeners();

@@ -309,6 +309,13 @@ class _SearchTabState extends State<_SearchTab> {
   bool _isSearching = false;
   bool _hasSearched = false;
 
+  /// [보안 감사 2026-08-21] 연속 탭 방지 — [_sendRequest]가 끝나기 전에는
+  /// (친구 관계 중복 확인이 비동기라 두 번째 탭이 그 확인을 통과할 수
+  /// 있다) 같은 유저에게 다시 요청을 보내지 않는다. 안 그러면 빠르게
+  /// 두 번 탭했을 때 friendships에 같은 두 유저 간 pending 행이 중복
+  /// 생길 수 있다.
+  final Set<String> _pendingRequestUserIds = {};
+
   @override
   void dispose() {
     _controller.dispose();
@@ -335,10 +342,15 @@ class _SearchTabState extends State<_SearchTab> {
   }
 
   Future<void> _sendRequest(UserSearchResult result) async {
+    if (_pendingRequestUserIds.contains(result.userId)) {
+      return;
+    }
+    setState(() => _pendingRequestUserIds.add(result.userId));
     final bool success = await FriendManager.instance.sendFriendRequest(result.userId);
     if (!mounted) {
       return;
     }
+    setState(() => _pendingRequestUserIds.remove(result.userId));
     if (success) {
       showCenterToast(context, '${result.nickname}님에게 친구 요청을 보냈습니다.');
       await _search();
@@ -408,7 +420,8 @@ class _SearchTabState extends State<_SearchTab> {
                                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                                 itemBuilder: (context, index) {
                                   final UserSearchResult result = _results[index];
-                                  final bool canRequest = result.relationStatus == null;
+                                  final bool canRequest = result.relationStatus == null &&
+                                      !_pendingRequestUserIds.contains(result.userId);
                                   return Container(
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(

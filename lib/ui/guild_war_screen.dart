@@ -26,7 +26,6 @@ class GuildWarScreen extends StatefulWidget {
 
 class _GuildWarScreenState extends State<GuildWarScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
   bool _isSubmitting = false;
 
@@ -37,10 +36,13 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
   void initState() {
     super.initState();
     _game = IdleGame();
-    _game.guildWarBaseHp = (GuildWarManager.instance.myWar?.baseCurrentHp ?? 0).toDouble();
+    _game.guildWarBaseHp = (GuildWarManager.instance.myWar?.baseCurrentHp ?? 0)
+        .toDouble();
     _game.onDungeonComplete = _handleDungeonComplete;
     _game.startDungeon(GameMode.guildWar);
-    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) => setState(() {}));
+    // [퍼포먼스 감사 2026-08-21] 화면 전체를 다시 그리던 폴링 타이머 제거
+    // — [_GuildWarTimerBadge]/[_GuildWarBaseHpBar]가 각자 스스로 틱한다
+    // ([_DungeonBattleScreen]과 같은 수정).
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -50,11 +52,16 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
-    if (identical(SkillManager.instance.damageHandler, _game.applySkillDamage)) {
+    if (identical(
+      SkillManager.instance.damageHandler,
+      _game.applySkillDamage,
+    )) {
       SkillManager.instance.damageHandler = _previousDamageHandler;
     }
-    if (identical(SkillManager.instance.onActiveSkillCast, _game.castActiveSkill)) {
+    if (identical(
+      SkillManager.instance.onActiveSkillCast,
+      _game.castActiveSkill,
+    )) {
       SkillManager.instance.onActiveSkillCast = _previousActiveSkillCast;
     }
     _game.detachListeners();
@@ -73,7 +80,9 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
+    // [퍼포먼스 감사 2026-08-21] 폴링 타이머를 없앴으므로 뒤로가기 버튼
+    // 활성화를 반영하려면 명시적으로 setState해야 한다.
+    setState(() => _resultShown = true);
     WidgetsBinding.instance.addPostFrameCallback((_) => _submitAndShowResult());
   }
 
@@ -83,7 +92,8 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
     }
     setState(() => _isSubmitting = true);
     final int totalDamage = _game.guildWarDamageDealt.round();
-    final GuildWarAttackResult? result = await GuildWarManager.instance.submitDamage(totalDamage);
+    final GuildWarAttackResult? result = await GuildWarManager.instance
+        .submitDamage(totalDamage);
     if (!mounted) {
       return;
     }
@@ -91,7 +101,10 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
     _showResultDialog(totalDamage: totalDamage, result: result);
   }
 
-  void _showResultDialog({required int totalDamage, required GuildWarAttackResult? result}) {
+  void _showResultDialog({
+    required int totalDamage,
+    required GuildWarAttackResult? result,
+  }) {
     if (!mounted) {
       return;
     }
@@ -101,10 +114,15 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             '거점 공격 결과',
-            style: TextStyle(color: Color(0xFFB8860B), fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: Color(0xFFB8860B),
+              fontWeight: FontWeight.bold,
+            ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -127,7 +145,10 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                     '상대 거점을 파괴했습니다!',
-                    style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.amberAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
             ],
@@ -150,10 +171,6 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
-
     return PopScope(
       canPop: _resultShown,
       child: Scaffold(
@@ -171,7 +188,11 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
                       alignment: Alignment.center,
                       child: Text(
                         '길드 전쟁',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 22,
+                        ),
                       ),
                     ),
                     Align(
@@ -179,10 +200,13 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
                       child: IconButton(
                         icon: Icon(
                           Icons.arrow_back,
-                          color: (_resultShown && !_isSubmitting) ? Colors.white : Colors.white24,
+                          color: (_resultShown && !_isSubmitting)
+                              ? Colors.white
+                              : Colors.white24,
                         ),
-                        onPressed:
-                            (_resultShown && !_isSubmitting) ? () => Navigator.pop(context) : null,
+                        onPressed: (_resultShown && !_isSubmitting)
+                            ? () => Navigator.pop(context)
+                            : null,
                       ),
                     ),
                   ],
@@ -197,54 +221,27 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
                       top: 12,
                       left: 0,
                       right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: Center(child: _GuildWarTimerBadge(game: _game)),
                     ),
-                    const Positioned(bottom: 90, left: 0, right: 0, child: SkillTreeQuickBar()),
+                    const Positioned(
+                      bottom: 90,
+                      left: 0,
+                      right: 0,
+                      child: SkillTreeQuickBar(),
+                    ),
                     Positioned(
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: hpRatio,
-                              minHeight: 14,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(Color(0xFFB8860B)),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
-                            '${_game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                        ],
-                      ),
+                      child: _GuildWarBaseHpBar(game: _game),
                     ),
                     if (_isSubmitting)
                       Container(
                         color: Colors.black54,
                         alignment: Alignment.center,
-                        child: const CircularProgressIndicator(color: Color(0xFFB8860B)),
+                        child: const CircularProgressIndicator(
+                          color: Color(0xFFB8860B),
+                        ),
                       ),
                   ],
                 ),
@@ -253,6 +250,111 @@ class _GuildWarScreenState extends State<GuildWarScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "남은 시간" 배지 — [_DungeonTimerBadge]와 같은 이유로 분리, 스스로만
+/// 100ms마다 다시 그린다.
+class _GuildWarTimerBadge extends StatefulWidget {
+  const _GuildWarTimerBadge({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildWarTimerBadge> createState() => _GuildWarTimerBadgeState();
+}
+
+class _GuildWarTimerBadgeState extends State<_GuildWarTimerBadge> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '남은 시간 ${widget.game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+        style: const TextStyle(
+          color: Colors.orangeAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 상대 거점 HP 바 — [_GuildWarTimerBadge]와 같은 이유로 분리.
+class _GuildWarBaseHpBar extends StatefulWidget {
+  const _GuildWarBaseHpBar({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildWarBaseHpBar> createState() => _GuildWarBaseHpBarState();
+}
+
+class _GuildWarBaseHpBarState extends State<_GuildWarBaseHpBar> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: hpRatio,
+            minHeight: 14,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Color(0xFFB8860B)),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${widget.game.dungeonMonsterHp.clamp(0, widget.game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
+          '${widget.game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }
@@ -300,7 +402,9 @@ class _GuildWarTabState extends State<GuildWarTab> {
       return;
     }
     setState(() => _isEntering = true);
-    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const GuildWarScreen()));
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const GuildWarScreen()));
     if (mounted) {
       setState(() => _isEntering = false);
       await GuildWarManager.instance.refreshMyWar();
@@ -337,11 +441,17 @@ class _GuildWarTabState extends State<GuildWarTab> {
                     backgroundColor: const Color(0xFFB8860B),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ] else
-                _WarStatusCard(war: war, isEntering: _isEntering, onEnter: _enter),
+                _WarStatusCard(
+                  war: war,
+                  isEntering: _isEntering,
+                  onEnter: _enter,
+                ),
             ],
           ),
         );
@@ -370,7 +480,11 @@ class _TaxPoolBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0xFFFFD54F), width: 1.5),
         boxShadow: [
-          BoxShadow(color: const Color(0xFFFFD54F).withValues(alpha: 0.35), blurRadius: 24, spreadRadius: 2),
+          BoxShadow(
+            color: const Color(0xFFFFD54F).withValues(alpha: 0.35),
+            blurRadius: 24,
+            spreadRadius: 2,
+          ),
         ],
       ),
       child: Column(
@@ -379,24 +493,40 @@ class _TaxPoolBanner extends StatelessWidget {
           const SizedBox(height: 8),
           const Text(
             '서버 누적 전쟁 세금',
-            style: TextStyle(color: Color(0xFFFFD54F), fontWeight: FontWeight.bold, fontSize: 14),
+            style: TextStyle(
+              color: Color(0xFFFFD54F),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
           ),
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.monetization_on, color: Colors.amberAccent, size: 22),
+              const Icon(
+                Icons.monetization_on,
+                color: Colors.amberAccent,
+                size: 22,
+              ),
               const SizedBox(width: 6),
               Text(
                 NumberFormatter.format(taxPool.coinPool.toDouble()),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
+                ),
               ),
               const SizedBox(width: 20),
               const Icon(Icons.diamond, color: Colors.cyanAccent, size: 20),
               const SizedBox(width: 6),
               Text(
                 NumberFormatter.format(taxPool.gemPool.toDouble()),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 22,
+                ),
               ),
             ],
           ),
@@ -412,7 +542,11 @@ class _TaxPoolBanner extends StatelessWidget {
 }
 
 class _WarStatusCard extends StatelessWidget {
-  const _WarStatusCard({required this.war, required this.isEntering, required this.onEnter});
+  const _WarStatusCard({
+    required this.war,
+    required this.isEntering,
+    required this.onEnter,
+  });
 
   final GuildWar war;
   final bool isEntering;
@@ -437,19 +571,30 @@ class _WarStatusCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF20202C),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFB8860B).withValues(alpha: 0.6)),
+        border: Border.all(
+          color: const Color(0xFFB8860B).withValues(alpha: 0.6),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_statusLabel, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Text(
+            _statusLabel,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           if (war.isMatched) ...[
             const SizedBox(height: 12),
             const Row(
               children: [
                 Icon(Icons.castle, color: Color(0xFFB8860B), size: 18),
                 SizedBox(width: 6),
-                Text('상대 거점 체력', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                Text(
+                  '상대 거점 체력',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ],
             ),
             const SizedBox(height: 6),
@@ -470,7 +615,9 @@ class _WarStatusCard extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              onPressed: withTapHaptic(canFight && !isEntering ? onEnter : null),
+              onPressed: withTapHaptic(
+                canFight && !isEntering ? onEnter : null,
+              ),
               icon: const Icon(Icons.sports_kabaddi),
               label: const Text('거점 공격'),
               style: ElevatedButton.styleFrom(
@@ -478,7 +625,9 @@ class _WarStatusCard extends StatelessWidget {
                 foregroundColor: Colors.white,
                 disabledBackgroundColor: const Color(0xFF3A3A4A),
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
           ],

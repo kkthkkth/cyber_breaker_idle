@@ -84,7 +84,10 @@ import 'widgets/total_combat_power_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(url: SupabaseConfig.url, publishableKey: SupabaseConfig.anonKey);
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    publishableKey: SupabaseConfig.anonKey,
+  );
   // 로컬 알림 권한 요청 — 다른 매니저들의 await 체인과 독립적이라(알림
   // 예약은 나중에 특정 이벤트 시점에만 실제로 쓰인다) 가장 먼저 끝내
   // 둔다. 지원하지 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
@@ -278,7 +281,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       unawaited(QuestManager.instance.flushPendingSync());
     }
 
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       // 요구사항: "백그라운드로 내려가거나 종료될 때(paused, detached)
       // 오프라인 보상 MAX(24시간)/차원의 균열 충전(다음 자정) 알림을
       // 예약" — 내려갈 때마다 다시 계산해서 예약한다(다시 내릴 때마다
@@ -329,7 +333,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // 기본 MaterialPageRoute 전환(플랫폼별 상이, 안드로이드는 특히
         // 배경이 즉시 스냅되며 번쩍이는 느낌을 준다)을 페이드 기반 전환으로
         // 통일해서, 화면이 겹치며 부드럽게 넘어가게 한다.
-        pageTransitionsTheme: const PageTransitionsTheme(
+        pageTransitionsTheme: PageTransitionsTheme(
           builders: {
             TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
             TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
@@ -392,7 +396,9 @@ class _GameEntryScreenState extends State<GameEntryScreen> {
     }
     // 신규 유저(최초 실행) — 이름을 아직 안 밝혔다면 프롤로그 전반부부터,
     // 이미 밝혔지만 후반부를 못 본 채 앱이 죽었다면 후반부부터 이어본다.
-    return hasNickname ? _EntryStep.prologueAfterName : _EntryStep.prologueBeforeName;
+    return hasNickname
+        ? _EntryStep.prologueAfterName
+        : _EntryStep.prologueBeforeName;
   }
 
   void _advanceToNickname() {
@@ -423,11 +429,17 @@ class _GameEntryScreenState extends State<GameEntryScreen> {
   Widget build(BuildContext context) {
     switch (_step) {
       case _EntryStep.prologueBeforeName:
-        return StoryDialogWidget(story: prologueBeforeName, onComplete: _advanceToNickname);
+        return StoryDialogWidget(
+          story: prologueBeforeName,
+          onComplete: _advanceToNickname,
+        );
       case _EntryStep.nickname:
         return NicknameScreen(onComplete: _onNicknameComplete);
       case _EntryStep.prologueAfterName:
-        return StoryDialogWidget(story: prologueAfterName, onComplete: _onPrologueComplete);
+        return StoryDialogWidget(
+          story: prologueAfterName,
+          onComplete: _onPrologueComplete,
+        );
       case _EntryStep.main:
         return const MainNavigationScreen();
     }
@@ -498,13 +510,22 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     if (identical(GameManager.instance.onChapterAdvanced, _onChapterAdvanced)) {
       GameManager.instance.onChapterAdvanced = null;
     }
-    if (identical(GameManager.instance.onBossStageEntered, _onBossStageEntered)) {
+    if (identical(
+      GameManager.instance.onBossStageEntered,
+      _onBossStageEntered,
+    )) {
       GameManager.instance.onBossStageEntered = null;
     }
-    if (identical(GuideMissionManager.instance.onRequestTabSwitch, _onItemTapped)) {
+    if (identical(
+      GuideMissionManager.instance.onRequestTabSwitch,
+      _onItemTapped,
+    )) {
       GuideMissionManager.instance.onRequestTabSwitch = null;
     }
-    if (identical(TradeManager.instance.onIncomingTradeRequest, _onIncomingTradeRequest)) {
+    if (identical(
+      TradeManager.instance.onIncomingTradeRequest,
+      _onIncomingTradeRequest,
+    )) {
       TradeManager.instance.onIncomingTradeRequest = null;
     }
     if (identical(TitleManager.instance.onTitleGranted, _onTitleGranted)) {
@@ -532,7 +553,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       return;
     }
     _isOfflineRewardShowing = true;
-    showDialog<void>(
+    showDialog<bool>(
       context: context,
       builder: (context) => OfflineRewardDialog(
         offlineSeconds: offlineSeconds,
@@ -542,7 +563,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         bpExpGained: bpExpGained,
         runeFragmentsGained: runeFragmentsGained,
       ),
-    ).then((_) {
+    ).then((doubled) {
+      // 바깥 탭/뒤로 가기로 닫히면 doubled가 null로 온다 — 그 경우도
+      // "일반 수령"과 똑같이 취급한다(기존 관례 그대로 유지).
       OfflineRewardManager.instance.claimReward(
         rewardGold: rewardGold,
         offlineSeconds: offlineSeconds,
@@ -550,6 +573,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         consumableDrops: consumableDrops,
         bpExpGained: bpExpGained,
         runeFragmentsGained: runeFragmentsGained,
+        doubled: doubled == true,
       );
       _isOfflineRewardShowing = false;
     });
@@ -565,7 +589,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     if (!_isOfflineRewardShowing) {
       return;
     }
-    final NavigatorState rootNavigator = Navigator.of(context, rootNavigator: true);
+    final NavigatorState rootNavigator = Navigator.of(
+      context,
+      rootNavigator: true,
+    );
     if (rootNavigator.canPop()) {
       rootNavigator.pop();
     }
@@ -580,13 +607,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   void _checkPendingChapterStory() {
     final GameManager manager = GameManager.instance;
     if (manager.stage == 1) {
-      final StoryModel? opening = MainStoryManager.instance.pendingOpeningFor(manager.chapter);
+      final StoryModel? opening = MainStoryManager.instance.pendingOpeningFor(
+        manager.chapter,
+      );
       if (opening != null) {
         _presentOpening(manager.chapter, opening);
       }
     } else if (manager.stage == GameManager.maxStage) {
-      final StoryModel? bossIntro =
-          MainStoryManager.instance.pendingBossIntroFor(manager.chapter);
+      final StoryModel? bossIntro = MainStoryManager.instance
+          .pendingBossIntroFor(manager.chapter);
       if (bossIntro != null) {
         _presentBossIntro(manager.chapter, bossIntro);
       }
@@ -602,7 +631,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     // 보스를 처치했다는 뜻 — 수집→스토리 탭 해금 기록을 여기서 갱신한다.
     MainStoryManager.instance.recordChapterCleared(chapter - 1);
 
-    final StoryModel? opening = MainStoryManager.instance.pendingOpeningFor(chapter);
+    final StoryModel? opening = MainStoryManager.instance.pendingOpeningFor(
+      chapter,
+    );
     if (opening == null) {
       return;
     }
@@ -610,7 +641,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _onBossStageEntered(int chapter) {
-    final StoryModel? bossIntro = MainStoryManager.instance.pendingBossIntroFor(chapter);
+    final StoryModel? bossIntro = MainStoryManager.instance.pendingBossIntroFor(
+      chapter,
+    );
     if (bossIntro == null) {
       return;
     }
@@ -631,15 +664,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     if (!mounted) {
       return;
     }
-    final List<Map<String, dynamic>> profiles =
-        await SupabaseManager.instance.fetchProfilesByIds([request.userA]);
+    final List<Map<String, dynamic>> profiles = await SupabaseManager.instance
+        .fetchProfilesByIds([request.userA]);
     if (!mounted) {
       return;
     }
     final String nickname = profiles.isEmpty
         ? '익명의 모험가'
         : (profiles.first['nickname'] as String? ?? '익명의 모험가');
-    await showIncomingTradeRequestDialog(context, request: request, requesterNickname: nickname);
+    await showIncomingTradeRequestDialog(
+      context,
+      request: request,
+      requesterNickname: nickname,
+    );
   }
 
   /// [chapter]의 오프닝을 전체 화면 라우트로 띄운다. 끝나면(완주/스킵
@@ -660,11 +697,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     MainStoryManager.instance.markOpeningShown(chapter);
 
     if (chapter == 2) {
-      final Equipment reward = EquipmentManager.instance.grantChapter1Character();
+      final Equipment reward = EquipmentManager.instance
+          .grantChapter1Character();
       showCenterToast(context, '챕터 1 클리어 보상! ${reward.gradeBadgeLabel} 획득');
     } else if (chapter == 3) {
-      final Equipment reward = EquipmentManager.instance.grantChapter2Character();
-      showCenterToast(context, '챕터 2 클리어 보상! 새로운 동료 ${reward.gradeBadgeLabel} 합류');
+      final Equipment reward = EquipmentManager.instance
+          .grantChapter2Character();
+      showCenterToast(
+        context,
+        '챕터 2 클리어 보상! 새로운 동료 ${reward.gradeBadgeLabel} 합류',
+      );
     }
   }
 
@@ -702,7 +744,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     });
     // 튜토리얼 2단계("하단 메뉴에서 상점으로 이동해 보세요")가 진행 중일
     // 때, 실제로 샵 탭을 탭하면 3단계(가챠 버튼 강조)로 넘어간다.
-    if (TutorialManager.instance.currentStep == 1 && _navTabs[index].label == '샵') {
+    if (TutorialManager.instance.currentStep == 1 &&
+        _navTabs[index].label == '샵') {
       TutorialManager.instance.advance();
     }
   }
@@ -780,7 +823,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           // 함께 구독해야 전투력 가중치가 바뀌어도 실시간으로 갱신된다.
           Flexible(
             child: AnimatedBuilder(
-              animation: Listenable.merge([GameManager.instance, ConfigManager.instance]),
+              animation: Listenable.merge([
+                GameManager.instance,
+                ConfigManager.instance,
+              ]),
               builder: (context, _) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: TotalCombatPowerBanner(
@@ -807,7 +853,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               builder: (context, _) {
                 return Container(
                   margin: const EdgeInsets.only(right: 12),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF20202C),
                     borderRadius: BorderRadius.circular(20),
@@ -816,11 +865,17 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.monetization_on, color: Colors.amber, size: 18),
+                      const Icon(
+                        Icons.monetization_on,
+                        color: Colors.amber,
+                        size: 18,
+                      ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
-                          NumberFormatter.format(GameManager.instance.gold.toDouble()),
+                          NumberFormatter.format(
+                            GameManager.instance.gold.toDouble(),
+                          ),
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                           style: const TextStyle(
@@ -832,15 +887,23 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                       // 골드 충전 버튼 — 상점을 "충전" 탭으로 곧장 연다
                       // (요구사항).
                       _CurrencyAddButton(
-                        onTap: () =>
-                            showShopDialog(context, initialTabIndex: shopChargeTabIndex),
+                        onTap: () => showShopDialog(
+                          context,
+                          initialTabIndex: shopChargeTabIndex,
+                        ),
                       ),
                       const SizedBox(width: 8),
-                      const Icon(Icons.diamond, color: Colors.cyanAccent, size: 16),
+                      const Icon(
+                        Icons.diamond,
+                        color: Colors.cyanAccent,
+                        size: 16,
+                      ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
-                          NumberFormatter.format(GameManager.instance.gems.toDouble()),
+                          NumberFormatter.format(
+                            GameManager.instance.gems.toDouble(),
+                          ),
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
                           style: const TextStyle(
@@ -852,8 +915,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                       // 보석 충전 버튼 — 골드 쪽과 동일하게 "충전" 탭으로
                       // 곧장 연다.
                       _CurrencyAddButton(
-                        onTap: () =>
-                            showShopDialog(context, initialTabIndex: shopChargeTabIndex),
+                        onTap: () => showShopDialog(
+                          context,
+                          initialTabIndex: shopChargeTabIndex,
+                        ),
                       ),
                     ],
                   ),
@@ -882,7 +947,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           EquipmentManager.instance,
         ]),
         builder: (context, _) {
-          final bool showCollectionDot = EncyclopediaManager.instance.hasAnyCollectionReward;
+          final bool showCollectionDot =
+              EncyclopediaManager.instance.hasAnyCollectionReward;
           return BottomNavigationBar(
             type: BottomNavigationBarType.fixed,
             currentIndex: _selectedIndex,
@@ -893,7 +959,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   icon: KeyedSubtree(
                     key: tab.label == '샵' ? TutorialManager.shopNavKey : null,
                     child: Badge(
-                      isLabelVisible: tab.screen is CharacterScreen && showCollectionDot,
+                      isLabelVisible:
+                          tab.screen is CharacterScreen && showCollectionDot,
                       backgroundColor: Colors.redAccent,
                       smallSize: 10,
                       child: Icon(tab.icon),
@@ -914,7 +981,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 /// 둘이 어긋날 수 없고, 추후 [icon]을 커스텀 이미지로 교체할 때도 이 클래스
 /// 하나만 손보면 된다.
 class _NavTab {
-  const _NavTab({required this.icon, required this.label, required this.screen});
+  const _NavTab({
+    required this.icon,
+    required this.label,
+    required this.screen,
+  });
 
   final IconData icon;
   final String label;

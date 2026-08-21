@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants/chapter_synopsis_data.dart';
+import '../constants/stage_calculator.dart';
 import '../models/artifact_model.dart';
 import '../models/character_metadata_model.dart';
 import '../models/collection_model.dart';
@@ -49,6 +51,19 @@ class GameManager extends ChangeNotifier {
   static const int maxStage = 10;
   static const double bossTimeLimit = 30.0;
 
+  /// 하드 모드 몬스터 HP/공격력, 골드/경험치 보상 배수 — 요구사항 예시
+  /// 그대로("거대한 배수(Multiplier, 예: x1000)"). 드롭 확률 배수는
+  /// [_hardModeDropRateMultiplier] 참고(수량이 아니라 확률에 곱하므로
+  /// 별도 이름을 붙였다).
+  static const double hardModeMultiplier = 1000;
+
+  /// 드롭 "확률"에 곱하는 배수 — [hardModeMultiplier]를 그대로 확률에
+  /// 곱하면(예: 0.3 × 1000) 사실상 항상 100%로 clamp되므로 같은 상수를
+  /// 재사용한다. 드롭 "수량"에 1000을 곱하는 건 킬 하나당 아이템 1000개가
+  /// 나온다는 뜻이라 말이 안 되므로, 하드 모드의 "드롭 보상 대폭 상승"은
+  /// 확률을 사실상 보장 수준으로 올리는 쪽으로 해석했다.
+  static const double _hardModeDropRateMultiplier = hardModeMultiplier;
+
   /// 기존(레거시) 장비 드랍 확률 — [_onMonsterDefeated]의 "즉시 장비 1개
   /// 지급" 판정 전용 상수다. 새로 추가된 플레이어 스탯 [itemDropRate](기본
   /// 0%, 골드 강화/장비 옵션으로 오르는 값)와 이름이 겹치지 않도록
@@ -80,6 +95,93 @@ class GameManager extends ChangeNotifier {
   /// 지나가도(예: 보스 실패 후 재도전) 다시 지급되지 않는다.
   int highestReachedChapter = 1;
 
+  // ── 챕터/지역 표시 (2026-08-21 확정된 신규 스테이지 구조) ────────────
+  //
+  // [chapter]는 서브스테이지 10개가 끝날 때마다 1씩 느는 무제한 카운터라,
+  // 숫자상으로 이미 [StageCalculator]가 말하는 "스테이지 번호"(1~99)와
+  // 정확히 같다 — 그래서 진행 페이싱/세이브 데이터는 전혀 바꾸지 않고,
+  // 이 스테이지 번호가 몇 챕터/몇 지역에 속하는지를 보여주는 파생 getter만
+  // 추가한다([StageCalculator]/[chapterSynopses]는 "나중에 이 체계로
+  // 전환하기로 결정하면"이라는 전제로 미리 만들어 둔 기획안이었고, 이제
+  // 그 결정이 내려졌다).
+
+  /// 표시용 챕터 번호(1~10) — 하드 모드로 [chapter]가 99를 넘어가도 항상
+  /// [StageCalculator.maxStageNumber](99)로 clamp해 마지막 챕터를
+  /// 가리킨다(하드 모드 구간은 별도의 챕터/지역 라벨이 없다).
+  int get displayChapter => StageCalculator.chapterOf(
+    chapter.clamp(1, StageCalculator.maxStageNumber),
+  );
+
+  String get regionName => '$displayChapter지역';
+
+  /// [chapterSynopses]에서 [displayChapter]에 해당하는 챕터 제목.
+  String get chapterName => chapterSynopses
+      .firstWhere((synopsis) => synopsis.chapter == displayChapter)
+      .title;
+
+  // ── 하드 모드 (시즌 1 엔딩 99-10 이후) ────────────────────────────
+  //
+  // 정상 모드의 [chapter]/[stage]는 "현재 위치"를 그대로 유지한다. 하드
+  // 모드는 같은 필드를 공유하지 않고 별도의 "현재 위치" 쌍
+  // ([hardChapter]/[hardStage])을 두되, [setHardMode]가 토글할 때마다
+  // 서로의 위치를 백업/복원한다 — 이렇게 하면 [_resetMonsterHp]/
+  // [goldRewardForKill]/[_onMonsterDefeated]/[_regressOneStage]와 HP
+  // 바 등 UI 전부가 지금처럼 [chapter]/[stage]만 읽으면 되므로, "지금
+  // 어느 모드인지"를 신경 써야 하는 코드가 [setHardMode] 한 곳으로
+  // 좁혀진다.
+  bool isHardMode = false;
+
+  /// 하드 모드가 한 번이라도 해금됐는지 — 정상 모드에서 99-10을 처음
+  /// 클리어하는 순간 true로 확정되고, 이후 영구 유지된다(환생해도 유지 —
+  /// [highestReachedChapter]와 같은 성격, [resetForPrestige]가 건드리지
+  /// 않는다).
+  bool hardModeUnlocked = false;
+
+  /// 하드 모드의 "현재 위치" — 시작점은 시즌 1 엔딩(99-10) 그 자리.
+  int hardChapter = StageCalculator.maxStageNumber;
+  int hardStage = maxStage;
+
+  /// 하드 모드에서 도달했던 최고 절대 스테이지(패배로 후퇴해도 줄지
+  /// 않음) — `profiles.hard_max_stage`와 동기화되는 값.
+  /// [highestReachedChapter]와 같은 "현재 위치 vs 최고 기록" 분리 관례.
+  int highestHardAbsoluteStage = 0;
+
+  /// [setHardMode]가 하드 모드 진입 직전 정상 모드 위치를 잠깐 담아두는
+  /// 자리 — 하드 모드를 벗어날 때 여기서 복원한다.
+  int _normalChapter = 1;
+  int _normalStage = 1;
+
+  /// 정상/하드 모드를 전환한다 — [TradeManager.setAllowTrade]와 같은
+  /// 패턴(로컬을 먼저 반영해 즉시 화면이 바뀌게 한 뒤, DB 반영은 뒤따라
+  /// 비동기로). 해금 전([hardModeUnlocked]가 false)이면 하드 모드 진입
+  /// 요청을 조용히 무시한다. 같은 값으로 토글해도(중복 탭) 아무 일도
+  /// 하지 않는다.
+  Future<void> setHardMode(bool value) async {
+    if (value == isHardMode || (value && !hardModeUnlocked)) {
+      return;
+    }
+    if (value) {
+      _normalChapter = chapter;
+      _normalStage = stage;
+      chapter = hardChapter;
+      stage = hardStage;
+    } else {
+      hardChapter = chapter;
+      hardStage = stage;
+      chapter = _normalChapter;
+      stage = _normalStage;
+    }
+    isHardMode = value;
+    // 요구사항: "즉시... 화면과 몬스터가 리로드" — 체력을 완전 회복하고
+    // 몬스터를 새 위치 기준으로 즉시 다시 굴린다(_resetMonsterHp가
+    // [isHardMode]를 읽어 배수를 반영한다).
+    currentHp = maxHp;
+    _resetMonsterHp();
+    notifyListeners();
+    saveGame();
+    await SupabaseManager.instance.updateHardMode(value);
+  }
+
   double monsterHp = 0;
   double monsterMaxHp = 0;
 
@@ -106,9 +208,13 @@ class GameManager extends ChangeNotifier {
   double get effectiveCriticalMultiplier =>
       criticalMultiplier +
       _petSpecialStat(PetSpecialStat.criticalDamageBoost) +
-      EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalDamage) +
-      EquipmentSetManager.instance
-          .totalBonus(EquipmentSetStat.criticalDamagePercent, _equippedSetCounts) +
+      EquipmentManager.instance.getTotalSubStatBonus(
+        EquipmentStatType.criticalDamage,
+      ) +
+      EquipmentSetManager.instance.totalBonus(
+        EquipmentSetStat.criticalDamagePercent,
+        _equippedSetCounts,
+      ) +
       RuneManager.instance.totalBonus(RuneStat.criticalDamagePercent) +
       // 길드 전쟁 승리 휘장("승리자의 기운") — 만료되지 않은 휘장이 없으면
       // GuildWarManager.badgeCritDamageBonus가 0이라 영향이 없다.
@@ -171,14 +277,16 @@ class GameManager extends ChangeNotifier {
   /// [expGain] getter를 통해 읽는다(유물 [ArtifactStat.expGainPercent] 포함).
   double baseExpGain = 0.0;
   double get expGain =>
-      baseExpGain + ArtifactManager.instance.totalBonus(ArtifactStat.expGainPercent);
+      baseExpGain +
+      ArtifactManager.instance.totalBonus(ArtifactStat.expGainPercent);
 
   /// 이동 속도 배율 기초값 — 0.1 = +10%. IdleGame의 캐릭터 이동/애니메이션
   /// 속도 계산과 아직 연결되지 않았다. 실제 값은 [moveSpeed] getter를
   /// 통해 읽는다(유물 [ArtifactStat.moveSpeedPercent] 포함).
   double baseMoveSpeed = 0.0;
   double get moveSpeed =>
-      baseMoveSpeed + ArtifactManager.instance.totalBonus(ArtifactStat.moveSpeedPercent);
+      baseMoveSpeed +
+      ArtifactManager.instance.totalBonus(ArtifactStat.moveSpeedPercent);
 
   /// 흡혈 기초값 — 가한 피해의 이 비율(%)만큼 체력을 회복한다. 0.1 = 가한
   /// 피해의 10%를 체력으로 환원. 실제 값은 [lifeSteal] getter를 통해
@@ -186,14 +294,16 @@ class GameManager extends ChangeNotifier {
   /// 타격마다 [applyLifeSteal]을 호출해 실제로 체력을 회복시킨다.
   double baseLifeSteal = 0.0;
   double get lifeSteal =>
-      baseLifeSteal + ArtifactManager.instance.totalBonus(ArtifactStat.lifeStealPercent);
+      baseLifeSteal +
+      ArtifactManager.instance.totalBonus(ArtifactStat.lifeStealPercent);
 
   /// 초당 체력 자연 회복량 기초값(고정 수치, 비율이 아니다) — IdleGame의
   /// 매 프레임 currentHp 갱신 루프와 아직 연결되지 않았다. 실제 값은
   /// [hpRegen] getter를 통해 읽는다(유물 [ArtifactStat.hpRegenFlat] 포함).
   double baseHpRegen = 0.0;
   double get hpRegen =>
-      baseHpRegen + ArtifactManager.instance.totalBonus(ArtifactStat.hpRegenFlat);
+      baseHpRegen +
+      ArtifactManager.instance.totalBonus(ArtifactStat.hpRegenFlat);
 
   /// 보스 몬스터 대상 추가 피해 증가율(%) 기초값 — 이미 존재하는 펫
   /// 보스뎀 보너스([PetSpecialStat.bossDamage])와는 별개의 계정 단위 일반
@@ -218,7 +328,8 @@ class GameManager extends ChangeNotifier {
   /// (유물 [ArtifactStat.skillDamagePercent] 포함).
   double baseSkillDamage = 0.0;
   double get skillDamage =>
-      baseSkillDamage + ArtifactManager.instance.totalBonus(ArtifactStat.skillDamagePercent);
+      baseSkillDamage +
+      ArtifactManager.instance.totalBonus(ArtifactStat.skillDamagePercent);
 
   /// 명중률(%) 기초값 — 몬스터의 회피 판정에 대응하는 개념으로 설계됐다
   /// (현재 몬스터에게는 회피 개념이 없어 연결 지점만 마련해 둔다). 실제
@@ -226,7 +337,8 @@ class GameManager extends ChangeNotifier {
   /// 포함).
   double baseAccuracy = 0.0;
   double get accuracy =>
-      baseAccuracy + ArtifactManager.instance.totalBonus(ArtifactStat.accuracyPercent);
+      baseAccuracy +
+      ArtifactManager.instance.totalBonus(ArtifactStat.accuracyPercent);
 
   // ── 플레이어 HP ─────────────────────────────────────────────────
   double baseMaxHp = 200;
@@ -239,7 +351,11 @@ class GameManager extends ChangeNotifier {
   double get maxHp =>
       (baseMaxHp + _equippedCharacterStats.hp) *
       (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
-      (1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.maxHpPercent, _equippedSetCounts)) *
+      (1 +
+          EquipmentSetManager.instance.totalBonus(
+            EquipmentSetStat.maxHpPercent,
+            _equippedSetCounts,
+          )) *
       (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent)) *
       (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent)) *
       // 도감(컬렉션) 완성 보상 — 다른 소스들과 같은 "장착 여부와 무관하게
@@ -250,7 +366,8 @@ class GameManager extends ChangeNotifier {
   /// 장착 세트별 부위 수 — [EquipmentSetManager.totalBonus] 호출마다 매번
   /// 새로 계산하지 않도록 한 곳에 모았다(EquipmentManager.equippedItems를
   /// 그대로 위임).
-  Map<String, int> get _equippedSetCounts => EquipmentManager.instance.equippedSetCounts;
+  Map<String, int> get _equippedSetCounts =>
+      EquipmentManager.instance.equippedSetCounts;
 
   double currentHp = 200;
 
@@ -327,19 +444,24 @@ class GameManager extends ChangeNotifier {
   /// ([CharacterDetailScreen])이 같은 방식으로 계산한 값을 표시하므로,
   /// 전투에 실제로 반영되는 수치와 화면에 보이는 수치가 항상 일치한다.
   CharacterFinalStats get _equippedCharacterStats {
-    final Equipment? character = EquipmentManager.instance.equippedItems[EquipType.character];
+    final Equipment? character =
+        EquipmentManager.instance.equippedItems[EquipType.character];
     if (character == null) {
       return CharacterFinalStats.zero;
     }
-    final CharacterMetadata? metadata =
-        CharacterMetadataManager.instance.byId(character.gradeBadgeLabel);
+    final CharacterMetadata? metadata = CharacterMetadataManager.instance.byId(
+      character.gradeBadgeLabel,
+    );
     if (metadata == null) {
       return CharacterFinalStats.zero;
     }
     // Equipment.level은 0-indexed("Lv.0"=미강화)라 요청받은 공식의
     // (level-1)과 정확히 같다 — CharacterMetadata.computeFinalStats 문서
     // 참고. 별도 변환 없이 그대로 넘긴다.
-    return metadata.computeFinalStats(level: character.level, star: character.star);
+    return metadata.computeFinalStats(
+      level: character.level,
+      star: character.star,
+    );
   }
 
   double get attackPower {
@@ -348,10 +470,12 @@ class GameManager extends ChangeNotifier {
     // 장비/펫/도감 등 곱산 체인을 그 합계에 그대로 적용한다 — 이 프로젝트의
     // 다른 모든 스탯 소스(펫 specialStats, 유물, 세트, 룬 등)와 동일하게
     // "추가되는 소스"로 취급하며, 기존 골드 강화 진행도를 무효화하지 않는다.
-    double power = (baseAttackPower + _equippedCharacterStats.attack) *
+    double power =
+        (baseAttackPower + _equippedCharacterStats.attack) *
         (1 + EquipmentManager.instance.getTotalEquipmentMultiplier());
     if (_hasPetEquipped) {
-      power *= 1 + SkillManager.instance.petPassiveBonus(PetPassiveType.attackPower);
+      power *=
+          1 + SkillManager.instance.petPassiveBonus(PetPassiveType.attackPower);
     }
     power *= 1 + (collectionBonuses[CollectionStatType.attackPower] ?? 0);
     // 장착 펫(신규 Pet 모델)의 "최종 공격력 증폭" 옵션 — 위의 스킬트리 기반
@@ -359,7 +483,11 @@ class GameManager extends ChangeNotifier {
     power *= 1 + _petSpecialStat(PetSpecialStat.finalAttackBoost);
     // 장비 서브 옵션(EquipmentStatType.attack)의 "공격력" 값 — statMultiplier
     // 기반 getTotalEquipmentMultiplier()와는 별개 소스라 곱산이 한 번 더 들어간다.
-    power *= 1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attack);
+    power *=
+        1 +
+        EquipmentManager.instance.getTotalSubStatBonus(
+          EquipmentStatType.attack,
+        );
     // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.attackBonus가
     // 0이라 곱산에 영향이 없다.
     power *= 1 + GuildManager.instance.attackBonus;
@@ -368,13 +496,19 @@ class GameManager extends ChangeNotifier {
     power *= 1 + PrestigeManager.instance.attackBonus;
     // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
-    power *= 1 + ArtifactManager.instance.totalBonus(ArtifactStat.attackPercent);
+    power *=
+        1 + ArtifactManager.instance.totalBonus(ArtifactStat.attackPercent);
     // 액티브 버프 스킬(active_buff)의 일시적 공격력 증폭 — 버프가 꺼져
     // 있으면 activeBuffAttackPowerBonus가 0이라 곱산에 영향이 없다.
     power *= 1 + SkillManager.instance.activeBuffAttackPowerBonus;
     // 장비 세트 효과(2/4부위) — 발동 중인 세트가 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
-    power *= 1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.attackPercent, _equippedSetCounts);
+    power *=
+        1 +
+        EquipmentSetManager.instance.totalBonus(
+          EquipmentSetStat.attackPercent,
+          _equippedSetCounts,
+        );
     // 룬(공격형, 붉은 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
     power *= 1 + RuneManager.instance.totalBonus(RuneStat.attackPercent);
@@ -383,7 +517,8 @@ class GameManager extends ChangeNotifier {
     power *= 1 + TitleManager.instance.bonusFor(TitleBuffType.attackPercent);
     // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
     // 영향이 없다.
-    power *= 1 + TalentManager.instance.totalBonus(TalentBuffType.attackPercent);
+    power *=
+        1 + TalentManager.instance.totalBonus(TalentBuffType.attackPercent);
     return power;
   }
 
@@ -403,7 +538,10 @@ class GameManager extends ChangeNotifier {
         ? _equippedCharacterStats.attackSpeed
         : attackSpeed;
     return baseSpeed *
-        (1 + EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.attackSpeed)) *
+        (1 +
+            EquipmentManager.instance.getTotalSubStatBonus(
+              EquipmentStatType.attackSpeed,
+            )) *
         (1 + SkillManager.instance.activeBuffAttackSpeedBonus);
   }
 
@@ -413,14 +551,22 @@ class GameManager extends ChangeNotifier {
   double get effectiveCriticalRate {
     double rate = criticalRate;
     if (_hasPetEquipped) {
-      rate += SkillManager.instance.petPassiveBonus(PetPassiveType.criticalRate);
+      rate += SkillManager.instance.petPassiveBonus(
+        PetPassiveType.criticalRate,
+      );
     }
     rate += collectionBonuses[CollectionStatType.criticalRate] ?? 0;
-    rate += EquipmentManager.instance.getTotalSubStatBonus(EquipmentStatType.criticalRate);
-    rate += EquipmentSetManager.instance
-        .totalBonus(EquipmentSetStat.criticalRatePercent, _equippedSetCounts);
+    rate += EquipmentManager.instance.getTotalSubStatBonus(
+      EquipmentStatType.criticalRate,
+    );
+    rate += EquipmentSetManager.instance.totalBonus(
+      EquipmentSetStat.criticalRatePercent,
+      _equippedSetCounts,
+    );
     rate += RuneManager.instance.totalBonus(RuneStat.criticalRatePercent);
-    rate += TalentManager.instance.totalBonus(TalentBuffType.criticalRatePercent);
+    rate += TalentManager.instance.totalBonus(
+      TalentBuffType.criticalRatePercent,
+    );
     return rate.clamp(0.0, _maxCriticalRate);
   }
 
@@ -428,16 +574,23 @@ class GameManager extends ChangeNotifier {
   /// 방어력([_equippedCharacterStats.defense], [attackPower] 문서와 같은
   /// "추가되는 소스" 취급)까지 합산된 최종 방어력(고정 수치).
   double get defensePower {
-    double value = baseDefense +
+    double value =
+        baseDefense +
         _equippedCharacterStats.defense +
         EquipmentManager.instance.getTotalDefenseBonus();
     value += collectionBonuses[CollectionStatType.defense] ?? 0;
     // 유물(Artifact) 누적 패시브 — 여기까지의 가산 방어력 합계에 곱산으로
     // 적용한다(공격력 곱산 체인과 같은 방식).
-    value *= 1 + ArtifactManager.instance.totalBonus(ArtifactStat.defensePercent);
+    value *=
+        1 + ArtifactManager.instance.totalBonus(ArtifactStat.defensePercent);
     // 장비 세트 효과(2/4부위) — 발동 중인 세트가 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
-    value *= 1 + EquipmentSetManager.instance.totalBonus(EquipmentSetStat.defensePercent, _equippedSetCounts);
+    value *=
+        1 +
+        EquipmentSetManager.instance.totalBonus(
+          EquipmentSetStat.defensePercent,
+          _equippedSetCounts,
+        );
     // 룬(방어형, 푸른 룬) 누적 패시브 — 장착 룬이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
     value *= 1 + RuneManager.instance.totalBonus(RuneStat.defensePercent);
@@ -446,19 +599,22 @@ class GameManager extends ChangeNotifier {
     value *= 1 + TitleManager.instance.bonusFor(TitleBuffType.defensePercent);
     // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
     // 영향이 없다.
-    value *= 1 + TalentManager.instance.totalBonus(TalentBuffType.defensePercent);
+    value *=
+        1 + TalentManager.instance.totalBonus(TalentBuffType.defensePercent);
     return value;
   }
 
   double get effectiveDefenseRate {
-    final double rate = defenseRate +
+    final double rate =
+        defenseRate +
         EquipmentManager.instance.getTotalDefenseRateBonus() +
         (collectionBonuses[CollectionStatType.defenseRate] ?? 0);
     return rate.clamp(0.0, _maxDefenseRate);
   }
 
   double get effectiveEvasionRate {
-    final double rate = evasionRate +
+    final double rate =
+        evasionRate +
         EquipmentManager.instance.getTotalEvasionRateBonus() +
         (collectionBonuses[CollectionStatType.evasionRate] ?? 0) +
         RuneManager.instance.totalBonus(RuneStat.evasionRatePercent) +
@@ -469,7 +625,8 @@ class GameManager extends ChangeNotifier {
   /// 몬스터가 플레이어를 때릴 때 크리티컬(추가 피해)이 뜰 확률을 깎는 값 —
   /// [_monsterBaseCritRate]에서 이만큼 빠진다.
   double get effectiveCritDefenseRate {
-    final double rate = critDefenseRate +
+    final double rate =
+        critDefenseRate +
         EquipmentManager.instance.getTotalCritDefenseRateBonus() +
         (collectionBonuses[CollectionStatType.critDefenseRate] ?? 0) +
         _petSpecialStat(PetSpecialStat.critDefenseBoost);
@@ -504,13 +661,17 @@ class GameManager extends ChangeNotifier {
   //     조회 실패 시에도 그 매니저 자체가 안전하게 20.0/10.0으로 시작하므로
   //     여기서 다시 null-체크할 필요가 없다.
   int get totalCombatPower {
-    final CombatPowerWeights weights = ConfigManager.instance.combatPowerWeights;
-    final double attackScore = attackPower *
+    final CombatPowerWeights weights =
+        ConfigManager.instance.combatPowerWeights;
+    final double attackScore =
+        attackPower *
         effectiveAttackSpeed *
         (1 + (effectiveCriticalRate * effectiveCriticalMultiplier)) *
         (1 + bossDamageBonus + armorPenetration + skillDamage);
-    final double defenseScore = maxHp +
-        (defensePower * weights.defWeight) * (1 + effectiveEvasionRate + effectiveDefenseRate);
+    final double defenseScore =
+        maxHp +
+        (defensePower * weights.defWeight) *
+            (1 + effectiveEvasionRate + effectiveDefenseRate);
     return (attackScore * weights.offenseWeight + defenseScore).floor();
   }
 
@@ -526,7 +687,8 @@ class GameManager extends ChangeNotifier {
   /// 오프라인 방치 보상의 "예상 처치 수" 계산 전용 — [effectiveAttackSpeed]
   /// (초당 타격 횟수)를 [_averageHitsPerKill]로 나눈 값을 시간당으로
   /// 환산한다.
-  double get estimatedKillsPerHour => (effectiveAttackSpeed * 3600) / _averageHitsPerKill;
+  double get estimatedKillsPerHour =>
+      (effectiveAttackSpeed * 3600) / _averageHitsPerKill;
 
   /// [chapter]/[stage] 몬스터를 처치했을 때 실제로 받는 골드 — 기본 공식과
   /// 펫/길드/환생/유물 보너스 곱산 체인을 [_onMonsterDefeated]와
@@ -536,29 +698,44 @@ class GameManager extends ChangeNotifier {
     int goldReward = (10 * chapter * stage).round();
     if (_hasPetEquipped) {
       goldReward =
-          (goldReward * (1 + SkillManager.instance.petPassiveBonus(PetPassiveType.coinRate))).round();
+          (goldReward *
+                  (1 +
+                      SkillManager.instance.petPassiveBonus(
+                        PetPassiveType.coinRate,
+                      )))
+              .round();
     }
     // 장착 펫(신규 Pet 모델)의 "골드 획득 증가" 옵션 — 스킬트리 기반
     // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
-    goldReward = (goldReward * (1 + _petSpecialStat(PetSpecialStat.goldGain))).round();
+    goldReward = (goldReward * (1 + _petSpecialStat(PetSpecialStat.goldGain)))
+        .round();
     // 길드 레벨에 비례한 수동 버프 — 미가입 상태면 GuildManager.goldBonus가
     // 0이라 곱산에 영향이 없다.
     goldReward = (goldReward * (1 + GuildManager.instance.goldBonus)).round();
     // 환생(프레스티지) 누적 환생석 버프 — 한 번도 환생하지 않았으면
     // PrestigeManager.goldBonus가 0이라 곱산에 영향이 없다.
-    goldReward = (goldReward * (1 + PrestigeManager.instance.goldBonus)).round();
+    goldReward = (goldReward * (1 + PrestigeManager.instance.goldBonus))
+        .round();
     // 유물(Artifact) 누적 패시브 — 레벨업한 유물이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
-    goldReward = (goldReward *
-            (1 + ArtifactManager.instance.totalBonus(ArtifactStat.goldGainPercent)))
-        .round();
+    goldReward =
+        (goldReward *
+                (1 +
+                    ArtifactManager.instance.totalBonus(
+                      ArtifactStat.goldGainPercent,
+                    )))
+            .round();
     // 룬(유틸형, 초록 룬) 골드 획득량 증가 — 장착 룬이 없으면 totalBonus가
     // 0이라 곱산에 영향이 없다.
     goldReward =
-        (goldReward * (1 + RuneManager.instance.totalBonus(RuneStat.goldGainPercent))).round();
+        (goldReward *
+                (1 + RuneManager.instance.totalBonus(RuneStat.goldGainPercent)))
+            .round();
     // 길드 전쟁 승리 휘장("승리자의 기운") — 만료되지 않은 휘장이 없으면
     // GuildWarManager.badgeGoldRateBonus가 0이라 곱산에 영향이 없다.
-    goldReward = (goldReward * (1 + GuildWarManager.instance.badgeGoldRateBonus)).round();
+    goldReward =
+        (goldReward * (1 + GuildWarManager.instance.badgeGoldRateBonus))
+            .round();
     // 계정 단위 골드 획득량([goldGain]) — 위 [ArtifactStat.goldGainPercent]와는
     // 별개 소스라(둘 다 0이 기본값) 곱산이 한 번 더 들어간다(요구사항:
     // "몬스터 처치 시 지급되는 최종 골드... 계산식에 이 비율을 곱해서").
@@ -566,12 +743,27 @@ class GameManager extends ChangeNotifier {
     // 칭호(Title) 버프 — 장착 중인 칭호가 gold_gain_percent 타입이 아니면
     // bonusFor가 0이라 곱산에 영향이 없다.
     goldReward =
-        (goldReward * (1 + TitleManager.instance.bonusFor(TitleBuffType.goldGainPercent))).round();
+        (goldReward *
+                (1 +
+                    TitleManager.instance.bonusFor(
+                      TitleBuffType.goldGainPercent,
+                    )))
+            .round();
     // 특성(별자리) 트리 — 투자한 레벨이 없으면 totalBonus가 0이라 곱산에
     // 영향이 없다.
     goldReward =
-        (goldReward * (1 + TalentManager.instance.totalBonus(TalentBuffType.goldGainPercent)))
+        (goldReward *
+                (1 +
+                    TalentManager.instance.totalBonus(
+                      TalentBuffType.goldGainPercent,
+                    )))
             .round();
+    // 하드 모드 — 위 보너스 체인이 전부 적용된 최종값에 한 번만 더
+    // 곱한다(체인 자체는 건드리지 않는다). 요구사항: "처치 시 얻는
+    // 골드... 거대한 배수를 곱해서".
+    if (isHardMode) {
+      goldReward = (goldReward * hardModeMultiplier).round();
+    }
     return goldReward;
   }
 
@@ -582,8 +774,10 @@ class GameManager extends ChangeNotifier {
   /// 보너스가 그대로 반영된다.
   double get offlineGoldPerMinute {
     const double averageStage = (1 + maxStage) / 2;
-    final int goldPerKill =
-        goldRewardForKill(chapter: highestReachedChapter, stage: averageStage.round());
+    final int goldPerKill = goldRewardForKill(
+      chapter: highestReachedChapter,
+      stage: averageStage.round(),
+    );
     return goldPerKill * estimatedKillsPerHour / 60;
   }
 
@@ -609,8 +803,11 @@ class GameManager extends ChangeNotifier {
   static const double _defensiveRateCostBase = 90;
   static const double _defensiveRateCostGrowth = 1.2;
 
-  static int _upgradeCost({required double base, required double growth, required int level}) =>
-      (base * pow(growth, level - 1)).round();
+  static int _upgradeCost({
+    required double base,
+    required double growth,
+    required int level,
+  }) => (base * pow(growth, level - 1)).round();
 
   int get attackUpgradeCost => _upgradeCost(
     base: _attackAndDefenseCostBase,
@@ -618,11 +815,17 @@ class GameManager extends ChangeNotifier {
     level: attackLevel,
   );
 
-  int get speedUpgradeCost =>
-      _upgradeCost(base: _speedCostBase, growth: _speedCostGrowth, level: attackSpeedLevel);
+  int get speedUpgradeCost => _upgradeCost(
+    base: _speedCostBase,
+    growth: _speedCostGrowth,
+    level: attackSpeedLevel,
+  );
 
-  int get criticalUpgradeCost =>
-      _upgradeCost(base: _criticalCostBase, growth: _criticalCostGrowth, level: criticalRateLevel);
+  int get criticalUpgradeCost => _upgradeCost(
+    base: _criticalCostBase,
+    growth: _criticalCostGrowth,
+    level: criticalRateLevel,
+  );
 
   int get defenseUpgradeCost => _upgradeCost(
     base: _attackAndDefenseCostBase,
@@ -660,6 +863,14 @@ class GameManager extends ChangeNotifier {
       bossTimeRemaining = bossTimeLimit;
     }
 
+    // 하드 모드 — 요구사항: "몬스터의 HP와 공격력에 거대한 배수를 곱해서
+    // 난이도를 확 올려줘". 보스 배수 위에 곱하므로, 하드 모드 보스전은
+    // 보스 배수 × 하드 모드 배수가 함께 적용된다.
+    if (isHardMode) {
+      hp *= hardModeMultiplier;
+      attack *= hardModeMultiplier;
+    }
+
     monsterMaxHp = hp;
     monsterHp = hp;
     monsterAttackPower = attack;
@@ -672,10 +883,16 @@ class GameManager extends ChangeNotifier {
   /// IdleGame이 피격 포즈 전환 → 화면 페이드아웃 연출을 먼저 재생하고,
   /// 화면이 완전히 검게 덮인 순간에 직접 호출해야 스테이지 번호/체력바가
   /// 화면이 어두워지기도 전에 미리 바뀌어 보이는 일이 없다.
-  ({bool playerDefeated, bool evaded, bool isCritical, double damageDealt}) resolveMonsterAttack() {
+  ({bool playerDefeated, bool evaded, bool isCritical, double damageDealt})
+  resolveMonsterAttack() {
     final bool evaded = _random.nextDouble() < effectiveEvasionRate;
     if (evaded) {
-      return (playerDefeated: false, evaded: true, isCritical: false, damageDealt: 0);
+      return (
+        playerDefeated: false,
+        evaded: true,
+        isCritical: false,
+        damageDealt: 0,
+      );
     }
 
     final double monsterCritRate =
@@ -687,7 +904,10 @@ class GameManager extends ChangeNotifier {
       rawDamage *= _monsterCritMultiplier;
     }
 
-    final double mitigated = (rawDamage - defensePower).clamp(0.0, double.infinity);
+    final double mitigated = (rawDamage - defensePower).clamp(
+      0.0,
+      double.infinity,
+    );
     final double finalDamage = mitigated * (1 - effectiveDefenseRate);
 
     currentHp = (currentHp - finalDamage).clamp(0.0, maxHp);
@@ -735,7 +955,13 @@ class GameManager extends ChangeNotifier {
   /// (챕터의 첫 스테이지)에서 패배하면 `stage > 1` 조건에 걸리지 않아
   /// 아무 데도 후퇴하지 않는 빈틈이 있었다.
   void _regressOneStage() {
-    final int previousAbsoluteStage = max(1, absoluteStage - 1);
+    // 하드 모드 중엔 시즌 1 엔딩(99-10, 하드 모드 시작점) 밑으로 후퇴하지
+    // 않는다 — 정상 모드 번호 체계로 되감기는 건 의미가 없다. 정상
+    // 모드는 기존 그대로 1-1이 하한이다.
+    final int floor = isHardMode
+        ? (StageCalculator.maxStageNumber - 1) * maxStage + maxStage
+        : 1;
+    final int previousAbsoluteStage = max(floor, absoluteStage - 1);
     chapter = GameManager.chapterOf(previousAbsoluteStage);
     stage = GameManager.subStageOf(previousAbsoluteStage);
   }
@@ -766,6 +992,12 @@ class GameManager extends ChangeNotifier {
   /// 않는다 — 되돌리는 건 오직 이번 판의 스테이지 주행 기록과 그 골드로
   /// 산 임시 전투력뿐이다.
   void resetForPrestige() {
+    // 하드 모드 중 환생하면 정상 모드로 강제 복귀시킨다 — [chapter]/[stage]가
+    // "현재 활성 모드의 위치"라, isHardMode를 그대로 둔 채 1/1로 리셋하면
+    // 하드 모드 위치가 정상 모드 번호로 뒤섞인다. [hardChapter]/[hardStage]/
+    // [hardModeUnlocked]/[highestHardAbsoluteStage]는 [highestReachedChapter]와
+    // 같은 이유로 그대로 보존한다(환생해도 하드 모드를 다시 딸 필요는 없다).
+    isHardMode = false;
     chapter = 1;
     stage = 1;
     gold = 0;
@@ -799,7 +1031,9 @@ class GameManager extends ChangeNotifier {
     double effectiveDamage = damage;
     if (isBossStage) {
       if (_hasPetEquipped) {
-        effectiveDamage *= 1 + SkillManager.instance.petPassiveBonus(PetPassiveType.bossDamage);
+        effectiveDamage *=
+            1 +
+            SkillManager.instance.petPassiveBonus(PetPassiveType.bossDamage);
       }
       // 장착 펫(신규 Pet 모델)의 "보스 데미지 증가" 옵션 — 스킬트리 기반
       // petPassiveBonus와는 별개 소스라 곱산이 한 번 더 들어간다.
@@ -819,8 +1053,10 @@ class GameManager extends ChangeNotifier {
     effectiveDamage *= 1 + armorPenetration;
 
     monsterHp -= effectiveDamage;
-    ({Equipment? droppedItem, int goldReward}) result =
-        (droppedItem: null, goldReward: 0);
+    ({Equipment? droppedItem, int goldReward}) result = (
+      droppedItem: null,
+      goldReward: 0,
+    );
     if (monsterHp <= 0) {
       monsterHp = 0;
       result = _onMonsterDefeated();
@@ -842,7 +1078,10 @@ class GameManager extends ChangeNotifier {
     // 초보자 가이드 미션("몬스터 N마리 처치") 진행도 — 위 일일 퀘스트와
     // 똑같은 이벤트를 공유하지만 완전히 독립된 시스템(GuideMissionManager)
     // 이라 서로 영향을 주지 않는다.
-    GuideMissionManager.instance.updateProgress(GuideMissionActionType.monsterKill, 1);
+    GuideMissionManager.instance.updateProgress(
+      GuideMissionActionType.monsterKill,
+      1,
+    );
     // 업적("누적 몬스터 처치") 진행도 — 위 일일 퀘스트와 달리 자정에도
     // 리셋되지 않는 영구 누적값이다. AchievementManager도 로컬 저장만
     // 매번 하고 서버 동기화는 실제로 보상을 받을 때만 하므로 잦은 호출이
@@ -858,14 +1097,28 @@ class GameManager extends ChangeNotifier {
     // 곱해 반영한다(요구사항: "몬스터 처치 시 지급되는... 경험치 계산식에
     // 이 비율을 곱해서").
     if (_random.nextDouble() < BattlePassManager.monsterKillDropChance) {
-      final int bpAmount = (BattlePassManager.monsterKillDropAmount * (1 + expGain)).round();
+      int bpAmount = (BattlePassManager.monsterKillDropAmount * (1 + expGain))
+          .round();
+      // 하드 모드 — 요구사항: "처치 시 얻는... 경험치... 거대한 배수를
+      // 곱해서"(이 프로젝트의 "경험치"는 BP 지급량이다, 위 주석 참고).
+      if (isHardMode) {
+        bpAmount = (bpAmount * hardModeMultiplier).round();
+      }
       unawaited(BattlePassManager.instance.addBpExp(bpAmount));
     }
 
     final int goldReward = goldRewardForKill(chapter: chapter, stage: stage);
 
+    // 하드 모드 — "드롭 보상"은 수량이 아니라 확률에 배수를 곱한다(킬
+    // 하나당 아이템 1000개는 말이 안 되므로) — 사실상 보장 드롭에 가까워
+    // 진다. clamp(0,1)이 있어 안전하다.
+    final double dropRateMultiplier = isHardMode
+        ? _hardModeDropRateMultiplier
+        : 1.0;
     final double effectiveDropRate =
-        (_legacyEquipmentDropRate * (1 + _petSpecialStat(PetSpecialStat.dropRateBoost)))
+        (_legacyEquipmentDropRate *
+                (1 + _petSpecialStat(PetSpecialStat.dropRateBoost)) *
+                dropRateMultiplier)
             .clamp(0.0, 1.0);
     final Equipment? droppedItem = _random.nextDouble() < effectiveDropRate
         ? EquipmentManager.instance.generateRandomLoot()
@@ -880,11 +1133,47 @@ class GameManager extends ChangeNotifier {
     MonsterDropTableManager.instance.rollDropsForKill(
       chapter: chapter,
       // 유물(Artifact)/룬(유틸형)의 드랍률 패시브는 itemDropRate와 같은
-      // 가산(%) 성격이라 곱산이 아니라 그대로 더한다.
-      itemDropRate: itemDropRate +
-          ArtifactManager.instance.totalBonus(ArtifactStat.dropRatePercent) +
-          RuneManager.instance.totalBonus(RuneStat.dropRatePercent),
+      // 가산(%) 성격이라 곱산이 아니라 그대로 더한다. 하드 모드면 같은
+      // 이유로 이 합산치 자체에 확률 배수를 곱한다(clamp는
+      // rollDropsForKill 내부의 [_effectiveChance]가 이미 처리한다).
+      itemDropRate:
+          (itemDropRate +
+              ArtifactManager.instance.totalBonus(
+                ArtifactStat.dropRatePercent,
+              ) +
+              RuneManager.instance.totalBonus(RuneStat.dropRatePercent)) *
+          dropRateMultiplier,
     );
+
+    if (isHardMode) {
+      _advanceHardModeStage();
+    } else {
+      _advanceNormalModeStage();
+    }
+    _resetMonsterHp();
+
+    // 칭호(Title) 자동 획득 판정 — 이 시점이면 누적 몬스터 처치
+    // (AchievementManager.recordMonsterKill)와 최고 도달 챕터
+    // (highestReachedChapter, 방금 갱신됐을 수도 있다) 둘 다 이미
+    // 최신값이라, 두 조건 타입(monster_kill_count/highest_chapter)을
+    // 이 한 번의 호출로 함께 확인할 수 있다.
+    TitleManager.instance.checkAndGrantTitles();
+
+    return (droppedItem: droppedItem, goldReward: goldReward);
+  }
+
+  /// 정상 모드 스테이지 진행 — 시즌 1 엔딩(99-10)에 도달하면 더 이상
+  /// 진행하지 않고 그 자리에서 반복 클리어되며, 그 시점에 하드 모드를
+  /// 확정 해금한다(요구사항: "일반 모드 99-10을 클리어(시즌 1 엔딩)하면
+  /// 하드 모드가 해금").
+  void _advanceNormalModeStage() {
+    if (chapter == StageCalculator.maxStageNumber && stage == maxStage) {
+      if (!hardModeUnlocked) {
+        hardModeUnlocked = true;
+        saveGame();
+      }
+      return;
+    }
 
     // 다음 (챕터, 서브스테이지)는 항상 [chapterOf]/[subStageOf] 공식 하나로만
     // 유도한다 — 예전에는 여기서 "stage==maxStage면 chapter++ / 아니면
@@ -922,7 +1211,11 @@ class GameManager extends ChangeNotifier {
       if (isNewHighest) {
         highestReachedChapter = chapter;
         saveGame();
-        unawaited(SupabaseManager.instance.updateHighestReachedChapter(highestReachedChapter));
+        unawaited(
+          SupabaseManager.instance.updateHighestReachedChapter(
+            highestReachedChapter,
+          ),
+        );
       }
       // 10, 20, 30... 챕터에 "처음" 도달했을 때만 캐릭터 SP 1을 지급한다 —
       // highestReachedChapter 갱신과는 독립적인, 10 단위 전용 보상이다.
@@ -934,16 +1227,26 @@ class GameManager extends ChangeNotifier {
       // 보스 인트로 스토리 트리거.
       onBossStageEntered?.call(chapter);
     }
-    _resetMonsterHp();
+  }
 
-    // 칭호(Title) 자동 획득 판정 — 이 시점이면 누적 몬스터 처치
-    // (AchievementManager.recordMonsterKill)와 최고 도달 챕터
-    // (highestReachedChapter, 방금 갱신됐을 수도 있다) 둘 다 이미
-    // 최신값이라, 두 조건 타입(monster_kill_count/highest_chapter)을
-    // 이 한 번의 호출로 함께 확인할 수 있다.
-    TitleManager.instance.checkAndGrantTitles();
+  /// 하드 모드 스테이지 진행 — 상한 없이 [chapterOf]/[subStageOf] 공식을
+  /// 그대로 계속 쓴다(요구사항에 하드 모드 자체의 진행 한도는 없다).
+  /// 정상 모드 전용인 highestReachedChapter/SP 마일스톤/시즌1 스토리
+  /// 트리거는 여기서 건드리지 않는 대신, 하드 모드만의 최고 기록
+  /// ([highestHardAbsoluteStage], `profiles.hard_max_stage`)을 갱신한다 —
+  /// [highestReachedChapter]와 같은 "현재 위치 vs 최고 기록" 분리 관례.
+  void _advanceHardModeStage() {
+    final int nextAbsoluteStage = absoluteStage + 1;
+    chapter = GameManager.chapterOf(nextAbsoluteStage);
+    stage = GameManager.subStageOf(nextAbsoluteStage);
 
-    return (droppedItem: droppedItem, goldReward: goldReward);
+    if (nextAbsoluteStage > highestHardAbsoluteStage) {
+      highestHardAbsoluteStage = nextAbsoluteStage;
+      saveGame();
+      unawaited(
+        SupabaseManager.instance.updateHardMaxStage(highestHardAbsoluteStage),
+      );
+    }
   }
 
   void addGold(int amount) {
@@ -1009,7 +1312,10 @@ class GameManager extends ChangeNotifier {
     baseAttackPower += 5;
     // 초보자 가이드 미션("공격력 N회 강화") 진행도 — 골드가 부족해 실패한
     // 시도는(위 조기 return) 세지 않는다.
-    GuideMissionManager.instance.updateProgress(GuideMissionActionType.attackUpgrade, 1);
+    GuideMissionManager.instance.updateProgress(
+      GuideMissionActionType.attackUpgrade,
+      1,
+    );
     notifyListeners();
     return true;
   }
@@ -1050,7 +1356,10 @@ class GameManager extends ChangeNotifier {
     defenseLevel++;
     baseDefense += 2;
     // 초보자 가이드 미션("방어력 N회 강화") 진행도.
-    GuideMissionManager.instance.updateProgress(GuideMissionActionType.defenseUpgrade, 1);
+    GuideMissionManager.instance.updateProgress(
+      GuideMissionActionType.defenseUpgrade,
+      1,
+    );
     notifyListeners();
     return true;
   }
@@ -1100,13 +1409,15 @@ class GameManager extends ChangeNotifier {
   /// 여부/데미지를 계산한다. 회피면 데미지는 0이고 [IdleGame]이 "회피"
   /// 텍스트만 띄운 채 골드/드랍/흡혈 등 명중 후속 처리를 전부 건너뛴다.
   ({double damage, bool isCritical, bool evaded}) rollAttack() {
-    final double monsterEvasionRate = (_monsterBaseEvasionRate - accuracy).clamp(0.0, 1.0);
+    final double monsterEvasionRate = (_monsterBaseEvasionRate - accuracy)
+        .clamp(0.0, 1.0);
     if (_random.nextDouble() < monsterEvasionRate) {
       return (damage: 0, isCritical: false, evaded: true);
     }
     final bool isCritical = _random.nextDouble() < effectiveCriticalRate;
-    final double damage =
-        isCritical ? attackPower * effectiveCriticalMultiplier : attackPower;
+    final double damage = isCritical
+        ? attackPower * effectiveCriticalMultiplier
+        : attackPower;
     return (damage: damage, isCritical: isCritical, evaded: false);
   }
 
@@ -1121,6 +1432,11 @@ class GameManager extends ChangeNotifier {
       'chapter': chapter,
       'stage': stage,
       'highestReachedChapter': highestReachedChapter,
+      'isHardMode': isHardMode,
+      'hardModeUnlocked': hardModeUnlocked,
+      'hardChapter': hardChapter,
+      'hardStage': hardStage,
+      'highestHardAbsoluteStage': highestHardAbsoluteStage,
       'attackLevel': attackLevel,
       'attackSpeedLevel': attackSpeedLevel,
       'criticalRateLevel': criticalRateLevel,
@@ -1147,7 +1463,8 @@ class GameManager extends ChangeNotifier {
       'accuracy': baseAccuracy,
       'maxHp': baseMaxHp,
       'collectionBonuses': {
-        for (final MapEntry<CollectionStatType, double> entry in collectionBonuses.entries)
+        for (final MapEntry<CollectionStatType, double> entry
+            in collectionBonuses.entries)
           entry.key.name: entry.value,
       },
     };
@@ -1199,10 +1516,26 @@ class GameManager extends ChangeNotifier {
     // 중에 로컬에서 이미 앞서간 진행도를 실수로 되돌리지 않는다
     // ([DungeonManager.loadDungeonData]의 highestClearedFloor 병합과 같은
     // 관례).
-    final int? serverHighestChapter =
-        await SupabaseManager.instance.fetchHighestReachedChapter();
-    if (serverHighestChapter != null && serverHighestChapter > highestReachedChapter) {
+    final int? serverHighestChapter = await SupabaseManager.instance
+        .fetchHighestReachedChapter();
+    if (serverHighestChapter != null &&
+        serverHighestChapter > highestReachedChapter) {
       highestReachedChapter = serverHighestChapter;
+    }
+
+    // 하드 모드 최고 기록도 같은 이유로 서버 값이 더 크면만 반영한다.
+    // [isHardMode](지금 활성 모드)는 기기별 UI 상태에 가까워 병합하지
+    // 않고 서버 값을 그대로 신뢰한다 — 서버 조회 실패 시 로컬 캐시 유지.
+    final bool? serverIsHardMode = await SupabaseManager.instance
+        .fetchIsHardMode();
+    if (serverIsHardMode != null) {
+      isHardMode = serverIsHardMode;
+    }
+    final int? serverHardMaxStage = await SupabaseManager.instance
+        .fetchHardMaxStage();
+    if (serverHardMaxStage != null &&
+        serverHardMaxStage > highestHardAbsoluteStage) {
+      highestHardAbsoluteStage = serverHardMaxStage;
     }
 
     _resetMonsterHp();
@@ -1217,6 +1550,12 @@ class GameManager extends ChangeNotifier {
     highestReachedChapter =
         data['highestReachedChapter'] as int? ?? highestReachedChapter;
     stage = data['stage'] as int? ?? stage;
+    isHardMode = data['isHardMode'] as bool? ?? isHardMode;
+    hardModeUnlocked = data['hardModeUnlocked'] as bool? ?? hardModeUnlocked;
+    hardChapter = data['hardChapter'] as int? ?? hardChapter;
+    hardStage = data['hardStage'] as int? ?? hardStage;
+    highestHardAbsoluteStage =
+        data['highestHardAbsoluteStage'] as int? ?? highestHardAbsoluteStage;
     attackLevel = data['attackLevel'] as int? ?? attackLevel;
     attackSpeedLevel = data['attackSpeedLevel'] as int? ?? attackSpeedLevel;
     criticalRateLevel = data['criticalRateLevel'] as int? ?? criticalRateLevel;
@@ -1244,7 +1583,8 @@ class GameManager extends ChangeNotifier {
         (data['bossDamageBonus'] as num?)?.toDouble() ?? baseBossDamageBonus;
     baseArmorPenetration =
         (data['armorPenetration'] as num?)?.toDouble() ?? baseArmorPenetration;
-    baseSkillDamage = (data['skillDamage'] as num?)?.toDouble() ?? baseSkillDamage;
+    baseSkillDamage =
+        (data['skillDamage'] as num?)?.toDouble() ?? baseSkillDamage;
     baseAccuracy = (data['accuracy'] as num?)?.toDouble() ?? baseAccuracy;
     baseMaxHp = (data['maxHp'] as num?)?.toDouble() ?? baseMaxHp;
     currentHp = maxHp;

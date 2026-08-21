@@ -41,6 +41,15 @@ class TradeManager extends ChangeNotifier {
   RealtimeChannel? _sessionChannel;
   RealtimeChannel? _requestChannel;
 
+  /// [보안 감사 2026-08-21] [requestTrade]는 대상의 `allow_trade`를
+  /// 서버에 물어본 뒤(비동기 왕복) 요청 행을 만든다 — 그 왕복 사이에
+  /// 같은 상대에게 연속으로 두 번 탭하면(친구/길드원 목록 타일의
+  /// InkWell은 자체 잠금이 없다) 두 호출 모두 검사를 통과해 pending
+  /// 거래 행이 중복 생길 수 있었다. 진행 중인 대상 id를 여기 모아
+  /// 두고, 같은 대상에게 이미 요청이 나가 있는 동안은 새 호출을
+  /// 조용히 막는다.
+  final Set<String> _pendingRequestTargetIds = {};
+
   /// [_MainNavigationScreenState]가 새 거래 요청을 받았을 때 알림(토스트 등)
   /// 을 띄우기 위한 콜백 — [GameManager.onChapterAdvanced]와 같은 관례.
   void Function(TradeSession request)? onIncomingTradeRequest;
@@ -99,22 +108,30 @@ class TradeManager extends ChangeNotifier {
   /// "방금 보낸 요청"을 다시 조회할 방법이 없어 여기서 직접 전달해야
   /// 한다).
   Future<({TradeRequestResult result, String? tradeId})> requestTrade(String targetUserId) async {
+    if (_pendingRequestTargetIds.contains(targetUserId)) {
+      return (result: TradeRequestResult.failed, tradeId: null);
+    }
     if (!allowTrade) {
       return (result: TradeRequestResult.myTradeDisabled, tradeId: null);
     }
     if (tradeCountToday >= maxDailyTrades) {
       return (result: TradeRequestResult.dailyLimitReached, tradeId: null);
     }
-    final bool targetAllows = await SupabaseManager.instance.fetchAllowTrade(targetUserId);
-    if (!targetAllows) {
-      return (result: TradeRequestResult.targetTradeDisabled, tradeId: null);
+    _pendingRequestTargetIds.add(targetUserId);
+    try {
+      final bool targetAllows = await SupabaseManager.instance.fetchAllowTrade(targetUserId);
+      if (!targetAllows) {
+        return (result: TradeRequestResult.targetTradeDisabled, tradeId: null);
+      }
+      final Map<String, dynamic>? row =
+          await SupabaseManager.instance.createTradeRequest(targetUserId);
+      if (row == null) {
+        return (result: TradeRequestResult.failed, tradeId: null);
+      }
+      return (result: TradeRequestResult.success, tradeId: row['id'].toString());
+    } finally {
+      _pendingRequestTargetIds.remove(targetUserId);
     }
-    final Map<String, dynamic>? row =
-        await SupabaseManager.instance.createTradeRequest(targetUserId);
-    if (row == null) {
-      return (result: TradeRequestResult.failed, tradeId: null);
-    }
-    return (result: TradeRequestResult.success, tradeId: row['id'].toString());
   }
 
   Future<bool> acceptRequest(TradeSession request) async {
@@ -168,7 +185,24 @@ class TradeManager extends ChangeNotifier {
     currentSession = TradeSession.fromJson(row);
     final List<Map<String, dynamic>> itemRows =
         await SupabaseManager.instance.fetchTradeItems(tradeId);
-    currentItems = itemRows.map(TradeItemEntry.fromJson).toList();
+    // [보안 감사 2026-08-21] 이 메서드는 Realtime 콜백(다른 유저가 자기
+    // 쪽 trade_items를 바꿀 때마다)에서도 호출된다 — [TradeItemEntry
+    // .fromJson] 자체는 내부 [Equipment.fromJson] 파싱을 이미
+    // try/catch로 감쌌지만, id/trade_id/owner_user_id 같은 행 필드는
+    // 여전히 non-null 캐스트다. 행 하나가 예상 밖 모양이어도(스키마
+    // 드리프트 등) 그 아이템만 건너뛰고 나머지 거래 화면은 계속
+    // 살아있도록, 목록 전체를 한 번에 `.map()`하는 대신 항목별로
+    // try/catch한다([EquipmentManager._restorePetsFromRemote]와 같은
+    // 관례).
+    final List<TradeItemEntry> parsed = [];
+    for (final Map<String, dynamic> itemRow in itemRows) {
+      try {
+        parsed.add(TradeItemEntry.fromJson(itemRow));
+      } catch (error) {
+        debugPrint('[TradeManager] 거래 아이템 파싱 실패, 건너뜀: $error');
+      }
+    }
+    currentItems = parsed;
     notifyListeners();
   }
 

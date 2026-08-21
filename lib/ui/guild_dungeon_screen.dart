@@ -38,7 +38,6 @@ class GuildDungeonScreen extends StatefulWidget {
 
 class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
 
   // 이 화면 진입 전 스킬 데미지가 향하던 곳(보통 홈 화면의 IdleGame) —
@@ -60,10 +59,9 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
     _game = IdleGame();
     _game.onDungeonComplete = _handleDungeonComplete;
     _game.startDungeon(widget.mode);
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 100),
-      (_) => setState(() {}),
-    );
+    // [퍼포먼스 감사 2026-08-21] 화면 전체를 다시 그리던 폴링 타이머 제거
+    // — [_GuildDungeonTimerBadge]/[_GuildDungeonMonsterHpBar]가 각자
+    // 스스로 틱한다([_DungeonBattleScreen]과 같은 수정).
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -73,7 +71,6 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
     if (identical(
       SkillManager.instance.damageHandler,
       _game.applySkillDamage,
@@ -109,7 +106,9 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
+    // [퍼포먼스 감사 2026-08-21] 폴링 타이머를 없앴으므로 뒤로가기 버튼
+    // 활성화를 반영하려면 명시적으로 setState해야 한다.
+    setState(() => _resultShown = true);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _showResultDialog(
         success: success,
@@ -137,7 +136,9 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Text(
             success ? '${widget.title} 클리어!' : '클리어 실패',
             style: TextStyle(
@@ -158,7 +159,10 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
                 if (gemReward > 0)
                   Text(
                     '획득 보석: $gemReward 💎',
-                    style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      color: Colors.cyanAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 if (guildCoinReward > 0)
                   Text(
@@ -204,10 +208,6 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
-
     return PopScope(
       canPop: _resultShown,
       child: Scaffold(
@@ -258,24 +258,7 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
                       left: 0,
                       right: 0,
                       child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
+                        child: _GuildDungeonTimerBadge(game: _game),
                       ),
                     ),
                     const Positioned(
@@ -288,30 +271,7 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: hpRatio,
-                              minHeight: 14,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(
-                                Colors.redAccent,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
-                            '${_game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: _GuildDungeonMonsterHpBar(game: _game),
                     ),
                   ],
                 ),
@@ -320,6 +280,113 @@ class _GuildDungeonScreenState extends State<GuildDungeonScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "남은 시간" 배지 — 스스로만 100ms마다 다시 그린다([_DungeonTimerBadge]
+/// 와 같은 이유의 같은 패턴).
+class _GuildDungeonTimerBadge extends StatefulWidget {
+  const _GuildDungeonTimerBadge({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildDungeonTimerBadge> createState() =>
+      _GuildDungeonTimerBadgeState();
+}
+
+class _GuildDungeonTimerBadgeState extends State<_GuildDungeonTimerBadge> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '남은 시간 ${widget.game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+        style: const TextStyle(
+          color: Colors.orangeAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 몬스터 HP 바 — [_GuildDungeonTimerBadge]와 같은 이유로 분리.
+class _GuildDungeonMonsterHpBar extends StatefulWidget {
+  const _GuildDungeonMonsterHpBar({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_GuildDungeonMonsterHpBar> createState() =>
+      _GuildDungeonMonsterHpBarState();
+}
+
+class _GuildDungeonMonsterHpBarState extends State<_GuildDungeonMonsterHpBar> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: hpRatio,
+            minHeight: 14,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${widget.game.dungeonMonsterHp.clamp(0, widget.game.dungeonMonsterMaxHp).toStringAsFixed(0)} / '
+          '${widget.game.dungeonMonsterMaxHp.toStringAsFixed(0)}',
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }
@@ -365,14 +432,17 @@ class GuildDungeonTab extends StatelessWidget {
                 buttonColor: const Color(0xFF6C4FCE),
                 enabled: true,
                 onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const GuildDungeonScreen()),
+                  MaterialPageRoute<void>(
+                    builder: (_) => const GuildDungeonScreen(),
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
               _GuildDungeonEntryCard(
                 icon: Icons.emoji_events,
                 iconColor: const Color(0xFFFFD700),
-                description: '길드전 승리 길드만 입장할 수 있는 특별한 던전.\n'
+                description:
+                    '길드전 승리 길드만 입장할 수 있는 특별한 던전.\n'
                     '룬 조각 등 DB 설정 보상을 획득하세요!',
                 buttonLabel: _hasVictoryBadge ? '입장하기' : '길드전 승리 시 입장 가능',
                 buttonColor: const Color(0xFFC9A24B),
@@ -424,7 +494,9 @@ class _GuildDungeonEntryCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF1B1B26),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: enabled ? iconColor : const Color(0xFF3A3A4A)),
+        border: Border.all(
+          color: enabled ? iconColor : const Color(0xFF3A3A4A),
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -447,7 +519,9 @@ class _GuildDungeonEntryCard extends StatelessWidget {
               disabledBackgroundColor: const Color(0xFF3A3A4A),
               disabledForegroundColor: Colors.white38,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
         ],

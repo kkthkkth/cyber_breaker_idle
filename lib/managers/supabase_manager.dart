@@ -69,7 +69,8 @@ class SupabaseManager {
   /// 테스트마다 포트가 달라질 때 깨진다). 이 값을 Supabase 대시보드의
   /// Authentication > URL Configuration > Redirect URLs에도 등록해야
   /// 리다이렉트가 거부되지 않는다.
-  static String get _googleRedirectTo => kIsWeb ? Uri.base.toString() : _mobileRedirectTo;
+  static String get _googleRedirectTo =>
+      kIsWeb ? Uri.base.toString() : _mobileRedirectTo;
 
   /// 구글 로그인 — 플랫폼별 네이티브 SDK(`google_sign_in`) 대신 Supabase가
   /// 직접 제공하는 OAuth 리다이렉트 플로우(`signInWithOAuth`)를 쓴다. 웹에서
@@ -101,7 +102,8 @@ class SupabaseManager {
   /// [signInWithGoogle]의 리다이렉트가 실제로 완료된 뒤(웹은 페이지 복귀,
   /// 모바일은 딥링크 복귀 → `onAuthStateChange`의 signedIn 이벤트) 호출한다
   /// — [signInAsGuest]와 동일한 upsert를 `login_type: 'google'`로 수행한다.
-  Future<void> upsertGoogleProfile(User user) => _upsertProfile(userId: user.id, loginType: 'google');
+  Future<void> upsertGoogleProfile(User user) =>
+      _upsertProfile(userId: user.id, loginType: 'google');
 
   /// [userId]로 `profiles` 행을 만든다(이미 있으면 존재만 확인).
   ///
@@ -110,7 +112,10 @@ class SupabaseManager {
   /// 진행 중인 유저가 로그인할 때마다(=이 함수가 다시 불릴 때마다) 서버에
   /// 저장된 실제 값이 기본값/null로 덮어써지는 심각한 사고가 난다. 닉네임은
   /// [setNickname]처럼 해당 컬럼 하나만 건드리는 전용 함수로만 갱신한다.
-  Future<void> _upsertProfile({required String userId, required String loginType}) {
+  Future<void> _upsertProfile({
+    required String userId,
+    required String loginType,
+  }) {
     return _client.from(_profilesTable).upsert({
       'id': userId,
       'login_type': loginType,
@@ -171,7 +176,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'is_ad_free': value}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'is_ad_free': value})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 광고 제거 상태 동기화 실패: $error');
     }
@@ -258,7 +266,9 @@ class SupabaseManager {
   /// 닉네임에 [query]가 포함된 유저를 검색한다(대소문자 무시), 최대 20명,
   /// 본인은 제외. [query]가 정확한 유저 id와도 일치하면 그 결과도 함께
   /// 포함한다(요구사항: "닉네임이나 유저 ID를 검색").
-  Future<List<Map<String, dynamic>>> searchProfilesForFriend(String query) async {
+  Future<List<Map<String, dynamic>>> searchProfilesForFriend(
+    String query,
+  ) async {
     final String trimmed = query.trim();
     if (trimmed.isEmpty) {
       return const [];
@@ -311,10 +321,14 @@ class SupabaseManager {
       return const [];
     }
     try {
-      final List<dynamic> asRequester =
-          await _client.from(_friendshipsTable).select().eq('user_id', userId);
-      final List<dynamic> asTarget =
-          await _client.from(_friendshipsTable).select().eq('friend_id', userId);
+      final List<dynamic> asRequester = await _client
+          .from(_friendshipsTable)
+          .select()
+          .eq('user_id', userId);
+      final List<dynamic> asTarget = await _client
+          .from(_friendshipsTable)
+          .select()
+          .eq('friend_id', userId);
       return [
         ...asRequester.cast<Map<String, dynamic>>(),
         ...asTarget.cast<Map<String, dynamic>>(),
@@ -392,7 +406,9 @@ class SupabaseManager {
   /// [ids]에 해당하는 프로필들의 닉네임/전투력/최종 접속 시각 — 친구
   /// 목록/받은 요청 탭이 [fetchMyFriendshipRows]로 얻은 유저 id들을
   /// 한 번에 조회할 때 쓴다.
-  Future<List<Map<String, dynamic>>> fetchProfilesByIds(List<String> ids) async {
+  Future<List<Map<String, dynamic>>> fetchProfilesByIds(
+    List<String> ids,
+  ) async {
     if (ids.isEmpty) {
       return const [];
     }
@@ -430,7 +446,10 @@ class SupabaseManager {
         return NicknameUpdateResult.duplicate;
       }
 
-      await _client.from(_profilesTable).update({'nickname': nickname}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'nickname': nickname})
+          .eq('id', userId);
       return NicknameUpdateResult.success;
     } on PostgrestException catch (error) {
       if (error.code == '23505') {
@@ -467,7 +486,10 @@ class SupabaseManager {
     }
 
     try {
-      await _client.from(_profilesTable).update({'gold': amount}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'gold': amount})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] gold 업데이트 실패: $error');
     }
@@ -551,6 +573,83 @@ class SupabaseManager {
     }
   }
 
+  // ── 하드 모드 (GameManager 전용) ───────────────────────────────────
+  //
+  // `updateAllowTrade`/`fetchAllowTrade`와 같은 모양 — 로컬이 먼저 확정한
+  // 값을 그대로 push하고, 실패해도 조용히 로컬 캐시를 유지한다.
+
+  /// `profiles.is_hard_mode` — 못 불러오면 null(호출부가 로컬 캐시를
+  /// 유지) — [fetchHighestReachedChapter]와 같은 관례. 여기서 false를
+  /// 디폴트로 돌려주면, 조회 자체가 실패했을 때도 "정상 모드"로 단정해
+  /// 로컬에 이미 반영된 하드 모드 상태를 조용히 되돌려버리게 된다.
+  Future<bool?> fetchIsHardMode() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('is_hard_mode')
+          .eq('id', userId)
+          .maybeSingle();
+      return row?['is_hard_mode'] as bool?;
+    } catch (error) {
+      debugPrint('[SupabaseManager] 하드 모드 상태 조회 실패: $error');
+      return null;
+    }
+  }
+
+  Future<void> updateHardMode(bool value) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client
+          .from(_profilesTable)
+          .update({'is_hard_mode': value})
+          .eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 하드 모드 상태 동기화 실패: $error');
+    }
+  }
+
+  /// `profiles.hard_max_stage`(하드 모드 최고 도달 절대 스테이지) — 못
+  /// 불러오면 null(호출부가 로컬 캐시를 유지).
+  Future<int?> fetchHardMaxStage() async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return null;
+      }
+      final Map<String, dynamic>? row = await _client
+          .from(_profilesTable)
+          .select('hard_max_stage')
+          .eq('id', userId)
+          .maybeSingle();
+      return (row?['hard_max_stage'] as num?)?.toInt();
+    } catch (error) {
+      debugPrint('[SupabaseManager] 하드 모드 최고 스테이지 조회 실패: $error');
+      return null;
+    }
+  }
+
+  Future<void> updateHardMaxStage(int stage) async {
+    try {
+      final String? userId = currentUserId;
+      if (userId == null) {
+        return;
+      }
+      await _client
+          .from(_profilesTable)
+          .update({'hard_max_stage': stage})
+          .eq('id', userId);
+    } catch (error) {
+      debugPrint('[SupabaseManager] 하드 모드 최고 스테이지 동기화 실패: $error');
+    }
+  }
+
   // ── 명예의 전당 (RankingManager 전용) ───────────────────────────────
   //
   // `profiles`에는 길드 FK가 없어(길드 소속은 `guild_members`가 별도로
@@ -564,7 +663,9 @@ class SupabaseManager {
     try {
       final List<dynamic> rows = await _client
           .from(_profilesTable)
-          .select('id, nickname, highest_reached_chapter, prestige_count, equipped_character')
+          .select(
+            'id, nickname, highest_reached_chapter, prestige_count, equipped_character',
+          )
           .order('highest_reached_chapter', ascending: false)
           .order('prestige_count', ascending: false)
           .limit(100);
@@ -606,7 +707,9 @@ class SupabaseManager {
   /// 이미 필터링된 결과만 받는다(SQL은 `supabase/combat_power_ranking.sql`
   /// 참고). 실패하면(RPC 미배포/오프라인 등) 빈 리스트 — 호출부
   /// ([RankingManager])가 이전에 캐시해 둔 값을 그대로 유지한다.
-  Future<List<Map<String, dynamic>>> fetchCombatPowerRanking({int limit = 100}) async {
+  Future<List<Map<String, dynamic>>> fetchCombatPowerRanking({
+    int limit = 100,
+  }) async {
     try {
       final dynamic result = await _client.rpc(
         'get_combat_power_ranking',
@@ -622,7 +725,9 @@ class SupabaseManager {
   /// [userIds]에 속한 유저들의 소속 길드명 — `guild_members`를
   /// `guilds(name)` 임베드로 조회한다(한 유저는 최대 한 길드에만 속하므로
   /// 1:1 매핑). 길드가 없는 유저는 결과에 아예 나타나지 않는다.
-  Future<List<Map<String, dynamic>>> fetchGuildNamesForUsers(List<String> userIds) async {
+  Future<List<Map<String, dynamic>>> fetchGuildNamesForUsers(
+    List<String> userIds,
+  ) async {
     if (userIds.isEmpty) {
       return const [];
     }
@@ -668,7 +773,10 @@ class SupabaseManager {
   /// `profiles.prestige_count`/`prestige_core_points`를 덮어쓴다 —
   /// [updateHighestTowerFloor]와 같은 "로컬이 먼저 확정한 값을 그대로
   /// push" 관례. [PrestigeManager.prestige]가 성공할 때마다 호출한다.
-  Future<void> updatePrestigeData({required int count, required int stones}) async {
+  Future<void> updatePrestigeData({
+    required int count,
+    required int stones,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -717,7 +825,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'talent_points': points}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'talent_points': points})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 특성 포인트 동기화 실패: $error');
     }
@@ -744,7 +855,10 @@ class SupabaseManager {
 
   /// [TalentManager.levelUp]이 성공할 때마다 `user_talents`의 해당 노드
   /// 행을 [level]로 맞춘다(upsert) — [syncUserSkill]과 같은 관례.
-  Future<void> syncUserTalent({required String nodeId, required int level}) async {
+  Future<void> syncUserTalent({
+    required String nodeId,
+    required int level,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -858,7 +972,11 @@ class SupabaseManager {
   /// 를 덮어쓴다 — [updatePrestigeData]와 같은 "로컬이 먼저 확정한 값을
   /// 그대로 push" 관례. [PityManager.rollAndConsumePity]가 호출될 때마다
   /// (=가챠를 뽑을 때마다) 호출한다.
-  Future<void> updatePityData({required int character, required int pet, required int equipment}) async {
+  Future<void> updatePityData({
+    required int character,
+    required int pet,
+    required int equipment,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -892,7 +1010,8 @@ class SupabaseManager {
   /// 현재 유저의 누적 카운터(profiles)와 이미 수령한 업적 키 목록
   /// (user_achievements)을 함께 가져온다 — 못 불러오면 null(호출부가 로컬
   /// 캐시를 유지).
-  Future<({int monsterKills, int gachaPulls, Set<String> claimedKeys})?> fetchAchievementData() async {
+  Future<({int monsterKills, int gachaPulls, Set<String> claimedKeys})?>
+  fetchAchievementData() async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -909,7 +1028,8 @@ class SupabaseManager {
           .eq('user_id', userId);
 
       return (
-        monsterKills: (profileRow?['total_monster_kills'] as num?)?.toInt() ?? 0,
+        monsterKills:
+            (profileRow?['total_monster_kills'] as num?)?.toInt() ?? 0,
         gachaPulls: (profileRow?['total_gacha_pulls'] as num?)?.toInt() ?? 0,
         claimedKeys: claimedRows
             .cast<Map<String, dynamic>>()
@@ -927,7 +1047,10 @@ class SupabaseManager {
   /// [AchievementManager.claimTier]가 성공할 때마다 호출한다(누적
   /// 카운터는 매 처치/뽑기마다 서버에 쓰면 너무 잦아, 실제로 보상을 받는
   /// 시점에만 그때까지의 누적값을 함께 백업한다).
-  Future<void> updateAchievementCounters({required int monsterKills, required int gachaPulls}) async {
+  Future<void> updateAchievementCounters({
+    required int monsterKills,
+    required int gachaPulls,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -935,7 +1058,10 @@ class SupabaseManager {
       }
       await _client
           .from(_profilesTable)
-          .update({'total_monster_kills': monsterKills, 'total_gacha_pulls': gachaPulls})
+          .update({
+            'total_monster_kills': monsterKills,
+            'total_gacha_pulls': gachaPulls,
+          })
           .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 업적 누적 카운터 동기화 실패: $error');
@@ -951,9 +1077,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client
-          .from(_userAchievementsTable)
-          .upsert({'user_id': userId, 'achievement_key': key}, onConflict: 'user_id,achievement_key');
+      await _client.from(_userAchievementsTable).upsert({
+        'user_id': userId,
+        'achievement_key': key,
+      }, onConflict: 'user_id,achievement_key');
     } catch (error) {
       debugPrint('[SupabaseManager] 업적 수령 기록 실패: $error');
     }
@@ -979,8 +1106,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userPetsTable).select('id, data').eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userPetsTable)
+          .select('id, data')
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 펫 목록 조회 실패: $error');
@@ -1054,8 +1183,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userEquipmentTable).select('id, data').eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userEquipmentTable)
+          .select('id, data')
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 장비 목록 조회 실패: $error');
@@ -1128,7 +1259,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'allow_trade': value}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'allow_trade': value})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 거래 허용 여부 갱신 실패: $error');
     }
@@ -1142,7 +1276,11 @@ class SupabaseManager {
       if (userId == null) {
         return 0;
       }
-      final String today = DateTime.now().toUtc().toIso8601String().split('T').first;
+      final String today = DateTime.now()
+          .toUtc()
+          .toIso8601String()
+          .split('T')
+          .first;
       final Map<String, dynamic>? row = await _client
           .from(_tradeDailyCountTable)
           .select('count')
@@ -1201,8 +1339,11 @@ class SupabaseManager {
 
   Future<Map<String, dynamic>?> fetchTradeSession(String tradeId) async {
     try {
-      final Map<String, dynamic>? row =
-          await _client.from(_tradesTable).select().eq('id', tradeId).maybeSingle();
+      final Map<String, dynamic>? row = await _client
+          .from(_tradesTable)
+          .select()
+          .eq('id', tradeId)
+          .maybeSingle();
       return row;
     } catch (error) {
       debugPrint('[SupabaseManager] 거래 세션 조회 실패: $error');
@@ -1213,7 +1354,10 @@ class SupabaseManager {
   /// 요청을 수락(`status='active'`)하거나 거절/취소(`status='cancelled'`)한다.
   Future<bool> updateTradeStatus(String tradeId, String status) async {
     try {
-      await _client.from(_tradesTable).update({'status': status}).eq('id', tradeId);
+      await _client
+          .from(_tradesTable)
+          .update({'status': status})
+          .eq('id', tradeId);
       return true;
     } catch (error) {
       debugPrint('[SupabaseManager] 거래 상태 변경 실패: $error');
@@ -1223,10 +1367,17 @@ class SupabaseManager {
 
   /// [isUserA]에 따라 `locked_a`/`locked_b` 중 내 쪽만 갱신한다 — 아이템이
   /// 바뀌면(요구사항: "2단 잠금") 호출부가 false로 다시 부른다.
-  Future<bool> updateTradeLock(String tradeId, {required bool isUserA, required bool locked}) async {
+  Future<bool> updateTradeLock(
+    String tradeId, {
+    required bool isUserA,
+    required bool locked,
+  }) async {
     try {
       final String column = isUserA ? 'locked_a' : 'locked_b';
-      await _client.from(_tradesTable).update({column: locked}).eq('id', tradeId);
+      await _client
+          .from(_tradesTable)
+          .update({column: locked})
+          .eq('id', tradeId);
       return true;
     } catch (error) {
       debugPrint('[SupabaseManager] 거래 잠금 상태 변경 실패: $error');
@@ -1241,7 +1392,9 @@ class SupabaseManager {
     try {
       final List<dynamic> rows = await _client
           .from(_tradeItemsTable)
-          .select('id, trade_id, owner_user_id, equipment_id, user_equipment(data)')
+          .select(
+            'id, trade_id, owner_user_id, equipment_id, user_equipment(data)',
+          )
           .eq('trade_id', tradeId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
@@ -1251,7 +1404,10 @@ class SupabaseManager {
   }
 
   /// 내 아이템 [equipmentId]를 거래창에 올린다.
-  Future<bool> addTradeItem({required String tradeId, required String equipmentId}) async {
+  Future<bool> addTradeItem({
+    required String tradeId,
+    required String equipmentId,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -1285,7 +1441,10 @@ class SupabaseManager {
   /// 쪽([TradeManager]이 담당)이, trade_items의 Realtime payload에는
   /// user_equipment 임베드가 없어 어차피 다시 조회해야 하는 것보다
   /// 단순하고 안전하다.
-  RealtimeChannel? subscribeToTradeSession(String tradeId, void Function() onChange) {
+  RealtimeChannel? subscribeToTradeSession(
+    String tradeId,
+    void Function() onChange,
+  ) {
     try {
       return _client
           .channel('trade_session_$tradeId')
@@ -1389,7 +1548,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'equipped_pet_id': petId}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'equipped_pet_id': petId})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 장착 펫 id 동기화 실패: $error');
     }
@@ -1427,7 +1589,9 @@ class SupabaseManager {
   /// 칭호 카탈로그 전체 — 로그인 여부와 무관한 공개 데이터.
   Future<List<Map<String, dynamic>>> fetchTitleCatalog() async {
     try {
-      final List<dynamic> rows = await _client.from(_titleCatalogTable).select();
+      final List<dynamic> rows = await _client
+          .from(_titleCatalogTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 칭호 카탈로그 조회 실패: $error');
@@ -1442,9 +1606,14 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userTitlesTable).select('title_id').eq('user_id', userId);
-      return [for (final dynamic row in rows) (row as Map<String, dynamic>)['title_id'] as String];
+      final List<dynamic> rows = await _client
+          .from(_userTitlesTable)
+          .select('title_id')
+          .eq('user_id', userId);
+      return [
+        for (final dynamic row in rows)
+          (row as Map<String, dynamic>)['title_id'] as String,
+      ];
     } catch (error) {
       debugPrint('[SupabaseManager] 보유 칭호 조회 실패: $error');
       return const [];
@@ -1480,7 +1649,10 @@ class SupabaseManager {
       if (userId == null) {
         return false;
       }
-      await _client.from(_userTitlesTable).insert({'user_id': userId, 'title_id': titleId});
+      await _client.from(_userTitlesTable).insert({
+        'user_id': userId,
+        'title_id': titleId,
+      });
       return true;
     } catch (error) {
       debugPrint('[SupabaseManager] 칭호 획득 기록 실패: $error');
@@ -1495,7 +1667,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'equipped_title': titleId}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'equipped_title': titleId})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 장착 칭호 동기화 실패: $error');
     }
@@ -1526,7 +1701,9 @@ class SupabaseManager {
   /// 이전에 캐시해 둔 값을 그대로 유지한다.
   Future<List<Map<String, dynamic>>> fetchPetStatMetadata() async {
     try {
-      final List<dynamic> rows = await _client.from(_petStatMetadataTable).select();
+      final List<dynamic> rows = await _client
+          .from(_petStatMetadataTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 펫 스탯 메타데이터 조회 실패: $error');
@@ -1564,8 +1741,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userArtifactsTable).select().eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userArtifactsTable)
+          .select()
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 유물 진행도 조회 실패: $error');
@@ -1612,8 +1791,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userRunesTable).select().eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userRunesTable)
+          .select()
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 룬 목록 조회 실패: $error');
@@ -1684,7 +1865,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'rune_fragments': amount}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'rune_fragments': amount})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 룬 조각 동기화 실패: $error');
     }
@@ -1796,7 +1980,9 @@ class SupabaseManager {
 
   Future<List<Map<String, dynamic>>> fetchEquipmentSets() async {
     try {
-      final List<dynamic> rows = await _client.from(_equipmentSetsTable).select();
+      final List<dynamic> rows = await _client
+          .from(_equipmentSetsTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 장비 세트 카탈로그 조회 실패: $error');
@@ -1823,7 +2009,9 @@ class SupabaseManager {
   /// 이전에 캐시해 둔 카탈로그를 유지한다.
   Future<List<Map<String, dynamic>>> fetchSkillMetadata() async {
     try {
-      final List<dynamic> rows = await _client.from(_skillMetadataTable).select();
+      final List<dynamic> rows = await _client
+          .from(_skillMetadataTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 액티브 스킬 카탈로그 조회 실패: $error');
@@ -1838,8 +2026,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userSkillsTable).select().eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userSkillsTable)
+          .select()
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 액티브 스킬 진행도 조회 실패: $error');
@@ -1913,7 +2103,9 @@ class SupabaseManager {
   /// 유지한다.
   Future<List<Map<String, dynamic>>> fetchCharacterMetadata() async {
     try {
-      final List<dynamic> rows = await _client.from(_characterMetadataTable).select();
+      final List<dynamic> rows = await _client
+          .from(_characterMetadataTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 캐릭터 기본 스탯/성장률 조회 실패: $error');
@@ -1944,7 +2136,8 @@ class SupabaseManager {
   // 전제다 — PostgREST가 그 관계를 못 찾으면 이 쿼리만 별도로 손보면 된다.
   static const String _worldBossConfigTable = 'world_boss_config';
   static const String _userWorldBossTable = 'user_world_boss';
-  static const String _worldBossRankingRewardsTable = 'world_boss_ranking_rewards';
+  static const String _worldBossRankingRewardsTable =
+      'world_boss_ranking_rewards';
 
   static const String _monsterDropTableTable = 'monster_drop_table';
 
@@ -1955,7 +2148,9 @@ class SupabaseManager {
   /// 테이블을 그대로 유지한다.
   Future<List<Map<String, dynamic>>> fetchMonsterDropTable() async {
     try {
-      final List<dynamic> rows = await _client.from(_monsterDropTableTable).select();
+      final List<dynamic> rows = await _client
+          .from(_monsterDropTableTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 몬스터 드랍 테이블 조회 실패: $error');
@@ -1972,7 +2167,9 @@ class SupabaseManager {
   /// 설정을 그대로 유지한다.
   Future<List<Map<String, dynamic>>> fetchDungeonRewardsConfig() async {
     try {
-      final List<dynamic> rows = await _client.from(_dungeonRewardsConfigTable).select();
+      final List<dynamic> rows = await _client
+          .from(_dungeonRewardsConfigTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 던전 보상 설정 조회 실패: $error');
@@ -1986,7 +2183,9 @@ class SupabaseManager {
   /// 캐시해 둔 카탈로그를 그대로 유지한다.
   Future<List<Map<String, dynamic>>> fetchConsumableCatalog() async {
     try {
-      final List<dynamic> rows = await _client.from(_consumableItemsTable).select();
+      final List<dynamic> rows = await _client
+          .from(_consumableItemsTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 소모품 카탈로그 조회 실패: $error');
@@ -2059,7 +2258,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'equipped_potion_id': potionId}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'equipped_potion_id': potionId})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 장착 물약 동기화 실패: $error');
     }
@@ -2111,7 +2313,11 @@ class SupabaseManager {
 
   /// [date]에 [itemId]를 "제한된 코인 구매" 경로로 산 횟수를 [count]
   /// (절대값)로 갱신한다.
-  Future<void> upsertDailyCoinPurchaseCount(String itemId, String date, int count) async {
+  Future<void> upsertDailyCoinPurchaseCount(
+    String itemId,
+    String date,
+    int count,
+  ) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -2133,7 +2339,10 @@ class SupabaseManager {
   /// null — 호출부([WorldBossManager])가 기본값을 그대로 유지한다.
   Future<Map<String, dynamic>?> fetchWorldBossConfig() async {
     try {
-      final List<dynamic> rows = await _client.from(_worldBossConfigTable).select().limit(1);
+      final List<dynamic> rows = await _client
+          .from(_worldBossConfigTable)
+          .select()
+          .limit(1);
       if (rows.isEmpty) {
         return null;
       }
@@ -2153,8 +2362,11 @@ class SupabaseManager {
       if (userId == null) {
         return null;
       }
-      final List<dynamic> rows =
-          await _client.from(_userWorldBossTable).select().eq('user_id', userId).limit(1);
+      final List<dynamic> rows = await _client
+          .from(_userWorldBossTable)
+          .select()
+          .eq('user_id', userId)
+          .limit(1);
       if (rows.isEmpty) {
         return null;
       }
@@ -2199,7 +2411,9 @@ class SupabaseManager {
   /// 여부와 무관하게(다른 유저 기록 열람) `currentUserId` 체크 없이
   /// 조회한다. 실패하면 빈 리스트 — 호출부([WorldBossRankingDialog])가
   /// "랭킹을 불러오지 못했습니다" 상태를 보여준다.
-  Future<List<Map<String, dynamic>>> fetchWorldBossRanking(String sessionId) async {
+  Future<List<Map<String, dynamic>>> fetchWorldBossRanking(
+    String sessionId,
+  ) async {
     try {
       final List<dynamic> rows = await _client
           .from(_userWorldBossTable)
@@ -2238,7 +2452,10 @@ class SupabaseManager {
   /// 예외를 삼키고 조용히 로그만 남긴다.
   Future<void> distributeWorldBossRewards(String sessionId) async {
     try {
-      await _client.rpc('distribute_world_boss_rewards', params: {'p_session_id': sessionId});
+      await _client.rpc(
+        'distribute_world_boss_rewards',
+        params: {'p_session_id': sessionId},
+      );
     } catch (error) {
       debugPrint('[SupabaseManager] 월드보스 보상 정산 RPC 실패: $error');
     }
@@ -2347,8 +2564,11 @@ class SupabaseManager {
   /// 공개 데이터.
   Future<Map<String, dynamic>?> fetchGuild(String guildId) async {
     try {
-      final List<dynamic> rows =
-          await _client.from(_guildsTable).select().eq('id', guildId).limit(1);
+      final List<dynamic> rows = await _client
+          .from(_guildsTable)
+          .select()
+          .eq('id', guildId)
+          .limit(1);
       if (rows.isEmpty) {
         return null;
       }
@@ -2381,8 +2601,11 @@ class SupabaseManager {
   /// 쪽이 여기서는 true라는 점에 주의).
   Future<bool> isGuildNameTaken(String name) async {
     try {
-      final List<dynamic> rows =
-          await _client.from(_guildsTable).select('id').eq('name', name).limit(1);
+      final List<dynamic> rows = await _client
+          .from(_guildsTable)
+          .select('id')
+          .eq('name', name)
+          .limit(1);
       return rows.isNotEmpty;
     } catch (error) {
       debugPrint('[SupabaseManager] 길드명 중복 확인 실패: $error');
@@ -2396,7 +2619,10 @@ class SupabaseManager {
   /// 실패해도 되돌려주는 처리는 호출부 책임이 아니라 그대로 손실로
   /// 남는다 — 서버 함수 없이 클라이언트 2단계 insert라 어쩔 수 없는
   /// 한계다).
-  Future<String?> createGuild({required String name, required String emblem}) async {
+  Future<String?> createGuild({
+    required String name,
+    required String emblem,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -2492,7 +2718,10 @@ class SupabaseManager {
   /// 결과만 별도로 밀어 넣을 때 쓴다.
   Future<void> updateGuildLevel(String guildId, int level) async {
     try {
-      await _client.from(_guildsTable).update({'level': level}).eq('id', guildId);
+      await _client
+          .from(_guildsTable)
+          .update({'level': level})
+          .eq('id', guildId);
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 레벨 동기화 실패: $error');
     }
@@ -2501,7 +2730,10 @@ class SupabaseManager {
   /// 길드 공지사항 갱신 — 길드장 전용(권한 체크는 [GuildManager]에서).
   Future<void> updateGuildNotice(String guildId, String notice) async {
     try {
-      await _client.from(_guildsTable).update({'notice': notice}).eq('id', guildId);
+      await _client
+          .from(_guildsTable)
+          .update({'notice': notice})
+          .eq('id', guildId);
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 공지 동기화 실패: $error');
     }
@@ -2510,7 +2742,10 @@ class SupabaseManager {
   /// 길드 엠블럼 갱신 — 길드장 전용(권한 체크는 [GuildManager]에서).
   Future<void> updateGuildEmblem(String guildId, String emblem) async {
     try {
-      await _client.from(_guildsTable).update({'emblem': emblem}).eq('id', guildId);
+      await _client
+          .from(_guildsTable)
+          .update({'emblem': emblem})
+          .eq('id', guildId);
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 엠블럼 동기화 실패: $error');
     }
@@ -2540,7 +2775,9 @@ class SupabaseManager {
   /// `profiles` 전체 읽기를 허용해 뒀다는 전제라 로그인 상태면 항상 값을
   /// 받아올 수 있어야 한다. [GuildManager.refreshMembers]가 1차 조인 결과
   /// 중 닉네임 해석에 실패한 행만 골라 이걸로 보충한다.
-  Future<Map<String, String>> fetchNicknamesByUserIds(List<String> userIds) async {
+  Future<Map<String, String>> fetchNicknamesByUserIds(
+    List<String> userIds,
+  ) async {
     if (userIds.isEmpty) {
       return const {};
     }
@@ -2576,11 +2813,16 @@ class SupabaseManager {
 
   /// 채팅 탭 진입 시 최근 [limit]개 메시지를 오래된 순으로 가져온다 —
   /// `profiles(nickname)` 임베드로 발신자 닉네임까지 한 번에 가져온다.
-  Future<List<Map<String, dynamic>>> fetchGuildMessages(String guildId, {int limit = 100}) async {
+  Future<List<Map<String, dynamic>>> fetchGuildMessages(
+    String guildId, {
+    int limit = 100,
+  }) async {
     try {
       final List<dynamic> rows = await _client
           .from(_guildMessagesTable)
-          .select('id, guild_id, user_id, message, created_at, profiles(nickname)')
+          .select(
+            'id, guild_id, user_id, message, created_at, profiles(nickname)',
+          )
           .eq('guild_id', guildId)
           .order('created_at', ascending: false)
           .limit(limit);
@@ -2615,11 +2857,7 @@ class SupabaseManager {
       }
       final Map<String, dynamic> row = await _client
           .from(_guildMessagesTable)
-          .insert({
-            'guild_id': guildId,
-            'user_id': userId,
-            'message': message,
-          })
+          .insert({'guild_id': guildId, 'user_id': userId, 'message': message})
           .select('id, guild_id, user_id, message, created_at')
           .single();
       return row;
@@ -2678,7 +2916,11 @@ class SupabaseManager {
 
   /// [targetUserId]의 직책을 [role]('elder'|'member')로 바꾼다 — 길드장
   /// 전용(권한 체크는 [GuildManager]에서).
-  Future<void> updateGuildMemberRole(String guildId, String targetUserId, String role) async {
+  Future<void> updateGuildMemberRole(
+    String guildId,
+    String targetUserId,
+    String role,
+  ) async {
     try {
       await _client
           .from(_guildMembersTable)
@@ -2718,7 +2960,10 @@ class SupabaseManager {
       if (userId == null) {
         return false;
       }
-      await _client.from(_profilesTable).update({'guild_coin': 0}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'guild_coin': 0})
+          .eq('id', userId);
       await _client
           .from(_guildMembersTable)
           .delete()
@@ -2764,7 +3009,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'guild_coin': amount}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'guild_coin': amount})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 코인 동기화 실패: $error');
     }
@@ -2809,7 +3057,9 @@ class SupabaseManager {
   /// 가 이전에 캐시해 둔 카탈로그를 그대로 유지한다.
   Future<List<Map<String, dynamic>>> fetchGuildShopItems() async {
     try {
-      final List<dynamic> rows = await _client.from(_guildShopItemsTable).select();
+      final List<dynamic> rows = await _client
+          .from(_guildShopItemsTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 상점 카탈로그 조회 실패: $error');
@@ -2840,8 +3090,11 @@ class SupabaseManager {
       if (userId == null) {
         return null;
       }
-      final List<dynamic> rows =
-          await _client.from(_userArenaTable).select().eq('user_id', userId).limit(1);
+      final List<dynamic> rows = await _client
+          .from(_userArenaTable)
+          .select()
+          .eq('user_id', userId)
+          .limit(1);
       if (rows.isEmpty) {
         return null;
       }
@@ -2883,7 +3136,9 @@ class SupabaseManager {
   /// 넓게 가져온 뒤 [ArenaManager.fetchOpponents]가 그중 3명을
   /// 클라이언트에서 셔플해 고른다. `profiles(nickname)` 임베드로 닉네임도
   /// 한 번에 가져온다.
-  Future<List<Map<String, dynamic>>> fetchArenaOpponentCandidates(int myScore) async {
+  Future<List<Map<String, dynamic>>> fetchArenaOpponentCandidates(
+    int myScore,
+  ) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -2940,7 +3195,10 @@ class SupabaseManager {
   /// (월드보스 [distributeWorldBossRewards]와 같은 관례).
   Future<void> distributeArenaRewards(String seasonId) async {
     try {
-      await _client.rpc('distribute_arena_rewards', params: {'p_season_id': seasonId});
+      await _client.rpc(
+        'distribute_arena_rewards',
+        params: {'p_season_id': seasonId},
+      );
     } catch (error) {
       debugPrint('[SupabaseManager] 결투장 보상 정산 RPC 실패: $error');
     }
@@ -2963,7 +3221,9 @@ class SupabaseManager {
   /// 일일/주간/월간 퀘스트 풀 전체 — 로그인 여부와 무관한 공개 데이터.
   Future<List<Map<String, dynamic>>> fetchQuestCatalog() async {
     try {
-      final List<dynamic> rows = await _client.from(_questCatalogTable).select();
+      final List<dynamic> rows = await _client
+          .from(_questCatalogTable)
+          .select();
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 퀘스트 카탈로그 조회 실패: $error');
@@ -2978,8 +3238,10 @@ class SupabaseManager {
       if (userId == null) {
         return const [];
       }
-      final List<dynamic> rows =
-          await _client.from(_userQuestsTable).select().eq('user_id', userId);
+      final List<dynamic> rows = await _client
+          .from(_userQuestsTable)
+          .select()
+          .eq('user_id', userId);
       return rows.cast<Map<String, dynamic>>();
     } catch (error) {
       debugPrint('[SupabaseManager] 퀘스트 진행도 조회 실패: $error');
@@ -2992,7 +3254,9 @@ class SupabaseManager {
   /// 몰리는 진행도 갱신(예: 몬스터 연속 처치)을 모아서 이 메서드 한 번으로
   /// 흘려보낸다(매 처치마다 네트워크 요청을 쏘지 않기 위함). [rows]의 각
   /// 항목은 `{quest_id, current_count, is_claimed}` 형태다.
-  Future<void> upsertUserQuestProgressBatch(List<Map<String, dynamic>> rows) async {
+  Future<void> upsertUserQuestProgressBatch(
+    List<Map<String, dynamic>> rows,
+  ) async {
     if (rows.isEmpty) {
       return;
     }
@@ -3001,9 +3265,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client
-          .from(_userQuestsTable)
-          .upsert([for (final Map<String, dynamic> row in rows) {...row, 'user_id': userId}]);
+      await _client.from(_userQuestsTable).upsert([
+        for (final Map<String, dynamic> row in rows)
+          {...row, 'user_id': userId},
+      ]);
     } catch (error) {
       debugPrint('[SupabaseManager] 퀘스트 진행도 일괄 동기화 실패: $error');
     }
@@ -3082,7 +3347,9 @@ class SupabaseManager {
   /// 현재 유저의 [seasonId] 시즌 배틀패스 상태(exp/프리미엄 여부/수령
   /// 이력) — 아직 한 번도 동기화된 적 없으면 null, 호출부
   /// ([BattlePassManager])가 기본값(0 exp/무료 패스)을 그대로 쓴다.
-  Future<Map<String, dynamic>?> fetchUserBattlePass({required String seasonId}) async {
+  Future<Map<String, dynamic>?> fetchUserBattlePass({
+    required String seasonId,
+  }) async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -3270,7 +3537,8 @@ class SupabaseManager {
 
   /// 현재 유저의 `profiles.daily_ad_views`/`last_ad_viewed_at`을 함께
   /// 조회한다 — 못 불러오면 null(호출부가 로컬 캐시를 유지).
-  Future<({int dailyAdViews, DateTime? lastAdViewedAt})?> fetchAdViewState() async {
+  Future<({int dailyAdViews, DateTime? lastAdViewedAt})?>
+  fetchAdViewState() async {
     try {
       final String? userId = currentUserId;
       if (userId == null) {
@@ -3287,7 +3555,9 @@ class SupabaseManager {
       final String? lastViewedRaw = row['last_ad_viewed_at'] as String?;
       return (
         dailyAdViews: (row['daily_ad_views'] as num?)?.toInt() ?? 0,
-        lastAdViewedAt: lastViewedRaw == null ? null : DateTime.tryParse(lastViewedRaw),
+        lastAdViewedAt: lastViewedRaw == null
+            ? null
+            : DateTime.tryParse(lastViewedRaw),
       );
     } catch (error) {
       debugPrint('[SupabaseManager] 광고 시청 상태 조회 실패: $error');
@@ -3306,10 +3576,13 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({
-        'daily_ad_views': dailyAdViews,
-        'last_ad_viewed_at': lastAdViewedAtIso,
-      }).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({
+            'daily_ad_views': dailyAdViews,
+            'last_ad_viewed_at': lastAdViewedAtIso,
+          })
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 광고 시청 상태 동기화 실패: $error');
     }
@@ -3362,7 +3635,11 @@ class SupabaseManager {
       }
       final dynamic response = await _client.rpc(
         'guild_boss_attack',
-        params: {'p_guild_id': guildId, 'p_user_id': userId, 'p_damage': damage},
+        params: {
+          'p_guild_id': guildId,
+          'p_user_id': userId,
+          'p_damage': damage,
+        },
       );
       final List<dynamic> rows = response as List<dynamic>;
       if (rows.isEmpty) {
@@ -3382,7 +3659,9 @@ class SupabaseManager {
   /// 두므로, 여기서는 조회만 한다([fetchWorldBossRanking]과 같은
   /// `profiles(nickname)` 임베드 관례). 실패하면 빈 리스트(호출부가 이전
   /// 캐시를 유지).
-  Future<List<Map<String, dynamic>>> fetchGuildBossLeaderboard(String guildId) async {
+  Future<List<Map<String, dynamic>>> fetchGuildBossLeaderboard(
+    String guildId,
+  ) async {
     try {
       final List<dynamic> rows = await _client
           .from(_guildBossParticipantsTable)
@@ -3444,7 +3723,11 @@ class SupabaseManager {
   /// null(호출부가 [GuildWarConfig.fallback]으로 대체).
   Future<Map<String, dynamic>?> fetchGuildWarConfig() async {
     try {
-      return await _client.from(_guildWarConfigTable).select().eq('id', 1).maybeSingle();
+      return await _client
+          .from(_guildWarConfigTable)
+          .select()
+          .eq('id', 1)
+          .maybeSingle();
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 전쟁 설정 조회 실패: $error');
       return null;
@@ -3482,7 +3765,11 @@ class SupabaseManager {
   /// 서버 전체 누적 세금 풀 — 신청 화면 중앙에 실시간으로 보여준다.
   Future<Map<String, dynamic>?> fetchGlobalTaxPool() async {
     try {
-      return await _client.from(_globalTaxPoolTable).select().eq('id', 1).maybeSingle();
+      return await _client
+          .from(_globalTaxPoolTable)
+          .select()
+          .eq('id', 1)
+          .maybeSingle();
     } catch (error) {
       debugPrint('[SupabaseManager] 세금 풀 조회 실패: $error');
       return null;
@@ -3512,13 +3799,18 @@ class SupabaseManager {
   /// [guildId]가 [weekKey] 전쟁에 신청한다 — 이미 신청한 행이 있으면
   /// 아무것도 덮어쓰지 않는다(`ignoreDuplicates`로 최초 신청만 반영, 이미
   /// 매칭된 이후 재신청 시도로 상태가 되돌아가는 사고를 막는다).
-  Future<bool> applyForGuildWar({required String guildId, required String weekKey}) async {
+  Future<bool> applyForGuildWar({
+    required String guildId,
+    required String weekKey,
+  }) async {
     try {
-      await _client.from(_guildWarsTable).upsert(
-        {'guild_id': guildId, 'week_key': weekKey},
-        onConflict: 'week_key,guild_id',
-        ignoreDuplicates: true,
-      );
+      await _client
+          .from(_guildWarsTable)
+          .upsert(
+            {'guild_id': guildId, 'week_key': weekKey},
+            onConflict: 'week_key,guild_id',
+            ignoreDuplicates: true,
+          );
       return true;
     } catch (error) {
       debugPrint('[SupabaseManager] 길드 전쟁 신청 실패: $error');
@@ -3633,7 +3925,10 @@ class SupabaseManager {
       if (userId == null) {
         return;
       }
-      await _client.from(_profilesTable).update({'combat_power': power}).eq('id', userId);
+      await _client
+          .from(_profilesTable)
+          .update({'combat_power': power})
+          .eq('id', userId);
     } catch (error) {
       debugPrint('[SupabaseManager] 전투력 동기화 실패: $error');
     }

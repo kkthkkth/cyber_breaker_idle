@@ -48,16 +48,41 @@ class GuildChatManager extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
 
-    final List<Map<String, dynamic>> rows = await SupabaseManager.instance.fetchGuildMessages(guildId);
-    messages = rows
-        .map((row) => GuildMessage.fromJson(row, resolveNickname: _resolveNickname))
-        .toList();
-    isLoading = false;
-    notifyListeners();
+    // [보안 감사 2026-08-21] 행 하나가 예상 밖 모양이어도(스키마 드리프트
+    // 등) 전체가 죽지 않도록 항목별로 try/catch한다 — 그리고 무엇이
+    // 일어나든 [isLoading]은 반드시 풀려야 하므로 try/finally로 감싼다
+    // ([FriendManager.loadAll]과 같은 이유의 같은 수정).
+    try {
+      final List<Map<String, dynamic>> rows =
+          await SupabaseManager.instance.fetchGuildMessages(guildId);
+      final List<GuildMessage> parsed = [];
+      for (final Map<String, dynamic> row in rows) {
+        try {
+          parsed.add(GuildMessage.fromJson(row, resolveNickname: _resolveNickname));
+        } catch (error) {
+          debugPrint('[GuildChatManager] 메시지 파싱 실패, 건너뜀: $error');
+        }
+      }
+      messages = parsed;
+    } catch (error) {
+      debugPrint('[GuildChatManager] 채팅 내역 로드 실패: $error');
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
 
     _subscribedGuildId = guildId;
     _channel = SupabaseManager.instance.subscribeToGuildMessages(guildId, (row) {
-      final GuildMessage incoming = GuildMessage.fromJson(row, resolveNickname: _resolveNickname);
+      // 이 콜백은 길드원 누군가 메시지를 보낼 때마다 실시간으로 계속
+      // 불린다 — 여기서 예외가 나면(파싱 실패) 이후 모든 채팅 갱신이
+      // 조용히 끊길 수 있으므로 개별적으로 방어한다.
+      final GuildMessage incoming;
+      try {
+        incoming = GuildMessage.fromJson(row, resolveNickname: _resolveNickname);
+      } catch (error) {
+        debugPrint('[GuildChatManager] 실시간 메시지 파싱 실패, 건너뜀: $error');
+        return;
+      }
       // 내가 방금 보낸 메시지도 이 콜백으로 되돌아온다(Realtime은 누가
       // 바꿨는지와 무관하게 그 행을 볼 수 있는 모든 구독자에게 브로드캐스트
       // 한다) — id가 이미 있으면 중복 추가하지 않는다.

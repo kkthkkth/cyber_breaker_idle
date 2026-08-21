@@ -20,12 +20,12 @@ class OfflineRewardManager with WidgetsBindingObserver {
 
   static final OfflineRewardManager instance = OfflineRewardManager._internal();
 
-  /// 최소 1분 이상 자리를 비웠을 때만 보상을 계산한다(요구사항 — 원래
-  /// 10분이었지만, 웹(localhost) 테스트 중 "몇 분만 탭을 닫아도 팝업이
-  /// 안 뜬다"는 피드백을 받아 1분으로 낮췄다). 실제 운영 환경에서 너무
-  /// 자주(예: 앱 전환 잠깐 했다가 돌아올 때마다) 팝업이 뜨는 게 거슬리면
-  /// 이 상수 하나만 다시 올리면 된다.
-  static const int _minOfflineSeconds = 60;
+  /// 최소 10분 이상 자리를 비웠을 때만 보상을 계산한다(요구사항: "오프라인
+  /// 시간이 최소 10분 이상 지났을 때만"). 한때 웹(localhost) 테스트
+  /// 편의를 위해 1분으로 낮춰뒀던 적이 있는데, 2026-08-21 요구사항에서
+  /// 10분을 다시 명시적으로 요청해 원복했다 — 테스트 중 너무 안 뜬다
+  /// 싶으면 이 상수 하나만 잠깐 낮추면 된다.
+  static const int _minOfflineSeconds = 600;
   static const String _lastExitTimeKey = 'offline_reward_last_exit_time';
 
   /// [startPeriodicAutoSave]가 만드는 반복 타이머 — 웹(localhost 포함)은
@@ -63,7 +63,8 @@ class OfflineRewardManager with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       _saveExitTime();
     } else if (state == AppLifecycleState.resumed) {
       checkOfflineReward();
@@ -82,7 +83,9 @@ class OfflineRewardManager with WidgetsBindingObserver {
   /// 이 한 번 지난 뒤부터 시작한다 — 그때는 이미 [checkOfflineReward]가
   /// 이전 값을 다 읽고 소비한 뒤이므로 안전하다. 중복 호출해도 안전하도록
   /// 기존 타이머가 있으면 먼저 취소한다(예: 핫 리스타트).
-  void startPeriodicAutoSave({Duration interval = const Duration(seconds: 30)}) {
+  void startPeriodicAutoSave({
+    Duration interval = const Duration(seconds: 30),
+  }) {
     _periodicSaveTimer?.cancel();
     _periodicSaveTimer = Timer.periodic(interval, (_) => _saveExitTime());
   }
@@ -117,8 +120,9 @@ class OfflineRewardManager with WidgetsBindingObserver {
     final DateTime now = await getNetworkTime();
     await prefs.setInt(_lastExitTimeKey, now.millisecondsSinceEpoch);
 
-    DateTime? lastExitTime =
-        lastExitMillis != null ? DateTime.fromMillisecondsSinceEpoch(lastExitMillis) : null;
+    DateTime? lastExitTime = lastExitMillis != null
+        ? DateTime.fromMillisecondsSinceEpoch(lastExitMillis)
+        : null;
 
     // 이 기기에 로컬 종료 시각 기록이 없다(최초 실행/재설치/기기 변경 등)
     // — profiles.last_seen(길드 접속중 하트비트로 이미 관리되던 값,
@@ -150,10 +154,12 @@ class OfflineRewardManager with WidgetsBindingObserver {
     // 기준으로 분당 획득량을 내고, 여기에 오프라인 시간을 곱한다.
     final double goldPerSecond = GameManager.instance.offlineGoldPerMinute / 60;
     final int rewardGold =
-        (offlineSeconds * goldPerSecond * config.offlineRewardEfficiency).round();
+        (offlineSeconds * goldPerSecond * config.offlineRewardEfficiency)
+            .round();
 
     final int estimatedKillCount =
-        (GameManager.instance.estimatedKillsPerHour * offlineSeconds / 3600).round();
+        (GameManager.instance.estimatedKillsPerHour * offlineSeconds / 3600)
+            .round();
     final ({int equipmentCount, Map<ConsumableType, int> consumables}) drops =
         MonsterDropTableManager.instance.expectedDropsForKills(
           killCount: estimatedKillCount,
@@ -168,7 +174,8 @@ class OfflineRewardManager with WidgetsBindingObserver {
     final int bpExpGained =
         (offlineSeconds / 60 * BattlePassManager.bpExpPerOfflineMinute).round();
     final int runeFragmentsGained =
-        (offlineSeconds / 60 * RuneManager.runeFragmentsPerOfflineMinute).round();
+        (offlineSeconds / 60 * RuneManager.runeFragmentsPerOfflineMinute)
+            .round();
 
     if (rewardGold > 0 ||
         drops.equipmentCount > 0 ||
@@ -196,6 +203,13 @@ class OfflineRewardManager with WidgetsBindingObserver {
   /// 값을 그대로 지급한다(팝업에 보여준 숫자와 실제로 받는 숫자가 항상
   /// 같도록) — 활성 시즌이 없으면 BattlePassManager.addBpExp가, 0이면
   /// RuneManager.addFragments가 스스로 아무 일도 하지 않는다.
+  ///
+  /// [doubled]는 [OfflineRewardDialog]가 pop한 값 그대로다 — 광고를 끝까지
+  /// 봤을 때만 true(요구사항: "광고 보고 보상 2배 수령"). 실제 지급 배율을
+  /// 다이얼로그가 아니라 여기서 최종 확정하는 이유는, 다이얼로그의
+  /// 카운트업 애니메이션이 보여주는 "진행 중인" 값이 아니라 사용자가
+  /// 최종적으로 선택한 배율만 신뢰해야 하기 때문이다(둘이 서로 다른
+  /// 소스를 보면 화면에 보인 숫자와 실제로 받은 재화가 어긋날 수 있다).
   void claimReward({
     required int rewardGold,
     required int offlineSeconds,
@@ -203,22 +217,27 @@ class OfflineRewardManager with WidgetsBindingObserver {
     Map<ConsumableType, int> consumableDrops = const {},
     int bpExpGained = 0,
     int runeFragmentsGained = 0,
+    bool doubled = false,
   }) {
-    GameManager.instance.addGold(rewardGold);
+    final int multiplier = doubled ? 2 : 1;
+    GameManager.instance.addGold(rewardGold * multiplier);
     unawaited(SupabaseManager.instance.updateLastSeen());
 
-    unawaited(BattlePassManager.instance.addBpExp(bpExpGained));
-    RuneManager.instance.addFragments(runeFragmentsGained);
+    unawaited(BattlePassManager.instance.addBpExp(bpExpGained * multiplier));
+    RuneManager.instance.addFragments(runeFragmentsGained * multiplier);
 
     final List<ItemGrade> grades =
-        MonsterDropTableManager.equipmentGradesForChapter(GameManager.instance.chapter);
-    for (int i = 0; i < equipmentCount; i++) {
+        MonsterDropTableManager.equipmentGradesForChapter(
+          GameManager.instance.chapter,
+        );
+    for (int i = 0; i < equipmentCount * multiplier; i++) {
       EquipmentManager.instance.generateGuaranteedLoot(grades);
     }
 
     consumableDrops.forEach((type, count) {
-      if (count > 0) {
-        ConsumableManager.instance.addItem(type, count);
+      final int total = count * multiplier;
+      if (total > 0) {
+        ConsumableManager.instance.addItem(type, total);
       }
     });
   }

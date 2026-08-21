@@ -29,7 +29,6 @@ class WorldBossBattleScreen extends StatefulWidget {
 
 class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
   late final IdleGame _game;
-  late final Timer _ticker;
   bool _resultShown = false;
 
   // 이 화면 진입 전 스킬 데미지가 향하던 곳(보통 홈 화면의 IdleGame) —
@@ -51,10 +50,9 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
     _game = IdleGame();
     _game.onDungeonComplete = _handleDungeonComplete;
     _game.startDungeon(GameMode.worldBoss);
-    _ticker = Timer.periodic(
-      const Duration(milliseconds: 100),
-      (_) => setState(() {}),
-    );
+    // [퍼포먼스 감사 2026-08-21] 화면 전체를 다시 그리던 폴링 타이머 제거
+    // — [_WorldBossTimerBadge]/[_WorldBossMonsterHpBar]가 각자 스스로
+    // 틱한다([_DungeonBattleScreen]과 같은 수정).
 
     _previousDamageHandler = SkillManager.instance.damageHandler;
     SkillManager.instance.damageHandler = _game.applySkillDamage;
@@ -64,7 +62,6 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
 
   @override
   void dispose() {
-    _ticker.cancel();
     if (identical(
       SkillManager.instance.damageHandler,
       _game.applySkillDamage,
@@ -102,18 +99,22 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
     if (_resultShown || !mounted) {
       return;
     }
-    _resultShown = true;
+    // [퍼포먼스 감사 2026-08-21] 폴링 타이머를 없앴으므로 뒤로가기 버튼
+    // 활성화를 반영하려면 명시적으로 setState해야 한다.
+    setState(() => _resultShown = true);
 
     final double damageDealt = _game.worldBossDamageDealt;
     // 결과 팝업이 "이번 세션 누적 데미지"(WorldBossManager.totalDamageDealt)를
     // 곧바로 보여줘야 하므로, 로컬 반영이 끝날 때까지 기다린 뒤 팝업을
-        // 띄운다(서버 동기화 자체는 recordBattleDamage 내부에서 여전히
+    // 띄운다(서버 동기화 자체는 recordBattleDamage 내부에서 여전히
     // fire-and-forget이라 오래 걸리지 않는다).
     await WorldBossManager.instance.recordBattleDamage(damageDealt);
     if (!mounted) {
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showResultDialog(damageDealt));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _showResultDialog(damageDealt),
+    );
   }
 
   void _showResultDialog(double damageDealt) {
@@ -127,7 +128,9 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             '도전 종료',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
@@ -136,7 +139,10 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('용의 동굴에서 물러났습니다.', style: TextStyle(color: Colors.white70)),
+              const Text(
+                '용의 동굴에서 물러났습니다.',
+                style: TextStyle(color: Colors.white70),
+              ),
               const SizedBox(height: 4),
               Text(
                 '이번 전투 데미지: ${NumberFormatter.format(damageDealt)}',
@@ -145,7 +151,11 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
               const SizedBox(height: 10),
               const Text(
                 '이번 회차 내 총 누적 데미지',
-                style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               Text(
                 NumberFormatter.format(sessionTotal.toDouble()),
@@ -179,10 +189,6 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final double hpRatio = _game.dungeonMonsterMaxHp <= 0
-        ? 0
-        : (_game.dungeonMonsterHp / _game.dungeonMonsterMaxHp).clamp(0.0, 1.0);
-
     return PopScope(
       canPop: _resultShown,
       child: Scaffold(
@@ -232,26 +238,7 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
                       top: 12,
                       left: 0,
                       right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '남은 시간 ${_game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
-                            style: const TextStyle(
-                              color: Colors.orangeAccent,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: Center(child: _WorldBossTimerBadge(game: _game)),
                     ),
                     const Positioned(
                       bottom: 90,
@@ -263,30 +250,7 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
                       bottom: 16,
                       left: 16,
                       right: 16,
-                      child: Column(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: LinearProgressIndicator(
-                              value: hpRatio,
-                              minHeight: 14,
-                              backgroundColor: Colors.white24,
-                              valueColor: const AlwaysStoppedAnimation(
-                                Colors.redAccent,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${NumberFormatter.format(_game.dungeonMonsterHp.clamp(0, _game.dungeonMonsterMaxHp))} / '
-                            '${NumberFormatter.format(_game.dungeonMonsterMaxHp)}',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
+                      child: _WorldBossMonsterHpBar(game: _game),
                     ),
                   ],
                 ),
@@ -295,6 +259,111 @@ class _WorldBossBattleScreenState extends State<WorldBossBattleScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "남은 시간" 배지 — 스스로만 100ms마다 다시 그린다([_DungeonTimerBadge]
+/// 와 같은 이유의 같은 패턴).
+class _WorldBossTimerBadge extends StatefulWidget {
+  const _WorldBossTimerBadge({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_WorldBossTimerBadge> createState() => _WorldBossTimerBadgeState();
+}
+
+class _WorldBossTimerBadgeState extends State<_WorldBossTimerBadge> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '남은 시간 ${widget.game.dungeonTimeRemaining.clamp(0, 999).toStringAsFixed(1)}s',
+        style: const TextStyle(
+          color: Colors.orangeAccent,
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 몬스터 HP 바 — [_WorldBossTimerBadge]와 같은 이유로 분리.
+class _WorldBossMonsterHpBar extends StatefulWidget {
+  const _WorldBossMonsterHpBar({required this.game});
+
+  final IdleGame game;
+
+  @override
+  State<_WorldBossMonsterHpBar> createState() => _WorldBossMonsterHpBarState();
+}
+
+class _WorldBossMonsterHpBarState extends State<_WorldBossMonsterHpBar> {
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(milliseconds: 100),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double hpRatio = widget.game.dungeonMonsterMaxHp <= 0
+        ? 0
+        : (widget.game.dungeonMonsterHp / widget.game.dungeonMonsterMaxHp)
+              .clamp(0.0, 1.0);
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: LinearProgressIndicator(
+            value: hpRatio,
+            minHeight: 14,
+            backgroundColor: Colors.white24,
+            valueColor: const AlwaysStoppedAnimation(Colors.redAccent),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${NumberFormatter.format(widget.game.dungeonMonsterHp.clamp(0, widget.game.dungeonMonsterMaxHp))} / '
+          '${NumberFormatter.format(widget.game.dungeonMonsterMaxHp)}',
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }
