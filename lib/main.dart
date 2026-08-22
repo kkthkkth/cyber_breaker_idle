@@ -330,19 +330,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         // 앱의 메인 다크 컬러로 덮어써서 그 틈을 없앤다.
         scaffoldBackgroundColor: const Color(0xFF14141C),
         canvasColor: const Color(0xFF14141C),
-        // 기본 MaterialPageRoute 전환(플랫폼별 상이, 안드로이드는 특히
-        // 배경이 즉시 스냅되며 번쩍이는 느낌을 준다)을 페이드 기반 전환으로
-        // 통일해서, 화면이 겹치며 부드럽게 넘어가게 한다.
-        pageTransitionsTheme: PageTransitionsTheme(
-          builders: {
-            TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
-            TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-            TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-            TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
-            TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
-            TargetPlatform.fuchsia: FadeUpwardsPageTransitionsBuilder(),
-          },
-        ),
       ),
       home: const LoginScreen(),
     );
