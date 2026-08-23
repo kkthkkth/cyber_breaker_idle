@@ -22,7 +22,38 @@ enum NicknameUpdateResult { success, duplicate, error }
 /// 결과를 실시간으로 기다리는 포그라운드 동작이라 예외를 삼키지 않고
 /// 그대로 던진다 — 자세한 이유는 각 메서드 문서 참고.
 class SupabaseManager {
-  SupabaseManager._internal();
+  /// [주의: refresh_token_already_used 자가 치유 경로] gotrue(2.27.1,
+  /// gotrue_client.dart의 `_doRefresh`)는 저장된 리프레시 토큰이 이미
+  /// 다른 곳에서 소진됐고(다른 탭에서 먼저 갱신했거나, 서버가 세션을
+  /// 무효화한 경우 등) 지금 들고 있는 세션도 이미 만료 상태면, 스스로
+  /// `_removeSession()`(메모리) + `AuthChangeEvent.signedOut`
+  /// (`signOutReason: SignOutReason.sessionExpired`)을 쏜다 — 그리고
+  /// `supabase_flutter`의 `SupabaseAuth`가 그 이벤트를 받아
+  /// `_localStorage.removePersistedSession()`으로 브라우저 저장소까지
+  /// 같이 지운다(supabase_auth.dart 확인 완료). 즉 세션 자체는 이미
+  /// 안전하게 정리된다 — "화면이 멈췄다"는 인상은 실제 크래시가 아니라,
+  /// 이 이벤트가 지나가는 동안 [LoginScreen]이 아무 반응도 안 해서 로그가
+  /// 무섭게 찍히는 와중에 조용히 로그인 화면에 그대로 남아 있는 것뿐이다.
+  ///
+  /// 그래도 확실히 하기 위해 이 리스너를 추가한다 — 세션 만료로 인한
+  /// signedOut을 감지하면 [signOut]을 한 번 더 명시적으로 불러 로컬
+  /// 상태까지 확실하게 비운다. [signOut] 자신도 내부적으로
+  /// `AuthChangeEvent.signedOut`을 다시 쏘는데, 그건 `signOutReason:
+  /// SignOutReason.userInitiated`로 고정돼 있어(gotrue_client.dart의
+  /// `signOut()` 참고) 아래 리스너의 `sessionExpired` 조건에 안 걸린다 —
+  /// 그래서 "감지 → signOut → 그 이벤트를 또 감지 → 다시 signOut..."
+  /// 무한 루프에 빠지지 않는다.
+  SupabaseManager._internal() {
+    _client.auth.onAuthStateChange.listen((state) {
+      if (state.event == AuthChangeEvent.signedOut &&
+          state.signOutReason == SignOutReason.sessionExpired) {
+        debugPrint('[SupabaseManager] 세션 만료(리프레시 토큰 무효) 감지 — 로컬 세션을 확실히 정리합니다.');
+        unawaited(_client.auth.signOut().catchError((Object error) {
+          debugPrint('[SupabaseManager] 만료된 세션 정리 중 오류(무시 가능): $error');
+        }));
+      }
+    });
+  }
 
   static final SupabaseManager instance = SupabaseManager._internal();
 
@@ -1117,6 +1148,50 @@ class SupabaseManager {
     }
   }
 
+  /// [table]에서 `user_id`=[userId]인 기존 행 중 [currentIds]에 없는
+  /// (=더 이상 보유하지 않는) 행만 정확히 찾아 지운다. [syncUserPets]/
+  /// [syncUserEquipment]가 공유한다.
+  ///
+  /// [주의] 예전엔 `.not('id', 'in', currentIds)`로 "지금 보유 중인 전체
+  /// id 목록"을 그대로 쿼리스트링에 실어 보냈다 — 인벤토리가 커질수록
+  /// (실측: 장비 1500개 이상) 그 목록 자체가 길어져 URL이 서버 제한을
+  /// 넘으면서 `ClientException: Failed to fetch`(URI Too Long)로 동기화
+  /// 전체가 실패했다(보유 중인 아이템 하나하나가 아니라 "삭제할 게
+  /// 하나도 없어도" 이 필터 자체 때문에 늘 실패했다는 점이 함정이었다).
+  /// 대신 서버에 남아있는 id만 가볍게(`select('id')`) 받아와 로컬에서
+  /// 차집합을 계산해 실제로 지울 대상(보통 소수)만 골라내고, 그마저도
+  /// [_syncDeleteChunkSize] 단위로 나눠 지운다 — 삭제 대상 목록은 원래
+  /// 작지만, 혹시 한 번에 대량으로 사라지는 경우(예: 인벤토리 초기화)에도
+  /// 청크당 URL 길이가 항상 안전한 범위로 유지된다.
+  static const int _syncDeleteChunkSize = 150;
+
+  Future<void> _deleteRowsNotIn({
+    required String table,
+    required String userId,
+    required List<Object> currentIds,
+  }) async {
+    final List<dynamic> existingRows = await _client
+        .from(table)
+        .select('id')
+        .eq('user_id', userId);
+    final Set<Object> keepIds = currentIds.toSet();
+    final List<Object> staleIds = [
+      for (final dynamic row in existingRows)
+        if (!keepIds.contains((row as Map<String, dynamic>)['id']))
+          row['id'] as Object,
+    ];
+    for (int i = 0; i < staleIds.length; i += _syncDeleteChunkSize) {
+      final int end = i + _syncDeleteChunkSize < staleIds.length
+          ? i + _syncDeleteChunkSize
+          : staleIds.length;
+      await _client
+          .from(table)
+          .delete()
+          .eq('user_id', userId)
+          .inFilter('id', staleIds.sublist(i, end));
+    }
+  }
+
   /// 현재 유저의 `user_pets` 행을 [pets]로 맞춘다 — 더 이상 보유하지 않은
   /// 펫(뽑기 분해 등으로 사라짐)만 정확히 골라 지우고, 나머지는
   /// upsert(있으면 갱신, 없으면 삽입)한다. [EquipmentManager.saveEquipment]
@@ -1147,11 +1222,11 @@ class SupabaseManager {
       final List<Object> currentPetIds = [
         for (final Map<String, dynamic> pet in pets) pet['id'] as Object,
       ];
-      await _client
-          .from(_userPetsTable)
-          .delete()
-          .eq('user_id', userId)
-          .not('id', 'in', currentPetIds);
+      await _deleteRowsNotIn(
+        table: _userPetsTable,
+        userId: userId,
+        currentIds: currentPetIds,
+      );
 
       await _client.from(_userPetsTable).upsert([
         for (final Map<String, dynamic> pet in pets)
@@ -1210,11 +1285,11 @@ class SupabaseManager {
       final List<Object> currentIds = [
         for (final Map<String, dynamic> item in items) item['id'] as Object,
       ];
-      await _client
-          .from(_userEquipmentTable)
-          .delete()
-          .eq('user_id', userId)
-          .not('id', 'in', currentIds);
+      await _deleteRowsNotIn(
+        table: _userEquipmentTable,
+        userId: userId,
+        currentIds: currentIds,
+      );
 
       await _client.from(_userEquipmentTable).upsert([
         for (final Map<String, dynamic> item in items)

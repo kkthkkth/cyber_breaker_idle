@@ -14,15 +14,25 @@ import 'package:flutter/foundation.dart';
 ///
 /// | 파일                  | 용도                | 추천 팩(Kenney.nl)                                              |
 /// |-----------------------|--------------------|-----------------------------------------------------------------|
-/// | `bgm.mp3`             | 로비 배경음악(루프)  | https://kenney.nl/assets/music-jingles                          |
-/// | `dungeon_bgm.mp3`     | 던전 배경음악(루프)  | https://kenney.nl/assets/music-jingles (다른 트랙)               |
-/// | `hit.wav`             | 일반 타격음         | https://kenney.nl/assets/impact-sounds                          |
-/// | `critical.wav`        | 크리티컬 타격음(둔탁)| https://kenney.nl/assets/rpg-audio                               |
-/// | `coin.wav`            | 골드 획득음         | https://kenney.nl/assets/interface-sounds                       |
-/// | `gacha_reveal.wav`    | 가챠 결과 확인음    | https://kenney.nl/assets/ui-audio                                |
+/// | `bgm.ogg`             | 로비 배경음악(루프)  | https://kenney.nl/assets/music-jingles                          |
+/// | `dungeon_bgm.ogg`     | 던전 배경음악(루프)  | https://kenney.nl/assets/music-jingles (다른 트랙)               |
+/// | `hit.ogg`             | 일반 타격음         | https://kenney.nl/assets/impact-sounds                          |
+/// | `critical.ogg`        | 크리티컬 타격음(둔탁)| https://kenney.nl/assets/rpg-audio                               |
+/// | `coin.ogg`            | 골드 획득음         | https://kenney.nl/assets/interface-sounds                       |
+/// | `gacha_reveal.ogg`    | 가챠 결과 확인음    | https://kenney.nl/assets/ui-audio                                |
+///
+/// [주의] 파일명은 `.ogg`지만 실제로는 Ogg 컨테이너(매직 바이트 `OggS`)다 —
+/// 예전엔 이 6개 파일이 전부 `.mp3` 확장자를 달고 있었는데 내용물은 그대로
+/// Ogg였다. 데스크톱/모바일의 `audioplayers` 백엔드는 컨테이너를 스니핑해서
+/// 재생하는 경우가 많아 눈치채기 어려웠지만, 웹의 `<audio>` 엘리먼트는
+/// 확장자/MIME 타입으로 디코더를 고정해 버려서 매번 `MEDIA_ELEMENT_ERROR:
+/// Format error`로 재생이 실패했다(웹에서 SFX/BGM이 전혀 안 들리던 원인).
+/// 파일 내용을 다시 인코딩하지 않고 확장자만 실제 포맷에 맞게 `.ogg`로
+/// 바로잡아 해결했다 — Chrome/Firefox는 Ogg Vorbis를 `<audio>`로 네이티브
+/// 재생한다.
 ///
 /// 이 매니저는 위 6개 파일이 `assets/audio/`에 이미 존재한다고 가정하고
-/// 짜여 있다 — 실제 mp3/wav를 내려받아 그 폴더에 넣고 `pubspec.yaml`의
+/// 짜여 있다 — 실제 오디오를 내려받아 그 폴더에 넣고 `pubspec.yaml`의
 /// `assets/audio/` 선언(이미 추가돼 있음)만 확인하면 바로 재생된다.
 class SoundManager {
   SoundManager._internal();
@@ -30,10 +40,10 @@ class SoundManager {
   static final SoundManager instance = SoundManager._internal();
 
   static const List<String> _sfxFiles = [
-    'hit.wav',
-    'critical.wav',
-    'coin.wav',
-    'gacha_reveal.wav',
+    'hit.ogg',
+    'critical.ogg',
+    'coin.ogg',
+    'gacha_reveal.ogg',
   ];
 
   bool sfxEnabled = true;
@@ -77,9 +87,9 @@ class SoundManager {
     }
   }
 
-  Future<void> playLobbyBgm() => _playBgm('bgm.mp3');
+  Future<void> playLobbyBgm() => _playBgm('bgm.ogg');
 
-  Future<void> playDungeonBgm() => _playBgm('dungeon_bgm.mp3');
+  Future<void> playDungeonBgm() => _playBgm('dungeon_bgm.ogg');
 
   Future<void> _playBgm(String file) async {
     if (!bgmEnabled || _currentBgmFile == file || _brokenFiles.contains(file)) {
@@ -104,16 +114,16 @@ class SoundManager {
   }
 
   /// 일반(비크리티컬) 타격 — [IdleGame._resolveHit].
-  Future<void> playHit() => _playSfx('hit.wav');
+  Future<void> playHit() => _playSfx('hit.ogg');
 
   /// 크리티컬 타격 — 일반 타격음보다 더 둔탁한 별도 사운드.
-  Future<void> playCritical() => _playSfx('critical.wav');
+  Future<void> playCritical() => _playSfx('critical.ogg');
 
   /// 골드 획득 — 몬스터 처치/오프라인 보상 등 골드가 쏟아질 때.
-  Future<void> playCoin() => _playSfx('coin.wav');
+  Future<void> playCoin() => _playSfx('coin.ogg');
 
   /// 가챠 결과 확인 — [GachaRevealScreen]이 카드가 뒤집히는 순간 호출한다.
-  Future<void> playGachaReveal() => _playSfx('gacha_reveal.wav');
+  Future<void> playGachaReveal() => _playSfx('gacha_reveal.ogg');
 
   Future<void> _playSfx(String file) async {
     if (!sfxEnabled || _brokenFiles.contains(file)) {

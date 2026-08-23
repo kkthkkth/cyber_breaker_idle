@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../game/idle_game.dart';
 import '../managers/attendance_manager.dart';
 import '../managers/battle_pass_manager.dart';
+import '../managers/equipment_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/mailbox_manager.dart';
 import '../managers/mission_manager.dart';
@@ -17,6 +18,7 @@ import '../managers/title_manager.dart';
 import '../managers/tutorial_manager.dart';
 import '../managers/world_boss_manager.dart';
 import '../models/active_skill_model.dart';
+import '../models/equipment.dart';
 import '../models/mission_model.dart';
 import '../models/skill_model.dart';
 import '../models/title_model.dart';
@@ -59,6 +61,16 @@ class _HomeScreenState extends State<HomeScreen> {
     // MainNavigationScreen이 IndexedStack으로 모든 탭을 항상 마운트해
     // 두므로, 다른 탭을 보는 중에도 이 콜백이 살아있어 알림을 놓치지 않는다.
     WorldBossManager.instance.onBossAppeared = _onWorldBossAppeared;
+    // 바닥 텍스처가 비동기로 도착해 IdleGame이 캐릭터/몬스터 Y좌표를
+    // 바로잡은 직후(IdleGame._loadChapterTheme 문서 참고) _BattleView를
+    // 다시 그려서, 그 안의 HP 바 위치도 같은 자리로 맞춘다 — _BattleView의
+    // LayoutBuilder는 리사이즈 때만 다시 빌드되므로, 이 신호가 없으면
+    // 텍스처가 도착해도 HP 바만 예전 자리에 계속 멈춰 있는다.
+    _idleGame.onGroundThemeReady = () {
+      if (mounted) {
+        setState(() {});
+      }
+    };
   }
 
   @override
@@ -69,6 +81,10 @@ class _HomeScreenState extends State<HomeScreen> {
     )) {
       WorldBossManager.instance.onBossAppeared = null;
     }
+    // _idleGame은 이 State가 단독으로 소유한다(WorldBossManager.instance와
+    // 달리 공유 싱글턴이 아니다) — 다른 인스턴스가 덮어썼을 리 없으니
+    // identical 체크 없이 바로 지운다.
+    _idleGame.onGroundThemeReady = null;
     super.dispose();
   }
 
@@ -145,18 +161,49 @@ class _BattleView extends StatelessWidget {
     // [_MonsterHpBar]) 각각이 자기 몫만 [AnimatedBuilder]로 감싸서
     // 진행한다. Stack의 Positioned/여백/Z-순서/시각적 결과물은 전혀
     // 바뀌지 않았다 — 무엇이 언제 다시 빌드되는지만 좁혔다.
+    // [주의: width: double.infinity] HomeScreen의 바깥 Column이
+    // crossAxisAlignment를 stretch로 지정하지 않아서(기본값 center), 이
+    // 위젯이 받는 가로 제약은 "느슨함"(minWidth: 0)이다 — 세로는
+    // Expanded가 강제로 꽉 채우지만(tight) 가로는 그렇지 않다. 그런데 아래
+    // Stack엔 [_BossTimerBadge]처럼 Positioned로 안 감싼 채(자기 자신의
+    // build()가 조건부로 Positioned를 반환하는 패턴이라 그렇다) 보스전이
+    // 아닐 때 SizedBox.shrink()(크기 0)를 그대로 돌려주는 자식이 있다 —
+    // Flutter의 Stack은 "포지션 안 된 자식이 하나라도 있으면 그 자식들
+    // 크기에 맞춰(=제약의 최솟값부터) 스스로 크기를 정한다"는 규칙이 있어,
+    // 느슨한 가로 제약(최솟값 0) + 크기 0짜리 비-Positioned 자식이 겹치면
+    // Stack의 가로폭이 통째로 0이 돼 버린다 — 실측: LayoutBuilder는
+    // maxWidth=1085를 받는데 그 아래 GameWidget/Flame이 실제로 받는 크기는
+    // size=[0, 373.3](세로만 정상)이었다. width: double.infinity로 이
+    // Container 자체를 "가능한 최대 폭"으로 강제하면, 안쪽 LayoutBuilder는
+    // 항상 꽉 찬(tight) 가로 제약을 받으므로 어떤 자식이 뭘 반환하든 이
+    // 문제가 다시 생기지 않는다([_BossTimerBadge]도 별도로 방어해 뒀다).
     return Container(
+      width: double.infinity,
       color: const Color(0xFF0F0F17),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // IdleGame.playerXRatio/groundYRatio와 반드시 같은 값을
-          // 써야 한다 — 여기(Flutter 오버레이: HP 바/펫 아이콘)와
-          // Flame 쪽(PlayerAnimationComponent/RectangleComponent 몬스터)
-          // 이 서로 다른 비율을 쓰면 해상도가 바뀔 때마다 둘이 어긋난다.
+          // IdleGame.playerXRatio와 반드시 같은 값을 써야 한다 — 여기
+          // (Flutter 오버레이: HP 바/펫 아이콘)와 Flame 쪽
+          // (PlayerAnimationComponent/RectangleComponent 몬스터)이 서로
+          // 다른 비율을 쓰면 해상도가 바뀔 때마다 둘이 어긋난다.
           final double playerX = constraints.maxWidth * IdleGame.playerXRatio;
-          final double playerY = constraints.maxHeight * IdleGame.groundYRatio;
+          // [주의] 예전엔 여기서도 그냥 `constraints.maxHeight *
+          // IdleGame.groundYRatio`(고정 비율)를 썼다 — 그런데 실제
+          // 바닥 텍스처가 그려지는 위치는 텍스처 원본 가로세로비 +
+          // 화면 가로세로비로 매번 다시 계산되는 별개의 값이라, 특정
+          // 화면 비율에서 우연히 맞아떨어졌을 뿐이었다. 앱을 폰 폭
+          // (500px)으로 레터박스 처리하며 화면 비율이 바뀌자 캐릭터가
+          // 바닥에서 붕 뜬 것처럼 어긋났다(실측 확인됨). IdleGame쪽과
+          // 똑같이 [IdleGame.computeGroundY]를 그대로 호출해 실제 바닥
+          // 텍스처 위치를 직접 읽어오도록 고쳤다 — game.size를 읽는
+          // 대신(IdleGame.computeBattleStopX 문서와 같은 이유로) 이
+          // LayoutBuilder의 constraints를 그대로 넘긴다.
+          final double playerY = IdleGame.computeGroundY(
+            groundSpriteSize: game.groundSpriteSize,
+            screenSize: Vector2(constraints.maxWidth, constraints.maxHeight),
+          );
           // PlayerAnimationComponent.boxSize와 반드시 같은 값을 써야
-          // 한다 — 상자 크기가 바뀌면(56 → 180 → 120 → 60으로 조정돼
+          // 한다 — 상자 크기가 바뀌면(56 → 180 → 120 → 60 → 84로 조정돼
           // 온 이력) 이 HP 바 위치도 함께 따라가지 않으면 캐릭터
           // 머리와 겹쳐 보인다. 상수를 직접 참조하므로(하드코딩된
           // 숫자가 아니라) boxSize가 바뀌는 순간 이 위치도 자동으로
@@ -187,9 +234,38 @@ class _BattleView extends StatelessWidget {
           // 얹은 값이다.
           const double playerHpBarExtraLift = 24;
 
-          // 몬스터는 항상 화면 가로 중앙(전투 위치)에서 싸운다 — 몬스터
-          // HP 바를 그 머리 위, 몬스터 폭의 1.2배 너비로만 짧게 띄운다.
-          final double monsterCenterX = constraints.maxWidth / 2;
+          // [주의] 예전엔 "몬스터는 항상 화면 가로 중앙에서 싸운다"고
+          // 가정해 여기서 그냥 constraints.maxWidth / 2를 썼다 — 실제
+          // 전투 위치(IdleGame._battleStopX)는 "플레이어 위치 +
+          // 장착 캐릭터의 사거리"라 화면 정중앙과는 별개의 값이다. 좁은
+          // 모바일 폭에서는 이 캐릭터의 사거리가 우연히 화면 폭의
+          // 절반과 비슷해 어긋난 티가 잘 안 났을 뿐 — 화면이 넓어지거나
+          // 사거리가 다른 캐릭터를 장착하면 HP 바가 실제 몬스터 자리와
+          // 완전히 따로 놀았다(실측: 몬스터는 화면 왼쪽 근처인데 HP
+          // 바만 정중앙 근처에 떠 있었다).
+          //
+          // [주의: game.size를 직접 읽지 않는다] 처음엔 IdleGame에 이
+          // 값을 그대로 노출하는 공개 getter를 두고 여기서 읽게 했었다
+          // — 그런데 이 build()(HP 바 포함)는 Flame이 GameWidget의 실제
+          // 레이아웃을 아직 못 받은 시점에도 먼저 실행될 수 있어서, 그
+          // 순간 Game.size를 읽으면 hasLayout이 아직 false라 "size is
+          // not ready yet" 어서션이 그대로 터졌다(실측: 레드 스크린).
+          // 이 LayoutBuilder의 constraints는 그런 타이밍 문제가 없으므로
+          // (항상 유효), IdleGame.computeBattleStopX(순수 함수, size를
+          // 전혀 읽지 않는다)에 constraints.maxWidth를 직접 넘겨 같은
+          // 공식을 여기서 독자적으로 계산한다 — Positioned.fill로 감싼
+          // GameWidget이 결국 받게 될 크기와 이 constraints가 항상
+          // 같으므로(_BattleView의 Stack 안에 함께 있다), 결과는
+          // game.size를 읽었을 때와 완전히 동일하면서 레이스 컨디션만
+          // 없앤다.
+          final CharacterClass equippedCharacterClass =
+              EquipmentManager.instance.equippedItems[EquipType.character]?.classType ??
+              CharacterClass.warrior;
+          final double monsterCenterX = IdleGame.computeBattleStopX(
+            playerX: playerX,
+            attackRange: equippedCharacterClass.attackRange,
+            screenWidth: constraints.maxWidth,
+          );
           final double monsterTopY = playerY - IdleGame.monsterSize;
           final double monsterHpBarWidth = IdleGame.monsterSize * 1.2;
 
@@ -205,6 +281,18 @@ class _BattleView extends StatelessWidget {
           const double titleBadgeHeight = 20;
           const double titleBadgeGap = 4;
           const double titleBadgeMaxWidth = 140;
+          // 화면 폭이 titleBadgeMaxWidth/playerHpBarWidth보다 좁아지는
+          // 순간(리사이즈 도중 과도기 프레임 등) 아래 clamp의 상한이
+          // 하한(0)보다 작아져 ArgumentError로 이 서브트리 전체가
+          // 크래시했었다 — 상한 자체를 먼저 0 이상으로 고정해 둔다.
+          final double titleBadgeLeftMax =
+              constraints.maxWidth - titleBadgeMaxWidth < 0
+              ? 0.0
+              : constraints.maxWidth - titleBadgeMaxWidth;
+          final double playerHpBarLeftMax =
+              constraints.maxWidth - playerHpBarWidth < 0
+              ? 0.0
+              : constraints.maxWidth - playerHpBarWidth;
           final double titleBadgeTop =
               headTopY -
               playerHpBarBreathingRoom -
@@ -227,8 +315,8 @@ class _BattleView extends StatelessWidget {
                   case final PlayerTitle equippedTitle)
                 Positioned(
                   left: (playerX - titleBadgeMaxWidth / 2).clamp(
-                    0,
-                    constraints.maxWidth - titleBadgeMaxWidth,
+                    0.0,
+                    titleBadgeLeftMax,
                   ),
                   top: titleBadgeTop,
                   width: titleBadgeMaxWidth,
@@ -241,8 +329,8 @@ class _BattleView extends StatelessWidget {
                 ),
               Positioned(
                 left: (playerX - playerHpBarWidth / 2).clamp(
-                  0,
-                  constraints.maxWidth - playerHpBarWidth,
+                  0.0,
+                  playerHpBarLeftMax,
                 ),
                 // 캐릭터가 바닥에 서 있으므로 HP 바는 발밑이 아니라
                 // 머리 위에 띄운다 — 블록 높이(playerHpBarBlockHeight)
@@ -299,7 +387,17 @@ class _BattleView extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _ChapterLabel(manager: manager),
+                      // [주의] 예전엔 여기서 _ChapterLabel을 Flexible 없이
+                      // 그냥 넣었다 — 화면 폭이 넓을 땐(원래 데스크톱
+                      // 브라우저 전체 폭) 여유가 충분해 문제가 없었지만,
+                      // 앱 전체를 폰 폭(500px)으로 좁히고 나니 챕터
+                      // 라벨의 지역명·챕터명 부제("N지역 · ○○○")가 길어
+                      // 질 때 Row가 감당 못 하고 오른쪽으로 삐져나갔다
+                      // (RenderFlex overflow, 실측 확인됨). Flexible로
+                      // 감싸면 필요할 때 줄어들고, _ChapterLabel 안쪽
+                      // Text들에 ellipsis를 달아 잘린 티만 나고 절대
+                      // 넘치지 않는다.
+                      Flexible(child: _ChapterLabel(manager: manager)),
                       const SizedBox(width: 8),
                       _HardModeToggleButton(manager: manager),
                     ],
@@ -350,9 +448,10 @@ class _PlayerHpBar extends StatelessWidget {
     return AnimatedBuilder(
       animation: manager,
       builder: (context, _) {
-        final double playerHpRatio = manager.maxHp <= 0
+        final double safeMaxHp = manager.maxHp <= 0 ? 0 : manager.maxHp;
+        final double playerHpRatio = safeMaxHp <= 0
             ? 0
-            : (manager.currentHp / manager.maxHp).clamp(0.0, 1.0);
+            : (manager.currentHp / safeMaxHp).clamp(0.0, 1.0);
         return Column(
           children: [
             ClipRRect(
@@ -366,7 +465,7 @@ class _PlayerHpBar extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              '${NumberFormatter.format(manager.currentHp.clamp(0, manager.maxHp))} / ${NumberFormatter.format(manager.maxHp)}',
+              '${NumberFormatter.format(manager.currentHp.clamp(0, safeMaxHp))} / ${NumberFormatter.format(manager.maxHp)}',
               style: const TextStyle(color: Colors.white70, fontSize: 10),
             ),
           ],
@@ -419,6 +518,8 @@ class _ChapterLabel extends StatelessWidget {
                     : (manager.isBossStage
                           ? '${manager.chapter}-${manager.stage} 보스!'
                           : '${manager.chapter}-${manager.stage}'),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
                 style: TextStyle(
                   color: textColor,
                   fontWeight: FontWeight.bold,
@@ -429,6 +530,8 @@ class _ChapterLabel extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   '${manager.regionName} · ${manager.chapterName}',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
                   style: const TextStyle(color: Colors.white54, fontSize: 10),
                 ),
               ],
@@ -485,10 +588,22 @@ class _HardModeToggleButton extends StatelessWidget {
 }
 
 /// 보스 스테이지에서만 뜨는 남은 시간 배지 — 매 틱 카운트다운되므로 가장
-/// 자주 다시 그려지는 위젯이다. [manager.isBossStage]가 false면
-/// [SizedBox.shrink]를 돌려주는데, Stack의 비-Positioned 자식으로서
-/// 크기가 0이라 예전 `if (manager.isBossStage) Positioned(...)`(Stack
-/// children 목록에서 아예 빠짐)와 화면상 차이가 없다.
+/// 자주 다시 그려지는 위젯이다.
+///
+/// [주의] [manager.isBossStage]가 false일 때 예전엔 그냥
+/// `SizedBox.shrink()`를 돌려줬는데, 이 위젯은(자기 자신의 build()가
+/// 조건부로 Positioned를 반환해야 해서) [_BattleView]의 Stack에
+/// Positioned로 안 감싼 채 직접 자식으로 들어가 있다 — 그러면
+/// `SizedBox.shrink()`가 Stack의 "포지션 안 된(non-positioned)" 자식이
+/// 되고, Flutter의 Stack은 포지션 안 된 자식이 하나라도 있으면 그 자식들
+/// 크기에 맞춰(제약의 최솟값부터) 스스로 크기를 정한다 — 가로 제약이
+/// 느슨한 상황(HomeScreen의 Column이 stretch가 아니라 기본 center라
+/// minWidth: 0)과 겹치면 Stack 전체의 가로폭이 0으로 무너져 버렸다
+/// (실측: GameWidget이 실제로 받은 크기가 `size=[0, 373.3]` — 세로만
+/// 정상이고 가로가 0이라 전투 화면 전체가 까맣게 보이던 원인). 지금은
+/// 숨김 상태에서도 크기 0짜리 [Positioned]를 돌려줘서, 이 위젯이 절대
+/// "포지션 안 된 자식"이 되지 않도록 막는다(그 자체로 화면상 결과는
+/// 전과 동일 — 어차피 크기 0이라 아무것도 안 보인다).
 class _BossTimerBadge extends StatelessWidget {
   const _BossTimerBadge({required this.manager});
 
@@ -500,7 +615,7 @@ class _BossTimerBadge extends StatelessWidget {
       animation: manager,
       builder: (context, _) {
         if (!manager.isBossStage) {
-          return const SizedBox.shrink();
+          return const Positioned(width: 0, height: 0, child: SizedBox.shrink());
         }
         return Positioned(
           top: 52,
@@ -540,9 +655,12 @@ class _MonsterHpBar extends StatelessWidget {
     return AnimatedBuilder(
       animation: manager,
       builder: (context, _) {
-        final double hpRatio = manager.monsterMaxHp <= 0
+        final double safeMonsterMaxHp = manager.monsterMaxHp <= 0
             ? 0
-            : (manager.monsterHp / manager.monsterMaxHp).clamp(0.0, 1.0);
+            : manager.monsterMaxHp;
+        final double hpRatio = safeMonsterMaxHp <= 0
+            ? 0
+            : (manager.monsterHp / safeMonsterMaxHp).clamp(0.0, 1.0);
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -557,7 +675,7 @@ class _MonsterHpBar extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              '${NumberFormatter.format(manager.monsterHp.clamp(0, manager.monsterMaxHp))} / ${NumberFormatter.format(manager.monsterMaxHp)}',
+              '${NumberFormatter.format(manager.monsterHp.clamp(0, safeMonsterMaxHp))} / ${NumberFormatter.format(manager.monsterMaxHp)}',
               style: const TextStyle(
                 color: Colors.white70,
                 fontSize: 10,

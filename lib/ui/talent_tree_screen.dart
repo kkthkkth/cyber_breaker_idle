@@ -83,6 +83,17 @@ class _TalentTreeCanvas extends StatelessWidget {
   const _TalentTreeCanvas();
 
   static const double _nodeSize = 84;
+  /// [_TalentNodeButton]이 실제로 그리는 세로 콘텐츠(64px 원형 아이콘 +
+  /// 4px 간격 + 특성 이름 한 줄 + "N/5" 레벨 한 줄)는 [_nodeSize](84)보다
+  /// 커서 그대로 두면 RenderFlex가 하단으로 15px씩 넘쳤다(실측 확인됨).
+  /// 아이콘의 시각적 중심([_TalentTreeLinePainter]가 선을 잇는 기준점)은
+  /// `centers[node.id]`에 그대로 고정해 두고(그래서 [_nodeSize]는 여전히
+  /// `left`/`top` 계산에 쓴다), 박스 자체의 세로 길이만 이 값으로 늘려
+  /// 텍스트가 들어갈 여유를 아래쪽으로만 더 준다 — 위로 자라면 선 연결
+  /// 기준점이 아이콘 중앙에서 벗어난다. [_tierHeight](150) 대비 여유가
+  /// 충분해서(84 → 112로 늘려도 다음 단(tier) 박스와 40px 남는다) 다음
+  /// 줄과 겹치지 않는다.
+  static const double _nodeBoxHeight = 112;
   static const double _tierHeight = 150;
   static const double _siblingGap = 110;
 
@@ -127,7 +138,11 @@ class _TalentTreeCanvas extends StatelessWidget {
         byDepth.values.map((list) => list.length).fold(1, (a, b) => a > b ? a : b);
 
     final double canvasWidth = maxSiblingCount * _siblingGap + _nodeSize + 32;
-    final double canvasHeight = (maxDepth + 1) * _tierHeight + _nodeSize + 32;
+    // 마지막 줄 노드의 텍스트가 이 SizedBox/InteractiveViewer 하단
+    // 경계에서 다시 잘리지 않도록, 아래로 더 자란 실제 박스 높이
+    // ([_nodeBoxHeight])를 기준으로 여유를 계산한다([_nodeSize]만 쓰면
+    // 이 캔버스 레벨에서 같은 종류의 overflow가 재발한다).
+    final double canvasHeight = (maxDepth + 1) * _tierHeight + _nodeBoxHeight + 32;
 
     final Map<String, Offset> centers = {};
     byDepth.forEach((depth, siblings) {
@@ -161,7 +176,7 @@ class _TalentTreeCanvas extends StatelessWidget {
                   left: centers[node.id]!.dx - _nodeSize / 2,
                   top: centers[node.id]!.dy - _nodeSize / 2,
                   width: _nodeSize,
-                  height: _nodeSize,
+                  height: _nodeBoxHeight,
                   child: _TalentNodeButton(node: node),
                 ),
           ],
@@ -275,6 +290,8 @@ class _TalentNodeButton extends StatelessWidget {
           ),
           Text(
             '${node.currentLevel}/${node.maxLevel}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: locked ? Colors.white24 : Colors.amberAccent,
               fontSize: 10,

@@ -81,9 +81,13 @@ class GuideMissionBanner extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                mission.rewardLabel,
-                style: const TextStyle(color: Colors.white54, fontSize: 11),
+              Flexible(
+                child: Text(
+                  mission.rewardLabel,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
               ),
               const SizedBox(width: 8),
               if (complete)

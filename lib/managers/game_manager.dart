@@ -348,20 +348,39 @@ class GameManager extends ChangeNotifier {
   /// [ArtifactStat.maxHpPercent] 패시브가 곱산으로 반영된 실제 최대 체력 —
   /// 기존 필드명 `maxHp`를 그대로 getter로 남겨서 게임 내/외부의 모든 기존
   /// 호출부(전투 로직, HP바 UI 등)가 수정 없이 자동으로 두 보너스를 받는다.
-  double get maxHp =>
-      (baseMaxHp + _equippedCharacterStats.hp) *
-      (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
-      (1 +
-          EquipmentSetManager.instance.totalBonus(
-            EquipmentSetStat.maxHpPercent,
-            _equippedSetCounts,
-          )) *
-      (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent)) *
-      (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent)) *
-      // 도감(컬렉션) 완성 보상 — 다른 소스들과 같은 "장착 여부와 무관하게
-      // 항상 합산" 곱산 체인의 한 항이다(요구사항 예시: "슬라임 반지 3개
-      // 등록 ➔ 최대 체력 2% 증가").
-      (1 + (collectionBonuses[CollectionStatType.maxHpPercent] ?? 0));
+  ///
+  /// [주의] 이 곱산 체인의 항 중 단 하나라도(유물/세트/룬/칭호/도감 보너스
+  /// 어느 쪽이든) `-100%`(-1.0) 이하로 내려가면 `(1 + bonus)` 항이 0 이하가
+  /// 되고, 나머지가 전부 양수여도 전체 곱이 음수로 뒤집힌다 — 그러면
+  /// [resolveMonsterAttack]/[heal]/[applyLifeSteal] 세 곳 모두
+  /// `currentHp.clamp(0.0, maxHp)`의 상한(maxHp)이 하한(0.0)보다 작아져
+  /// `ArgumentError`가 전투 루프(Flame의 매 프레임 update) 안에서 그대로
+  /// 터진다 — GameWidget이 그 순간부터 새 프레임을 그리지 못해 전투 화면만
+  /// (주변 Flutter UI는 멀쩡한 채로) 그대로 까맣게 멈춘다. 호출부마다
+  /// 개별로 방어하는 대신, 계산의 유일한 소스인 여기서 최종값을 최소
+  /// 1로 고정해 두면 어떤 보너스 조합이 와도 항상 안전하다.
+  double get maxHp {
+    final double computed =
+        (baseMaxHp + _equippedCharacterStats.hp) *
+        (1 + ArtifactManager.instance.totalBonus(ArtifactStat.maxHpPercent)) *
+        (1 +
+            EquipmentSetManager.instance.totalBonus(
+              EquipmentSetStat.maxHpPercent,
+              _equippedSetCounts,
+            )) *
+        (1 + RuneManager.instance.totalBonus(RuneStat.maxHpPercent)) *
+        (1 + TitleManager.instance.bonusFor(TitleBuffType.maxHpPercent)) *
+        // 도감(컬렉션) 완성 보상 — 다른 소스들과 같은 "장착 여부와 무관하게
+        // 항상 합산" 곱산 체인의 한 항이다(요구사항 예시: "슬라임 반지 3개
+        // 등록 ➔ 최대 체력 2% 증가").
+        (1 + (collectionBonuses[CollectionStatType.maxHpPercent] ?? 0));
+    // `computed < 1`만으로는 NaN을 못 거른다 — NaN이 낀 비교는 항상
+    // false라 `NaN < 1`도 false가 되어 NaN이 그대로 새어나간다(그 뒤
+    // `currentHp.clamp(0.0, NaN)`은 예외는 안 나지만 체력바가 그 순간부터
+    // 계속 NaN/깨진 값으로 멎는다). `isFinite`로 NaN·Infinity까지 함께
+    // 막는다.
+    return (computed.isFinite && computed >= 1) ? computed : 1;
+  }
 
   /// 장착 세트별 부위 수 — [EquipmentSetManager.totalBonus] 호출마다 매번
   /// 새로 계산하지 않도록 한 곳에 모았다(EquipmentManager.equippedItems를
@@ -851,6 +870,16 @@ class GameManager extends ChangeNotifier {
     level: critDefenseRateLevel,
   );
 
+  /// [progressIndex]가 커질수록(하드 모드는 상한 없이 계속 오른다) `hp`가
+  /// 순수 지수적으로 자라다가 double 표현 범위(약 1.8e308)를 넘으면
+  /// `Infinity`가 된다 — 그 뒤 [_MonsterHpBar](home_screen.dart)의
+  /// `monsterHp / monsterMaxHp`가 `Infinity / Infinity = NaN`이 되고,
+  /// `LinearProgressIndicator(value: NaN)`은 생성자 assert(`0.0~1.0`
+  /// 범위)에 곧바로 걸려 그 자리에서 예외가 난다. 하드 모드 자체(무제한
+  /// 성장)를 건드리지 않고, 계산 결과가 유한하지 않을 때만 안전한 큰
+  /// 값으로 눌러 담는다.
+  static const double _monsterStatOverflowFallback = 1e15;
+
   void _resetMonsterHp() {
     const double base = 50.0;
     final int progressIndex = (chapter - 1) * maxStage + (stage - 1);
@@ -871,9 +900,9 @@ class GameManager extends ChangeNotifier {
       attack *= hardModeMultiplier;
     }
 
-    monsterMaxHp = hp;
-    monsterHp = hp;
-    monsterAttackPower = attack;
+    monsterMaxHp = hp.isFinite ? hp : _monsterStatOverflowFallback;
+    monsterHp = monsterMaxHp;
+    monsterAttackPower = attack.isFinite ? attack : _monsterStatOverflowFallback;
   }
 
   /// 몬스터가 플레이어를 공격 — 회피 성공 시 데미지 0, 아니면 방어력→방어율

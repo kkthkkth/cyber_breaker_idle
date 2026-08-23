@@ -81,10 +81,24 @@ extension CharacterClassX on CharacterClass {
   /// 시작한다([IdleGame._battleStopX]). 전사는 코앞까지, 궁수/마법사는
   /// 훨씬 멀리서 멈춰 선다. 값을 조절하고 싶으면 여기 한 곳만 고치면
   /// 된다(요구사항 예시 범위: 전사 50~80, 궁수/마법사 200~300).
+  ///
+  /// [주의] 전사는 원래 60 → 90으로 한 차례 늘렸었지만, 여전히 캐릭터와
+  /// 몬스터 박스가 겹쳐 보인다는 피드백을 받고서야 계산이 잘못됐다는 걸
+  /// 알았다 — [attackRange]는 두 컴포넌트의 "중심(anchor) 사이" 거리인데,
+  /// [Anchor.bottomCenter]인 두 박스는 각자 폭의 절반만큼 자기 중심
+  /// 좌우로 걸쳐 그려진다. 즉 실제로 안 겹치려면 최소
+  /// `playerHalfWidth + monsterHalfWidth`(지금 값: [PlayerAnimationComponent
+  /// .boxSize]/2 = 42 + [IdleGame.monsterSize]/2 = 60 = 102)보다는 커야
+  /// 하는데, 90은 그보다도 작아서 애초에 겹칠 수밖에 없는 값이었다. 두
+  /// 박스 절반 합(102) 위에 눈에 보이는 여백이 남도록 140으로 늘렸다
+  /// (겹침 없이 약 38px 간격). boxSize/monsterSize를 나중에 또 바꾸면
+  /// 이 값도 그 절반 합보다는 커야 한다는 걸 함께 확인해야 한다. 궁수/
+  /// 마법사는 이미 훨씬 멀리서 멈추므로(240/260, 102보다 넉넉히 커서
+  /// 문제없다) 그대로 뒀다.
   double get attackRange {
     switch (this) {
       case CharacterClass.warrior:
-        return 60;
+        return 140;
       case CharacterClass.archer:
         return 240;
       case CharacterClass.mage:

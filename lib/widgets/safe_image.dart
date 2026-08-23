@@ -234,9 +234,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
           errorBuilder: (context, error, stackTrace) {
             _markSettled();
             _brokenUrls.add(widget.path);
-            debugPrint(
-              '[AssetLoadError] Failed to load: ${widget.path}, exception: $error, stack: $stackTrace',
-            );
+            debugPrint('[AssetLoadError] Failed to load: ${widget.path}, exception: $error');
             return _buildFallbackOrPlaceholder(context);
           },
         );
@@ -261,9 +259,7 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
         errorWidget: (context, url, error) {
           _markSettled();
           _brokenUrls.add(widget.path);
-          debugPrint(
-            '[AssetLoadError] Failed to load: $url, exception: $error, stack: null',
-          );
+          debugPrint('[AssetLoadError] Failed to load: $url, exception: $error');
           return _buildFallbackOrPlaceholder(context);
         },
       );
@@ -276,9 +272,9 @@ class _CustomSafeImageState extends State<CustomSafeImage> {
       fit: widget.fit,
       filterQuality: widget.filterQuality,
       errorBuilder: (context, error, stackTrace) {
-        debugPrint(
-          '[AssetLoadError] Failed to load: ${widget.path}, exception: $error, stack: $stackTrace',
-        );
+        if (_brokenUrls.add(widget.path)) {
+          debugPrint('[AssetLoadError] Failed to load: ${widget.path}, exception: $error');
+        }
         return _buildFallbackOrPlaceholder(context);
       },
     );

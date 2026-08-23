@@ -88,143 +88,162 @@ Future<void> main() async {
     url: SupabaseConfig.url,
     publishableKey: SupabaseConfig.anonKey,
   );
-  // 로컬 알림 권한 요청 — 다른 매니저들의 await 체인과 독립적이라(알림
-  // 예약은 나중에 특정 이벤트 시점에만 실제로 쓰인다) 가장 먼저 끝내
-  // 둔다. 지원하지 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
-  await NotificationManager.instance.init();
-  // 요구사항: "토요일 오후 8시 50분(시작 10분 전)" 길드 전쟁 알림 — 최초
-  // 한 번만 예약하면 매주 자동으로 반복된다.
-  unawaited(NotificationManager.instance.scheduleWeeklyWarStartReminder());
-  // 길드원 목록의 접속중(🟢) 표시가 참조하는 profiles.last_seen 하트비트 —
-  // 아직 로그인 전이면(게스트 로그인을 아직 안 거쳤으면) 매번 조용히
-  // no-op하다가, 로그인 후 다음 주기(SupabaseManager.lastSeenInterval)부터
-  // 실제로 갱신되기 시작한다.
-  SupabaseManager.instance.startLastSeenHeartbeat();
-  // 오프라인 보상의 "마지막 접속 시각" 마커를 30초마다 갱신한다 —
-  // AppLifecycleState.paused/detached(앱 종료 시점)에만 의존하면, 웹
-  // 브라우저에서 탭을 그냥 닫을 때는 그 생명주기 이벤트가 신뢰성 있게
-  // 오지 않아 마커가 훨씬 이전 값에 멈춰 있을 수 있다
-  // (OfflineRewardManager.startPeriodicAutoSave 문서 참고).
-  OfflineRewardManager.instance.startPeriodicAutoSave();
-  // SFX 프리로드 — 실패해도(assets/audio/ 파일 없음 등) 조용히 넘어가므로
-  // 다른 매니저들의 await 체인을 막지 않는다.
-  unawaited(SoundManager.instance.init());
-  await EquipmentManager.instance.loadEquipment();
-  // 상점 가챠 버튼(EquipmentManager.generateLootOfType/drawMultipleGacha)이
-  // 곧바로 PityManager를 읽으므로, 상점 화면이 열리기 전에 끝나 있어야
-  // 한다. 캐릭터 가챠는 추가로 CharacterManifestManager(아래, Supabase
-  // master_characters)도 읽지만 그건 훨씬 나중에(EncyclopediaManager
-  // 직전에) 로드된다 — runApp() 전에만 끝나면 되므로 문제없다.
-  await PityManager.instance.loadData();
-  // GameManager._onMonsterDefeated/EquipmentManager의 가챠 진입점이 매
-  // 처치/뽑기마다 AchievementManager.recordMonsterKill/recordGachaPull을
-  // 호출하므로, 전투/상점이 열리기 전에 끝나 있어야 한다.
-  await AchievementManager.instance.loadData();
-  await AffectionManager.instance.loadData();
-  await GameManager.instance.loadGame();
-  // GameManager.attackPower/_onMonsterDefeated가 곧바로
-  // PrestigeManager.attackBonus/goldBonus를 읽어가므로, 전투가 시작되기
-  // 전(runApp 이전)에 반드시 끝나 있어야 한다.
-  await PrestigeManager.instance.loadData();
-  // GameManager.attackPower/defensePower/effectiveCriticalRate/
-  // goldRewardForKill이 곧바로 TalentManager.totalBonus를 읽으므로, 전투가
-  // 시작되기 전(runApp 이전)에 끝나 있어야 한다.
-  await TalentManager.instance.loadData();
-  // ExpeditionManager.claimReward가 특성 포인트 보상을 TalentManager로
-  // 넘기므로, 그보다 뒤에 로드돼야 한다.
-  await ExpeditionManager.instance.loadData();
-  await CollectionManager.instance.loadData();
-  // EncyclopediaManager.instance는 최초 접근 시 생성자에서 즉시 도감 항목을
-  // 만든다(캐릭터는 CharacterManifestManager.subIdsFor를 그 자리에서
-  // 읽는다) — 그래서 이 매니페스트 로드가 반드시 EncyclopediaManager를
-  // 처음 건드리는 줄(바로 아래)보다 앞서 끝나 있어야 한다.
-  await CharacterManifestManager.instance.loadData();
-  await EncyclopediaManager.instance.loadData();
-  await DungeonManager.instance.loadDungeonData();
-  // 무한의 탑 화면/전투(IdleGame._activateDungeon)가 곧바로 층 데이터를
-  // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다.
-  await TowerFloorManager.instance.loadData();
-  await MissionManager.instance.loadData();
-  await AttendanceManager.instance.checkDailyLogin();
-  await RookieAttendanceManager.instance.loadData();
-  await SkillManager.instance.loadData();
-  await MonthlyAttendanceManager.instance.loadData();
-  // 상점 펫 가챠(EquipmentManager.generateLootOfType)가 곧바로
-  // PetStatMetadataManager.rollSpecialStats를 읽으므로, 상점 화면이
-  // 열리기 전에 끝나 있어야 한다.
-  await PetStatMetadataManager.instance.loadData();
-  await PotionManager.instance.loadData();
-  // GameManager.maxHp/attackPower/defensePower/goldReward가 곧바로
-  // ArtifactManager.totalBonus를 읽으므로, 전투가 시작되기 전(runApp 이전)에
-  // 끝나 있어야 한다.
-  await ArtifactManager.instance.loadData();
-  // GameManager.attackPower/defensePower/effectiveCriticalRate/maxHp가
-  // 곧바로 EquipmentSetManager.totalBonus를 읽으므로, 전투가 시작되기
-  // 전(runApp 이전)에 끝나 있어야 한다.
-  await EquipmentSetManager.instance.loadData();
-  // GameManager/SkillManager가 곧바로 RuneManager.totalBonus를 읽으므로,
-  // 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
-  await RuneManager.instance.loadData();
-  await WeekdayDungeonManager.instance.loadData();
-  // 온라인 사냥(GameManager._onMonsterDefeated)이 곧바로 드랍 테이블을
-  // 읽으므로, 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
-  await MonsterDropTableManager.instance.loadData();
-  // 룬의 미궁/승리자의 성소 클리어(IdleGame._damageDungeonMonster)가 곧바로
-  // DungeonRewardManager.grantRewardsFor를 읽으므로, 던전 화면이 열리기
-  // 전(runApp 이전)에 끝나 있어야 한다.
-  await DungeonRewardManager.instance.loadData();
-  // IdleGame._fireProjectile이 공격마다 근접/원거리를 판정할 때 곧바로
-  // 읽으므로, 마찬가지로 전투가 시작되기 전에 끝나 있어야 한다.
-  await CharacterMetaManager.instance.loadData();
-  // GameManager.attackPower/defensePower/maxHp/effectiveAttackSpeed가 곧바로
-  // 장착 캐릭터의 기본 스탯을 읽으므로(character_metadata 기반), 전투가
-  // 시작되기 전에 끝나 있어야 한다.
-  await CharacterMetadataManager.instance.loadData();
-  // GameManager.totalCombatPower가 곧바로 이 가중치(defWeight/offenseWeight)를
-  // 읽으므로, 전투력 배너가 뜨는 화면(프로필 팝업 등)이 열리기 전에 끝나
-  // 있어야 한다 — 실패해도 ConfigManager.combatPowerWeights가 안전한
-  // 기본값(20.0/10.0)을 이미 들고 있어 게임 진행에는 영향이 없다.
-  await ConfigManager.instance.loadConfig();
-  await SpeedManager.instance.loadBoost();
-  await StoryManager.instance.loadData();
-  await MainStoryManager.instance.loadData();
-  await WorldBossManager.instance.loadData();
-  await MailboxManager.instance.loadData();
-  // GameManager.attackPower/goldReward가 GuildManager.attackBonus/goldBonus를
-  // 곧바로 읽어가므로, 전투가 시작되기 전(runApp 이전)에 반드시 끝나 있어야
-  // 한다.
-  await GuildManager.instance.loadData();
-  await GuildRaidManager.instance.loadData();
-  await GuildWarManager.instance.loadData();
-  // EquipmentManager.loadEquipment()가 이미 끝난 뒤라(위쪽), 지난 정산으로
-  // 받은 휘장이 있으면 지금 바로 인벤토리에 반영/만료 회수한다.
-  await GuildWarManager.instance.syncBadgeOnStartup();
-  await ArenaManager.instance.loadData();
-  // 상점 '무료 보상' 탭이 곧바로 AdManager.instance.canWatchAd/dailyAdViews를
-  // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다. 지원하지
-  // 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
-  await AdManager.instance.loadData();
-  // 상점 '충전' 탭이 곧바로 IAPManager.instance.products/isAvailable을
-  // 읽으므로, 화면이 뜨기 전에 스토어 상품 조회가 끝나 있어야 한다. 구매
-  // 스트림 구독도 이 안에서 시작하는데, 이전 세션에서 completePurchase가
-  // 안 끝난 트랜잭션이 있으면 이 시점에 재전달되므로 최대한 앱 초반에
-  // 호출해야 놓치지 않는다.
-  await IAPManager.instance.loadData();
-  // QuestManager.claimQuest가 BattlePassManager.addBpExp를 부르므로, 배틀패스
-  // 보상 트랙(레벨/exp)이 먼저 로드돼 있어야 한다.
-  await BattlePassManager.instance.loadData();
-  await QuestManager.instance.loadData();
-  await GuideMissionManager.instance.loadData();
-  await RiftManager.instance.loadData();
-  await TitleManager.instance.loadData();
-  await TradeManager.instance.loadData();
-  // 친구 목록/받은 요청은 다른 유저와 함께 바뀌는 서버 전용 상태라
-  // 로컬 저장이 없다 — 부팅 시 한 번 미리 불러 둬야 앱바 친구 버튼
-  // 배지(받은 요청 수)가 화면을 열기 전에도 정확하다. 부팅을 막지
-  // 않도록 await하지 않는다.
-  unawaited(FriendManager.instance.loadAll());
-  MidnightResetManager.instance.start();
-  await TutorialManager.instance.loadData();
+  // [주의] 아래는 ~40개 매니저를 순서대로 await하는 긴 체인이다 — 매니저
+  // 각각의 loadData()/init()은 이미 내부적으로 try/catch를 갖추고 있지만
+  // (실패하면 로컬 캐시/안전한 기본값 유지), 혹시라도 그 방어망을 뚫고
+  // 예외가 여기까지 새어나오면 이 체인 자체가 끊겨 그 뒤 어떤 await도,
+  // 심지어 맨 끝의 [runApp]조차 실행되지 않는다 — 그러면 화면에 아무것도
+  // 뜨지 않는(완전한 백지) 훨씬 심각한 실패가 된다. 이 try/catch는 그
+  // 최후의 안전망이다: 무슨 일이 있어도 [runApp]만큼은 반드시 실행되도록
+  // 보장한다(그 시점까지 로드된 매니저는 정상 데이터로, 못 끝낸 매니저는
+  // 각자의 기본값으로 게임이 뜬다 — 매니저별 개별 방어가 이미 그런
+  // 상황을 상정하고 짜여 있다).
+  try {
+    // 로컬 알림 권한 요청 — 다른 매니저들의 await 체인과 독립적이라(알림
+    // 예약은 나중에 특정 이벤트 시점에만 실제로 쓰인다) 가장 먼저 끝내
+    // 둔다. 지원하지 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
+    await NotificationManager.instance.init();
+    // 요구사항: "토요일 오후 8시 50분(시작 10분 전)" 길드 전쟁 알림 — 최초
+    // 한 번만 예약하면 매주 자동으로 반복된다.
+    unawaited(NotificationManager.instance.scheduleWeeklyWarStartReminder());
+    // 길드원 목록의 접속중(🟢) 표시가 참조하는 profiles.last_seen 하트비트 —
+    // 아직 로그인 전이면(게스트 로그인을 아직 안 거쳤으면) 매번 조용히
+    // no-op하다가, 로그인 후 다음 주기(SupabaseManager.lastSeenInterval)부터
+    // 실제로 갱신되기 시작한다.
+    SupabaseManager.instance.startLastSeenHeartbeat();
+    // 오프라인 보상의 "마지막 접속 시각" 마커를 30초마다 갱신한다 —
+    // AppLifecycleState.paused/detached(앱 종료 시점)에만 의존하면, 웹
+    // 브라우저에서 탭을 그냥 닫을 때는 그 생명주기 이벤트가 신뢰성 있게
+    // 오지 않아 마커가 훨씬 이전 값에 멈춰 있을 수 있다
+    // (OfflineRewardManager.startPeriodicAutoSave 문서 참고).
+    OfflineRewardManager.instance.startPeriodicAutoSave();
+    // SFX 프리로드 — 실패해도(assets/audio/ 파일 없음 등) 조용히 넘어가므로
+    // 다른 매니저들의 await 체인을 막지 않는다.
+    unawaited(SoundManager.instance.init());
+    await EquipmentManager.instance.loadEquipment();
+    // 상점 가챠 버튼(EquipmentManager.generateLootOfType/drawMultipleGacha)이
+    // 곧바로 PityManager를 읽으므로, 상점 화면이 열리기 전에 끝나 있어야
+    // 한다. 캐릭터 가챠는 추가로 CharacterManifestManager(아래, Supabase
+    // master_characters)도 읽지만 그건 훨씬 나중에(EncyclopediaManager
+    // 직전에) 로드된다 — runApp() 전에만 끝나면 되므로 문제없다.
+    await PityManager.instance.loadData();
+    // GameManager._onMonsterDefeated/EquipmentManager의 가챠 진입점이 매
+    // 처치/뽑기마다 AchievementManager.recordMonsterKill/recordGachaPull을
+    // 호출하므로, 전투/상점이 열리기 전에 끝나 있어야 한다.
+    await AchievementManager.instance.loadData();
+    await AffectionManager.instance.loadData();
+    await GameManager.instance.loadGame();
+    // GameManager.attackPower/_onMonsterDefeated가 곧바로
+    // PrestigeManager.attackBonus/goldBonus를 읽어가므로, 전투가 시작되기
+    // 전(runApp 이전)에 반드시 끝나 있어야 한다.
+    await PrestigeManager.instance.loadData();
+    // GameManager.attackPower/defensePower/effectiveCriticalRate/
+    // goldRewardForKill이 곧바로 TalentManager.totalBonus를 읽으므로, 전투가
+    // 시작되기 전(runApp 이전)에 끝나 있어야 한다.
+    await TalentManager.instance.loadData();
+    // ExpeditionManager.claimReward가 특성 포인트 보상을 TalentManager로
+    // 넘기므로, 그보다 뒤에 로드돼야 한다.
+    await ExpeditionManager.instance.loadData();
+    await CollectionManager.instance.loadData();
+    // EncyclopediaManager.instance는 최초 접근 시 생성자에서 즉시 도감 항목을
+    // 만든다(캐릭터는 CharacterManifestManager.subIdsFor를 그 자리에서
+    // 읽는다) — 그래서 이 매니페스트 로드가 반드시 EncyclopediaManager를
+    // 처음 건드리는 줄(바로 아래)보다 앞서 끝나 있어야 한다.
+    await CharacterManifestManager.instance.loadData();
+    await EncyclopediaManager.instance.loadData();
+    await DungeonManager.instance.loadDungeonData();
+    // 무한의 탑 화면/전투(IdleGame._activateDungeon)가 곧바로 층 데이터를
+    // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다.
+    await TowerFloorManager.instance.loadData();
+    await MissionManager.instance.loadData();
+    await AttendanceManager.instance.checkDailyLogin();
+    await RookieAttendanceManager.instance.loadData();
+    await SkillManager.instance.loadData();
+    await MonthlyAttendanceManager.instance.loadData();
+    // 상점 펫 가챠(EquipmentManager.generateLootOfType)가 곧바로
+    // PetStatMetadataManager.rollSpecialStats를 읽으므로, 상점 화면이
+    // 열리기 전에 끝나 있어야 한다.
+    await PetStatMetadataManager.instance.loadData();
+    await PotionManager.instance.loadData();
+    // GameManager.maxHp/attackPower/defensePower/goldReward가 곧바로
+    // ArtifactManager.totalBonus를 읽으므로, 전투가 시작되기 전(runApp 이전)에
+    // 끝나 있어야 한다.
+    await ArtifactManager.instance.loadData();
+    // GameManager.attackPower/defensePower/effectiveCriticalRate/maxHp가
+    // 곧바로 EquipmentSetManager.totalBonus를 읽으므로, 전투가 시작되기
+    // 전(runApp 이전)에 끝나 있어야 한다.
+    await EquipmentSetManager.instance.loadData();
+    // GameManager/SkillManager가 곧바로 RuneManager.totalBonus를 읽으므로,
+    // 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
+    await RuneManager.instance.loadData();
+    await WeekdayDungeonManager.instance.loadData();
+    // 온라인 사냥(GameManager._onMonsterDefeated)이 곧바로 드랍 테이블을
+    // 읽으므로, 전투가 시작되기 전(runApp 이전)에 끝나 있어야 한다.
+    await MonsterDropTableManager.instance.loadData();
+    // 룬의 미궁/승리자의 성소 클리어(IdleGame._damageDungeonMonster)가 곧바로
+    // DungeonRewardManager.grantRewardsFor를 읽으므로, 던전 화면이 열리기
+    // 전(runApp 이전)에 끝나 있어야 한다.
+    await DungeonRewardManager.instance.loadData();
+    // IdleGame._fireProjectile이 공격마다 근접/원거리를 판정할 때 곧바로
+    // 읽으므로, 마찬가지로 전투가 시작되기 전에 끝나 있어야 한다.
+    await CharacterMetaManager.instance.loadData();
+    // GameManager.attackPower/defensePower/maxHp/effectiveAttackSpeed가 곧바로
+    // 장착 캐릭터의 기본 스탯을 읽으므로(character_metadata 기반), 전투가
+    // 시작되기 전에 끝나 있어야 한다.
+    await CharacterMetadataManager.instance.loadData();
+    // GameManager.totalCombatPower가 곧바로 이 가중치(defWeight/offenseWeight)를
+    // 읽으므로, 전투력 배너가 뜨는 화면(프로필 팝업 등)이 열리기 전에 끝나
+    // 있어야 한다 — 실패해도 ConfigManager.combatPowerWeights가 안전한
+    // 기본값(20.0/10.0)을 이미 들고 있어 게임 진행에는 영향이 없다.
+    await ConfigManager.instance.loadConfig();
+    await SpeedManager.instance.loadBoost();
+    await StoryManager.instance.loadData();
+    await MainStoryManager.instance.loadData();
+    await WorldBossManager.instance.loadData();
+    await MailboxManager.instance.loadData();
+    // GameManager.attackPower/goldReward가 GuildManager.attackBonus/goldBonus를
+    // 곧바로 읽어가므로, 전투가 시작되기 전(runApp 이전)에 반드시 끝나 있어야
+    // 한다.
+    await GuildManager.instance.loadData();
+    await GuildRaidManager.instance.loadData();
+    await GuildWarManager.instance.loadData();
+    // EquipmentManager.loadEquipment()가 이미 끝난 뒤라(위쪽), 지난 정산으로
+    // 받은 휘장이 있으면 지금 바로 인벤토리에 반영/만료 회수한다.
+    await GuildWarManager.instance.syncBadgeOnStartup();
+    await ArenaManager.instance.loadData();
+    // 상점 '무료 보상' 탭이 곧바로 AdManager.instance.canWatchAd/dailyAdViews를
+    // 읽으므로, 화면이 뜨기 전(runApp 이전)에 끝나 있어야 한다. 지원하지
+    // 않는 플랫폼(Web/Windows)이면 내부에서 조용히 건너뛴다.
+    await AdManager.instance.loadData();
+    // 상점 '충전' 탭이 곧바로 IAPManager.instance.products/isAvailable을
+    // 읽으므로, 화면이 뜨기 전에 스토어 상품 조회가 끝나 있어야 한다. 구매
+    // 스트림 구독도 이 안에서 시작하는데, 이전 세션에서 completePurchase가
+    // 안 끝난 트랜잭션이 있으면 이 시점에 재전달되므로 최대한 앱 초반에
+    // 호출해야 놓치지 않는다.
+    await IAPManager.instance.loadData();
+    // QuestManager.claimQuest가 BattlePassManager.addBpExp를 부르므로, 배틀패스
+    // 보상 트랙(레벨/exp)이 먼저 로드돼 있어야 한다.
+    await BattlePassManager.instance.loadData();
+    await QuestManager.instance.loadData();
+    await GuideMissionManager.instance.loadData();
+    await RiftManager.instance.loadData();
+    await TitleManager.instance.loadData();
+    await TradeManager.instance.loadData();
+    // 친구 목록/받은 요청은 다른 유저와 함께 바뀌는 서버 전용 상태라
+    // 로컬 저장이 없다 — 부팅 시 한 번 미리 불러 둬야 앱바 친구 버튼
+    // 배지(받은 요청 수)가 화면을 열기 전에도 정확하다. 부팅을 막지
+    // 않도록 await하지 않는다.
+    unawaited(FriendManager.instance.loadAll());
+    MidnightResetManager.instance.start();
+    await TutorialManager.instance.loadData(
+      hasExistingProgress: GameManager.instance.chapter > 1 || GameManager.instance.gold > 0,
+    );
+  } catch (error, stackTrace) {
+    debugPrint(
+      '[main] 앱 초기화(매니저 로딩) 중 처리되지 않은 예외 — 일부 데이터가 '
+      '기본값으로 남을 수 있지만, 화면은 계속 띄웁니다: $error\n$stackTrace',
+    );
+  }
   unawaited(SoundManager.instance.playLobbyBgm());
   runApp(const MyApp());
 }
@@ -332,6 +351,43 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         canvasColor: const Color(0xFF14141C),
       ),
       home: const LoginScreen(),
+      // 세로형 모바일 방치형 게임이라, 배경/바닥 타일 스케일·전투 진형
+      // 간격·[IdleGame.playerXRatio] 같은 사거리 계산이 전부 "폰 화면
+      // 폭"을 전제로 튜닝돼 있다 — 데스크톱/태블릿 브라우저에서 창을
+      // 넓히면 그 폭을 그대로 다 채우려다가 배경이 뻥튀기되고 전투
+      // 진형(플레이어 20%, 몬스터는 사거리만큼) 사이가 화면 폭에 비례해
+      // 한없이 벌어졌다. 라우트마다 개별로 폭을 제한하는 대신, 앱
+      // 전체(로그인 화면부터 모든 탭까지)를 여기 한 곳에서 항상 폰
+      // 비율로 감싸 레터박스를 준다 — 그러면 Flame(IdleGame.size)과
+      // Flutter 오버레이가 실제로 받는 폭이 항상 폰 화면 수준으로 좁게
+      // 유지되어, 그 아래 어떤 비율 기반 코드도 "화면이 넓어질 수
+      // 있다"는 경우의 수를 신경 쓸 필요가 없어진다.
+      builder: (context, child) {
+        return ColoredBox(
+          color: Colors.black,
+          child: Center(
+            // [주의: ClipRect가 꼭 필요하다] ConstrainedBox는 레이아웃
+            // 크기만 제한할 뿐 페인팅을 잘라내지 않는다 — Flame의
+            // ParallaxGroundLayer(idle_game.dart)는 무한 스크롤 착시를
+            // 위해 항상 타일 두 장을 나란히 그리는데, 그중 한 장은
+            // 구조상 [0, size.x] 경계를 살짝 벗어나 그려질 수 있다(캔버스
+            // 위젯 자체 경계 밖으로 그리는 게 흔한 기법). 부모 체인
+            // 어디에도 명시적인 clip이 없으면 Flutter는 그 여분의
+            // 픽셀도 그대로 컴포지팅해 검은 레터박스 여백까지 뚫고
+            // 나온다(실측 확인됨). ClipRect를 이 폭 제한 상자 바로
+            // 밖에 한 번만 둬서, 이 아래(GameWidget이든 다른 화면의
+            // 커스텀 페인팅이든) 무엇이 얼마나 밖으로 그리든 항상 이
+            // 500px 경계에서 깔끔하게 잘리도록 앱 전체에 한 번에
+            // 적용한다.
+            child: ClipRect(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: child ?? const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

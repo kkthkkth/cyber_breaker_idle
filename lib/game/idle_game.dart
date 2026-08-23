@@ -141,7 +141,14 @@ class IdleGame extends FlameGame {
   // static이라 home_screen.dart의 Flutter 오버레이(캐릭터 스프라이트/HP
   // 바/펫 아이콘)도 같은 값을 참조해 Flame 쪽과 어긋나지 않는다.
   static const double groundYRatio = 0.88;
-  static const double playerXRatio = 0.2;
+  /// [주의] 0.2였다가 0.28로 늘렸다 — 캐릭터가 화면 왼쪽에 너무 붙어
+  /// 있어서, 공격 이펙트(보라색 검기, 캐릭터 왼쪽으로 뻗어나감)가 좌측
+  /// HUD 아이콘 열(퀘스트/월드보스/명예의전당/일일퀘스트 버튼, `left:12`)
+  /// 과 겹치거나 화면 밖으로 잘려 보인다는 피드백을 받았다. 몬스터는
+  /// `_battleStopX = playerX + attackRange`로 플레이어를 따라가므로,
+  /// 이 값만 바꿔도 간격(attackRange)은 그대로 유지된 채 둘 다 같이
+  /// 오른쪽으로 옮겨간다.
+  static const double playerXRatio = 0.28;
 
   /// 몬스터(RectangleComponent)의 정사각형 한 변 길이 — home_screen.dart의
   /// 몬스터 HP 바가 몬스터 머리 위 정확한 자리·너비(monsterSize * 1.2)를
@@ -159,7 +166,70 @@ class IdleGame extends FlameGame {
 
   /// 바닥 길 Y좌표(절대 픽셀) — 캐릭터/몬스터 모두 [Anchor.bottomCenter]로
   /// 이 지점에 발을 붙인다.
-  double get _groundY => size.y * groundYRatio;
+  ///
+  /// [주의] 캐릭터가 화면 위에서 공중에 뜬 것처럼 보인다는 피드백을
+  /// 받아 원인을 짚어봤다 — [Anchor.bottomCenter] + [PlayerAnimationComponent
+  /// .render]의 offset 계산(`size.y - fittedSize.y`)은 박스 크기
+  /// ([PlayerAnimationComponent.boxSize])가 커져도 발 위치가 절대
+  /// 흔들리지 않도록 이미 짜여 있다(순수 벡터 산수라 boxSize와 무관) —
+  /// 그래서 boxSize를 키운 게 원인이 아니었다. 진짜 원인은 이 값
+  /// ([groundYRatio], 고정 비율 0.88)과 실제로 화면에 그려지는 바닥
+  /// 이미지의 위쪽 끝([ParallaxGroundLayer.computeBottomAlignedTile]의
+  /// `top`, 바닥 텍스처 원본 가로세로비 + 현재 화면 가로세로비로 매번
+  /// 다시 계산됨)이 애初부터 서로 독립적인 값이었다는 데 있다 — 어느
+  /// 특정 화면 비율에서 우연히 비슷하게 맞았을 뿐, 이번 세션에서 앱
+  /// 전체를 폰 폭(500px)으로 레터박스 처리하면서 화면 가로세로비 자체가
+  /// 바뀌자 둘이 어긋난 것이다. 매직 넘버를 다시 맞추는 대신, 바닥
+  /// 텍스처가 실제로 그려지는 자리를 그대로 읽어와 쓰도록 고쳤다 —
+  /// 그러면 화면 비율이 또 바뀌어도(창 크기, 기기별 화면비 등) 항상
+  /// 자동으로 맞는다. 텍스처가 아직 로드 전이면([groundSpriteSize]가
+  /// null) 기존 비율로 안전하게 대체한다.
+  double get _groundY =>
+      computeGroundY(groundSpriteSize: groundSpriteSize, screenSize: size);
+
+  /// [_groundY]의 순수 계산 부분 — [size](Flame의 `Game.size`, 레이아웃
+  /// 전이면 접근 시 어서션이 터진다) 대신 호출부가 이미 알고 있는
+  /// [screenSize]를 그대로 받는다. [home_screen.dart]의 [_BattleView]도
+  /// 같은 이유([IdleGame.computeBattleStopX] 문서 참고 — Flutter의
+  /// `build()`가 Flame 레이아웃보다 먼저 실행될 수 있다)로 `game.size`를
+  /// 직접 읽는 대신 자기 `LayoutBuilder`의 `constraints`로 이 함수를
+  /// 그대로 호출해, 플레이어/몬스터/HP 바가 항상 정확히 같은 바닥
+  /// 줄에 서도록 맞춘다.
+  /// 캐릭터/몬스터 발을 바닥 블록의 맨 위 모서리가 아니라 그 안쪽으로
+  /// 살짝 파묻히게 하는 비율(요구사항: "바닥 블록의 중간 높이로") — 0이면
+  /// 블록 맨 위(예전 동작), 1이면 블록 맨 아래. 0.5로 블록 세로 길이의
+  /// 절반만큼 더 내려서 발/하체 일부가 블록에 가라앉은 것처럼 보이게
+  /// 한다.
+  static const double groundSinkRatio = 0.5;
+
+  static double computeGroundY({
+    required Vector2? groundSpriteSize,
+    required Vector2 screenSize,
+  }) {
+    if (groundSpriteSize != null) {
+      final ({Vector2 tileSize, double top}) layout =
+          ParallaxGroundLayer.computeBottomAlignedTile(
+            groundSpriteSize,
+            screenSize,
+          );
+      return layout.top + layout.tileSize.y * groundSinkRatio;
+    }
+    return screenSize.y * groundYRatio;
+  }
+
+  /// 현재 로드된 바닥 텍스처의 원본 픽셀 크기 — [computeGroundY]가 실제
+  /// 그려지는 자리를 계산하는 데 쓴다. 아직 로드 전이거나(비동기 로딩
+  /// 중) Flame이 이 컴포넌트를 아직 마운트하지 않았으면([isLoaded]가
+  /// false — [_groundLayer]가 `onLoad()`에서야 만들어지는 `late` 필드라
+  /// 그 전에 읽으면 `LateInitializationError`가 난다) null을 돌려준다 —
+  /// [computeGroundY]가 그 경우 기존 비율 기반 계산으로 안전하게
+  /// 대체한다.
+  Vector2? get groundSpriteSize {
+    if (!isLoaded) {
+      return null;
+    }
+    return _groundLayer.sprite?.srcSize;
+  }
 
   /// [_monster]/[_player]의 실제 시각적 중심(피격 이펙트/투사체 시작·착탄점/
   /// 데미지 텍스트 기준점) — 둘 다 [Anchor.bottomCenter]라 `position`이
@@ -542,8 +612,35 @@ class IdleGame extends FlameGame {
     final Sprite? groundSprite = results[1];
     if (groundSprite != null) {
       _groundLayer.sprite = groundSprite;
+      // [주의] 바닥 텍스처가 이 시점에야(비동기 로딩) 도착한다 — 그런데
+      // 캐릭터/몬스터는 이미 onLoad()에서 한 번 배치가 끝난 뒤다.
+      // [_groundY]/[computeGroundY]가 텍스처의 실제 렌더링 위치를 쓰도록
+      // 고쳐 놨어도, 그 시점엔 아직 텍스처가 없어 비율 기반 대체값으로
+      // 배치됐고, 텍스처가 도착한 지금 Y만 바로잡아 주지 않으면 그
+      // 대체값에 영원히 머물러 캐릭터가 실제 바닥 그림보다 위에 붕 뜬
+      // 채로 보인다(실측 확인됨). X는 절대 건드리지 않는다 — 이 시점에
+      // 몬스터가 마침 이동(moving) 단계 중일 수도 있는데,
+      // [onGameResize]를 통째로 다시 부르면 그 진행 중이던 스크롤
+      // X좌표까지 화면 밖으로 되돌려 버려 눈에 띄게 순간이동한 것처럼
+      // 보인다 — 그래서 Y좌표만 딱 집어 고친다.
+      _player.position = Vector2(_player.position.x, _groundY);
+      _monster.position = Vector2(_monster.position.x, _groundY);
+      // [_BattleView](home_screen.dart)의 HP 바 위치도 이 텍스처 위치를
+      // 그대로 따라 계산하는데(IdleGame.computeGroundY 문서 참고), 그
+      // LayoutBuilder는 성능 최적화상 "리사이즈될 때만" 다시 빌드된다 —
+      // 바닥 텍스처가 비동기로 막 도착한 이 순간은 리사이즈가 아니라서
+      // 아무 신호 없이는 HP 바가 여전히 예전(대체값 기반) 자리에 멈춰
+      // 있는다. onPlayerHit/onDefeatFadeOut과 같은 콜백 관례로
+      // HomeScreen에 알려 그쪽에서 한 번 다시 그리게 한다.
+      onGroundThemeReady?.call();
     }
   }
+
+  /// [_loadChapterTheme]가 바닥 텍스처를 새로 반영하고 캐릭터/몬스터
+  /// Y좌표를 바로잡은 직후 호출된다 — [_BattleView]의 HP 바 오버레이가
+  /// 같은 위치로 다시 그려지도록 [_HomeScreenState]가 `setState`로
+  /// 반응한다.
+  VoidCallback? onGroundThemeReady;
 
   /// 원인(주로 원격 레포에 파일이 없거나 경로가 틀린 404)을 콘솔에 남겨서
   /// "왜 안 보이지?"를 바로 진단할 수 있게 하면서도, 실패는 null로 조용히
@@ -607,10 +704,24 @@ class IdleGame extends FlameGame {
     screenWidth: size.x,
   );
 
-  /// [_battleStopX]의 순수 계산 부분 — 컴포넌트 상태 없이 독립적으로
-  /// 테스트할 수 있도록 분리해 뒀다. 원거리 캐릭터라도 몬스터가 화면
-  /// 밖으로 밀려나지 않도록 화면 폭의 80%를 넘지 않게 clamp한다.
-  @visibleForTesting
+  /// [_battleStopX]의 순수 계산 부분 — [size] 등 컴포넌트 상태와 완전히
+  /// 무관해서 두 곳에서 공유해 쓴다: (1) 단위 테스트가 컴포넌트 없이
+  /// 독립적으로 검증하고, (2) [_BattleView](home_screen.dart)의 몬스터
+  /// HP 바가 같은 공식을 자기 `LayoutBuilder`의 `constraints.maxWidth`로
+  /// 직접 계산한다 — `game.size`를 읽는 대신이다.
+  ///
+  /// [주의] 한때 `IdleGame`에 `size`를 읽는 공개 getter를 따로 둬서
+  /// `_BattleView`가 그걸 호출하게 했었는데, Flutter의 `build()`(HP 바
+  /// 포함)는 Flame이 `GameWidget`의 실제 레이아웃을 아직 못 받은
+  /// 시점에도 먼저 실행될 수 있어서, 그 순간 `Game.size`를 읽으면
+  /// `hasLayout`이 아직 false라 "size is not ready yet" 어서션이 그대로
+  /// 터졌다(실측 확인됨 — 레드 스크린). `LayoutBuilder`의 `constraints`는
+  /// 그런 타이밍 문제 자체가 없어서, 아예 `size`를 안 읽는 이 순수
+  /// 함수만 공유하는 쪽으로 바꿨다. 두 자리(여기와 `_BattleView`)가
+  /// 항상 같은 결과를 내야 하므로(그래야 HP 바가 실제 몬스터 자리와
+  /// 어긋나지 않는다) 공식을 각자 베껴 쓰지 않고 반드시 이 하나만
+  /// 호출한다. 원거리 캐릭터라도 몬스터가 화면 밖으로 밀려나지 않도록
+  /// 화면 폭의 80%를 넘지 않게 clamp한다.
   static double computeBattleStopX({
     required double playerX,
     required double attackRange,
@@ -875,24 +986,50 @@ class IdleGame extends FlameGame {
     _monsterEmoji.text = emoji;
   }
 
-  Vector2 _playerPosition(Vector2 gameSize) =>
-      Vector2(gameSize.x * playerXRatio, gameSize.y * groundYRatio);
+  // [_groundY]와 반드시 같은 계산([computeGroundY])을 써야 한다 — 몬스터는
+  // [_groundY]로, 플레이어는 여기서 각자 따로 바닥 Y를 구하다가 서로
+  // 어긋나는 일이 없도록.
+  Vector2 _playerPosition(Vector2 gameSize) => Vector2(
+    gameSize.x * playerXRatio,
+    computeGroundY(groundSpriteSize: groundSpriteSize, screenSize: gameSize),
+  );
 
-  /// 창 크기/해상도가 바뀔 때마다(모바일 회전, 데스크톱 창 리사이즈 등)
-  /// Flame이 자동으로 호출한다 — [size] 파라미터를 그대로 비율 계산에
-  /// 써서, 캐릭터/몬스터가 새 해상도의 바닥 길 라인에 다시 정확히
-  /// 맞춰지도록 한다(절대 픽셀을 그대로 두면 좁아진/넓어진 화면에서
-  /// 발이 땅에서 뜨거나 파묻힌다).
+  /// 창 크기/해상도가 바뀔 때마다(모바일 회전, 데스크톱 창 리사이즈,
+  /// 가로로 넓히기 등) Flame이 자동으로 호출한다 — [size] 파라미터를
+  /// 그대로 비율 계산에 써서, 캐릭터/몬스터가 새 해상도의 바닥 길 라인에
+  /// 다시 정확히 맞춰지도록 한다(절대 픽셀을 그대로 두면 좁아진/넓어진
+  /// 화면에서 발이 땅에서 뜨거나 파묻힌다).
+  ///
+  /// [주의] 메인 스테이지 전투 중(battle 단계) 리사이즈되면, 몬스터는
+  /// 화면 정중앙(`size.x / 2`)이 아니라 [_battleStopX]를 새 [size]로 다시
+  /// 계산한 값으로 맞춰야 한다 — 예전엔 무조건 `size.x / 2`로 되돌려서,
+  /// 창을 가로로 넓힐수록(모바일 세로 → 태블릿/데스크톱 가로) 플레이어
+  /// (`size.x * playerXRatio` = 20%)와 몬스터(`size.x / 2` = 50%) 사이
+  /// 간격이 `size.x * 0.3`으로 화면 폭에 비례해 한없이 벌어졌다(장착
+  /// 캐릭터의 실제 사거리[CharacterClassX.attackRange]와 완전히 무관한
+  /// 값). 이동(moving) 단계나 던전(메인 스테이지가 아닌 모드)은 원래부터
+  /// 화면 밖/정중앙이 의도된 자리라 그대로 둔다.
   @override
   void onGameResize(Vector2 size) {
     super.onGameResize(size);
     if (!isLoaded) {
       return;
     }
-    final double groundY = size.y * groundYRatio;
-    _monster.position = mode == GameMode.mainStage && _encounterPhase == _EncounterPhase.moving
-        ? Vector2(size.x + _monsterOffscreenMargin, groundY)
-        : Vector2(size.x / 2, groundY);
+    final double groundY = _groundY;
+    if (mode == GameMode.mainStage) {
+      if (_encounterPhase == _EncounterPhase.moving) {
+        _monster.position = Vector2(size.x + _monsterOffscreenMargin, groundY);
+      } else {
+        final double battleStopX = computeBattleStopX(
+          playerX: size.x * playerXRatio,
+          attackRange: _equippedCharacterClass.attackRange,
+          screenWidth: size.x,
+        );
+        _monster.position = Vector2(battleStopX, groundY);
+      }
+    } else {
+      _monster.position = Vector2(size.x / 2, groundY);
+    }
     _player.position = _playerPosition(size);
   }
 
@@ -1136,14 +1273,6 @@ class IdleGame extends FlameGame {
       case AttackType.ranged:
         final String characterId = _equippedCharacterId;
         final ProjectileVisual visual = visualFor(classType, characterId);
-        // 진단용 로그 — 투사체 이미지가 엉뚱한 캐릭터 폴더에서 로드
-        // 시도되는 건 아닌지(예: 마법사를 장착했는데 characterId가 실제로는
-        // 다른 캐릭터를 가리키는 경우) 확인용이다. 문제를 찾은 뒤에는
-        // 지워도 된다.
-        debugPrint(
-          '[IdleGame] 원거리 공격 발사 — characterId=$characterId, classType=$classType, '
-          'primary=${visual.spriteAssetPath}, fallback=${visual.fallbackSpriteAssetPath}',
-        );
         add(
           ProjectileComponent(
             startPosition: _playerCenter,
@@ -1847,7 +1976,11 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   ///
   /// 이후 실제 전투 화면에서 180이 오히려 너무 크다는 피드백으로 120으로
   /// 축소했고(180 대비 약 66.7%), 그래도 여전히 크다는 후속 피드백으로
-  /// 다시 그 절반인 60으로 축소했다(120 대비 정확히 50%). [render]가
+  /// 다시 그 절반인 60으로 축소했다(120 대비 정확히 50%). 이후 앱 전체를
+  /// 폰 폭(500px)으로 레터박스 처리하고 나니 이번엔 60이 너무 작다는
+  /// 피드백을 받아, 60 대비 1.4배인 84로 다시 키웠다(요구사항: "원래
+  /// 사이즈 대비 70% 크기로" — 즉 한 단계 전인 120을 "원래 크기"
+  /// 기준으로 보고, 거기서 30%만 줄어든 84가 되도록). [render]가
   /// 매번 [_renderScale]을 이 [size](=box 한 변) 기준으로 다시 계산하고
   /// (`computeRenderScale(referenceSrcSize, size)`), 그 결과를 상자 안에서
   /// 항상 가로 중앙·세로 하단([offset] 계산, `size.y - fittedSize.y`)으로
@@ -1867,7 +2000,7 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   /// 전투 필드뿐 아니라 그 미리보기 카드/펫 아바타도 함께 작아진다.
   /// 이건 의도된 동작이다(둘을 서로 다른 스케일로 분리해 달라는 요청이
   /// 아니었다).
-  static const double boxSize = 60;
+  static const double boxSize = 84;
 
   /// 캐릭터 모션/공격 이펙트 표준 규격(2026-08 결정) — 원본 캔버스는
   /// 가로 800 x 세로 720px, 그 안에서 실제 캐릭터 콘텐츠는 가로/세로 모두

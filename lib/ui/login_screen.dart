@@ -85,7 +85,16 @@ class _LoginScreenState extends State<LoginScreen> {
     if (currentUser == null) {
       return; // 로그인 UI를 그대로 보여준다(build()가 이미 그리고 있다).
     }
-    await _routeAfterAuth();
+    try {
+      await _routeAfterAuth();
+    } catch (error) {
+      // 콜드 스타트 자동 로그인은 유저가 누른 버튼이 없어 에러를 보여줄
+      // 곳이 마땅치 않다 — 조용히 실패하고 로그인 화면을 그대로 둔다
+      // (SupabaseManager의 refresh_token_already_used 자가 치유 리스너
+      // 문서 참고 — 이 실패는 보통 저장된 세션이 이미 정리된 상황이라,
+      // 다시 그리면 자연스럽게 "게스트로 시작하기" 버튼을 볼 수 있다).
+      debugPrint('[LoginScreen] 자동 로그인 라우팅 실패: $error');
+    }
   }
 
   /// 구글 로그인 완료(웹 페이지 복귀/모바일 딥링크 복귀)를 이 콜백으로
@@ -144,10 +153,22 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_hasRoutedAfterAuth) {
       return;
     }
+    // [주의] fetchNickname은 실패해도(오프라인 등) 조용히 null을 반환하는
+    // 관례라(SupabaseManager 문서 참고), 세션 자체가 그 사이에 만료되어
+    // 정리됐어도(리프레시 토큰이 이미 소진된 경우 등) 이 호출만으로는
+    // "그냥 오프라인"과 구분이 안 된다 — 그래서 fetchNickname 결과가 아니라
+    // currentUser를 다시 확인해서, 세션이 실제로 사라졌으면 여기서
+    // 라우팅을 접는다(NicknameScreen/GameEntryScreen으로 넘어가 버리면
+    // 로그인 안 된 상태로 게임에 들어가는 꼴이 된다).
     final String? nickname = await SupabaseManager.instance.fetchNickname();
     // fetchNickname의 await 구간 동안 다른 경로(_checkAutoLogin ↔
     // _onAuthStateChange)가 먼저 라우팅을 끝냈을 수 있으므로 다시 확인한다.
     if (!mounted || _hasRoutedAfterAuth) {
+      return;
+    }
+    if (Supabase.instance.client.auth.currentUser == null) {
+      // 세션이 이 사이에 만료되어 정리됐다 — 로그인 화면을 그대로 유지해
+      // 유저가 다시 로그인 버튼을 누를 수 있게 한다.
       return;
     }
     _hasRoutedAfterAuth = true;
