@@ -27,12 +27,14 @@ import '../widgets/center_toast.dart';
 import '../widgets/guide_mission_banner.dart';
 import '../widgets/title_badge.dart';
 import 'battle_pass_screen.dart';
+import 'friend_screen.dart' show FriendHudButton;
 import 'mailbox_screen.dart';
 import 'mission_dialog.dart';
 import 'potion_quick_slot.dart';
 import 'quest_screen.dart';
 import 'ranking_screen.dart';
 import 'rebirth_confirm_dialog.dart';
+import 'top_bar.dart' show SpeedButton;
 import 'world_boss_entry_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -259,7 +261,10 @@ class _BattleView extends StatelessWidget {
           // game.size를 읽었을 때와 완전히 동일하면서 레이스 컨디션만
           // 없앤다.
           final CharacterClass equippedCharacterClass =
-              EquipmentManager.instance.equippedItems[EquipType.character]?.classType ??
+              EquipmentManager
+                  .instance
+                  .equippedItems[EquipType.character]
+                  ?.classType ??
               CharacterClass.warrior;
           final double monsterCenterX = IdleGame.computeBattleStopX(
             playerX: playerX,
@@ -424,6 +429,23 @@ class _BattleView extends StatelessWidget {
                 left: monsterCenterX - monsterHpBarWidth / 2,
                 width: monsterHpBarWidth,
                 child: _MonsterHpBar(manager: manager),
+              ),
+              // [2026-08-24] 상단바(main.dart의 AppBar)가 배속/친구 버튼
+              // 때문에 총 전투력·골드·보석 숫자가 찌그러져 안 보이는
+              // 문제가 있어, 이 둘을 상단바에서 빼고 여기 전투 캔버스
+              // 좌/우 하단 구석에 반투명 플로팅 버튼으로 옮겼다. 둘 다
+              // 이미 각자 자기 상태를 구독하는 완결된 위젯(SpeedButton/
+              // FriendHudButton)이라 그대로 재사용하고, Opacity로만
+              // "떠 있는" 반투명 느낌을 낸다.
+              const Positioned(
+                left: 12,
+                bottom: 12,
+                child: Opacity(opacity: 0.85, child: SpeedButton()),
+              ),
+              const Positioned(
+                right: 12,
+                bottom: 12,
+                child: Opacity(opacity: 0.85, child: FriendHudButton()),
               ),
             ],
           );
@@ -615,7 +637,11 @@ class _BossTimerBadge extends StatelessWidget {
       animation: manager,
       builder: (context, _) {
         if (!manager.isBossStage) {
-          return const Positioned(width: 0, height: 0, child: SizedBox.shrink());
+          return const Positioned(
+            width: 0,
+            height: 0,
+            child: SizedBox.shrink(),
+          );
         }
         return Positioned(
           top: 52,

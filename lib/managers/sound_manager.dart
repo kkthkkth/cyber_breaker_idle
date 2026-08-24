@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flame_audio/flame_audio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// BGM 루프 + SFX 재생을 담당하는 싱글턴 — [FlameAudio](내부적으로
 /// audioplayers)를 감싼다. 모든 재생 호출을 try/catch로 감싸서, 사운드
@@ -34,7 +37,7 @@ import 'package:flutter/foundation.dart';
 /// 이 매니저는 위 6개 파일이 `assets/audio/`에 이미 존재한다고 가정하고
 /// 짜여 있다 — 실제 오디오를 내려받아 그 폴더에 넣고 `pubspec.yaml`의
 /// `assets/audio/` 선언(이미 추가돼 있음)만 확인하면 바로 재생된다.
-class SoundManager {
+class SoundManager extends ChangeNotifier {
   SoundManager._internal();
 
   static final SoundManager instance = SoundManager._internal();
@@ -46,8 +49,83 @@ class SoundManager {
     'gacha_reveal.ogg',
   ];
 
+  static const String _bgmEnabledKey = 'sound_manager_bgm_enabled';
+  static const String _sfxEnabledKey = 'sound_manager_sfx_enabled';
+
   bool sfxEnabled = true;
   bool bgmEnabled = true;
+
+  /// main()이 앱 시작 시 [init]과 별개로(그보다 먼저) 호출 — 설정
+  /// 화면(SwitchListTile)이 값을 그리기 전에, 그리고 첫 BGM 재생 요청이
+  /// [bgmEnabled]를 확인하기 전에 로컬에 저장된 켬/끔 상태를 반드시 먼저
+  /// 읽어와야 한다. 순수 로컬 읽기라 [init]의 SFX 프리로드(느릴 수 있음)와
+  /// 달리 await해도 부팅이 눈에 띄게 느려지지 않는다.
+  Future<void> loadSettings() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      bgmEnabled = prefs.getBool(_bgmEnabledKey) ?? true;
+      sfxEnabled = prefs.getBool(_sfxEnabledKey) ?? true;
+    } catch (error) {
+      debugPrint('[SoundManager] 사운드 설정 로드 실패, 기본값(켜짐) 유지: $error');
+    }
+  }
+
+  Future<void> _persistSettings() async {
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_bgmEnabledKey, bgmEnabled);
+      await prefs.setBool(_sfxEnabledKey, sfxEnabled);
+    } catch (error) {
+      debugPrint('[SoundManager] 사운드 설정 저장 실패: $error');
+    }
+  }
+
+  /// 설정 화면의 "배경음" 스위치가 부른다 — [TradeManager.setAllowTrade]와
+  /// 같은 관례(필드를 즉시 바꾸고 [notifyListeners]로 화면에 반영한 뒤,
+  /// 저장은 뒤따라 비동기로). 끄면 지금 재생 중인 BGM을 그 자리에서
+  /// 즉시 멈추고([_currentBgmFile]은 남겨 둔다 — "무엇이 재생 중이어야
+  /// 하는지"와 "지금 실제로 소리가 나는지"를 분리해서, 다시 켜면 같은
+  /// 트랙을 이어서 재생할 수 있게), 켜면 그 트랙을 곧바로 다시 재생한다.
+  Future<void> setBgmEnabled(bool value) async {
+    if (bgmEnabled == value) {
+      return;
+    }
+    bgmEnabled = value;
+    notifyListeners();
+    unawaited(_persistSettings());
+
+    if (!value) {
+      try {
+        await FlameAudio.bgm.stop();
+      } catch (error) {
+        debugPrint('[SoundManager] BGM 음소거 실패: $error');
+      }
+      return;
+    }
+
+    final String? file = _currentBgmFile;
+    if (file == null || _brokenFiles.contains(file)) {
+      return;
+    }
+    try {
+      await FlameAudio.bgm.play(file, volume: 0.5);
+    } catch (error) {
+      _brokenFiles.add(file);
+      debugPrint('[SoundManager] BGM 재개 실패($file, 이후 재생 생략): $error');
+    }
+  }
+
+  /// 설정 화면의 "효과음" 스위치가 부른다 — SFX는 전부 한 번 재생하고
+  /// 끝나는 짧은 소리라 "지금 재생 중인 걸 멈춘다"는 개념이 없다(끄는
+  /// 순간 이후의 새 재생 요청만 [_playSfx]의 기존 가드가 걸러낸다).
+  Future<void> setSfxEnabled(bool value) async {
+    if (sfxEnabled == value) {
+      return;
+    }
+    sfxEnabled = value;
+    notifyListeners();
+    unawaited(_persistSettings());
+  }
 
   String? _currentBgmFile;
 

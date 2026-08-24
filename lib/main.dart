@@ -67,7 +67,6 @@ import 'widgets/tutorial_overlay.dart';
 import 'ui/character_screen.dart';
 import 'ui/comprehensive_stats_dialog.dart';
 import 'ui/dungeon_screen.dart';
-import 'ui/friend_screen.dart';
 import 'ui/guild_screen.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
@@ -75,7 +74,6 @@ import 'ui/nickname_screen.dart';
 import 'ui/offline_reward_dialog.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_screen.dart';
-import 'ui/top_bar.dart';
 import 'ui/trade_screen.dart';
 import 'utils/number_formatter.dart';
 import 'widgets/center_toast.dart';
@@ -117,6 +115,10 @@ Future<void> main() async {
     // 오지 않아 마커가 훨씬 이전 값에 멈춰 있을 수 있다
     // (OfflineRewardManager.startPeriodicAutoSave 문서 참고).
     OfflineRewardManager.instance.startPeriodicAutoSave();
+    // 배경음/효과음 켬·끔 설정 — 순수 로컬 읽기라 빠르고, 아래
+    // playLobbyBgm()(이 try/catch 블록 뒤, runApp 직전)가 [bgmEnabled]를
+    // 확인하기 전에 반드시 끝나 있어야 첫 재생부터 유저 설정을 따른다.
+    await SoundManager.instance.loadSettings();
     // SFX 프리로드 — 실패해도(assets/audio/ 파일 없음 등) 조용히 넘어가므로
     // 다른 매니저들의 await 체인을 막지 않는다.
     unawaited(SoundManager.instance.init());
@@ -236,7 +238,8 @@ Future<void> main() async {
     unawaited(FriendManager.instance.loadAll());
     MidnightResetManager.instance.start();
     await TutorialManager.instance.loadData(
-      hasExistingProgress: GameManager.instance.chapter > 1 || GameManager.instance.gold > 0,
+      hasExistingProgress:
+          GameManager.instance.chapter > 1 || GameManager.instance.gold > 0,
     );
   } catch (error, stackTrace) {
     debugPrint(
@@ -857,8 +860,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         // 일일 퀘스트(옛 DailyQuestHudButton, 📜) 진입점은 인게임 화면의
         // 좌측 아이콘 열([_DailyQuestHudButton], home_screen.dart)로
         // 옮겼다 — 이 앱바에는 더 이상 없다.
+        //
+        // [2026-08-24] SpeedButton/FriendHudButton도 이 앱바에서 뺐다 —
+        // 좁은 앱바 폭에서 이 둘(고정 너비)이 총 전투력/골드/보석
+        // (Flexible)을 밀어내 숫자가 아예 안 보일 정도로 찌그러지는
+        // 문제가 있었다. 대신 전투 화면(home_screen.dart의
+        // `_BattleView`) 하단 구석에 반투명 플로팅 버튼으로 옮겼다.
         actions: [
-          const SpeedButton(),
           // 상단바 정중앙에 총 전투력을 크게 강조한다(요구사항: "프로필 →
           // 배속 → 총 전투력(중앙) → 골드 → 보석"). 좁은 앱바 공간에서
           // 잘리지 않도록 Flexible + TotalCombatPowerBanner 내부의
@@ -969,10 +977,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               },
             ),
           ),
-          // 친구 목록/온라인 상태 진입점 — 예전엔 이 앱바에 톱니바퀴(설정)
-          // 아이콘이 있었지만 프로필 다이얼로그 헤더로 옮겨갔다(위 leading
-          // 문서 참고) — 우측 끝에 새 친구 버튼을 둔다.
-          const FriendHudButton(),
         ],
       ),
       body: IndexedStack(

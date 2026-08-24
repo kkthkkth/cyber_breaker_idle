@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../managers/dungeon_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/game_manager.dart';
+import '../managers/sound_manager.dart';
 import '../managers/trade_manager.dart';
 
 void showSettingsDialog(BuildContext context) {
@@ -54,7 +55,9 @@ class _SettingsDialog extends StatelessWidget {
       builder: (couponContext) {
         return AlertDialog(
           backgroundColor: const Color(0xFF1B1B26),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             '쿠폰 입력',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
@@ -170,10 +173,40 @@ class _SettingsDialog extends StatelessWidget {
               animation: TradeManager.instance,
               builder: (context, _) => SwitchListTile(
                 secondary: const Icon(Icons.swap_horiz, color: Colors.white70),
-                title: const Text('거래 허용', style: TextStyle(color: Colors.white)),
+                title: const Text(
+                  '거래 허용',
+                  style: TextStyle(color: Colors.white),
+                ),
                 activeThumbColor: const Color(0xFF6C4FCE),
                 value: TradeManager.instance.allowTrade,
-                onChanged: (value) => TradeManager.instance.setAllowTrade(value),
+                onChanged: (value) =>
+                    TradeManager.instance.setAllowTrade(value),
+              ),
+            ),
+            // 요구사항: "배경음(BGM)/효과음(SFX)을 끄고 켤 수 있는
+            // 온오프 기능" — 위 "거래 허용"과 완전히 같은 디자인(Switch +
+            // AnimatedBuilder로 즉시 반영). SoundManager.setBgmEnabled가
+            // 스위치를 내리는 즉시 재생 중인 BGM도 함께 멈춘다.
+            AnimatedBuilder(
+              animation: SoundManager.instance,
+              builder: (context, _) => SwitchListTile(
+                secondary: const Icon(Icons.music_note, color: Colors.white70),
+                title: const Text('배경음', style: TextStyle(color: Colors.white)),
+                activeThumbColor: const Color(0xFF6C4FCE),
+                value: SoundManager.instance.bgmEnabled,
+                onChanged: (value) =>
+                    SoundManager.instance.setBgmEnabled(value),
+              ),
+            ),
+            AnimatedBuilder(
+              animation: SoundManager.instance,
+              builder: (context, _) => SwitchListTile(
+                secondary: const Icon(Icons.volume_up, color: Colors.white70),
+                title: const Text('효과음', style: TextStyle(color: Colors.white)),
+                activeThumbColor: const Color(0xFF6C4FCE),
+                value: SoundManager.instance.sfxEnabled,
+                onChanged: (value) =>
+                    SoundManager.instance.setSfxEnabled(value),
               ),
             ),
             _SettingsTile(
