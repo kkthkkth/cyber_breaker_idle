@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 
 import '../game/idle_game.dart';
 import '../managers/attendance_manager.dart';
-import '../managers/battle_pass_manager.dart';
 import '../managers/equipment_manager.dart';
 import '../managers/game_manager.dart';
 import '../managers/mailbox_manager.dart';
@@ -26,7 +25,6 @@ import '../utils/number_formatter.dart';
 import '../widgets/center_toast.dart';
 import '../widgets/guide_mission_banner.dart';
 import '../widgets/title_badge.dart';
-import 'battle_pass_screen.dart';
 import 'friend_screen.dart' show FriendHudButton;
 import 'mailbox_screen.dart';
 import 'mission_dialog.dart';
@@ -129,8 +127,13 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
-                const SkillTreeQuickBar(),
-                const ActiveSkillQuickBar(),
+                // [주의] 예전엔 여기 SkillTreeQuickBar()/ActiveSkillQuickBar()가
+                // 각자 전체 폭짜리 막대로 별도 Column 자리를 차지했다 —
+                // 화면을 너무 많이 가린다는 피드백으로 하나의 작은
+                // _SkillBar로 합쳐 _BattleView 안쪽(캔버스 하단의 빈
+                // 공간)에 떠 있는 오버레이로 옮겼다(_BattleView의
+                // Positioned 목록 참고) — 그래서 여기 Column 자리 자체가
+                // 없어졌다.
                 Expanded(flex: 1, child: _UpgradeView(manager: _manager)),
               ],
             ),
@@ -368,8 +371,19 @@ class _BattleView extends StatelessWidget {
               ),
               // 상단 AppBar의 보석/코인 재화 표시(main.dart) 바로 아래,
               // 화면 우측 상단에 위치한 유틸리티 버튼 묶음. 원래 상단
-              // AppBar에 있던 우편함/배틀패스 버튼을 이리로 옮기면서,
-              // 기존 물약 퀵슬롯 바로 왼쪽에 나란히 붙였다.
+              // AppBar에 있던 우편함 버튼을 이리로 옮기면서, 기존 물약
+              // 퀵슬롯 바로 왼쪽에 나란히 붙였다.
+              //
+              // [주의] 배틀패스 버튼은 여기서 완전히 뺐다 — 퀘스트 탭에
+              // 이미 배틀패스 진행도 배너가 통합돼 있어 중복 진입점이라는
+              // 피드백을 받았다(_BattlePassHudButton 클래스 자체는 다른
+              // 화면에서 참조하지 않으므로 죽은 코드로 남지 않도록 함께
+              // 지웠다). 그 자리엔 대신 배속 버튼(SpeedButton)을 옮겨
+              // 왔다 — 예전엔 전투 캔버스 좌측 하단에 반투명으로 떠
+              // 있었는데, 좌측 아이콘 열(_QuestHudButton 등)과 화면 높이가
+              // 낮을 때 겹쳐 보였다. 이미 자기 상태를 구독하는 완결된
+              // 위젯이라 그대로 재사용한다 — 이 줄의 다른 버튼들처럼 고정
+              // 배경이 있어서 Opacity로 "떠 있는" 느낌을 낼 필요도 없다.
               const Positioned(
                 top: 12,
                 right: 12,
@@ -378,7 +392,7 @@ class _BattleView extends StatelessWidget {
                   children: [
                     _MailboxHudButton(),
                     SizedBox(width: 8),
-                    _BattlePassHudButton(),
+                    SpeedButton(),
                     SizedBox(width: 8),
                     PotionQuickSlot(),
                   ],
@@ -432,20 +446,31 @@ class _BattleView extends StatelessWidget {
               ),
               // [2026-08-24] 상단바(main.dart의 AppBar)가 배속/친구 버튼
               // 때문에 총 전투력·골드·보석 숫자가 찌그러져 안 보이는
-              // 문제가 있어, 이 둘을 상단바에서 빼고 여기 전투 캔버스
-              // 좌/우 하단 구석에 반투명 플로팅 버튼으로 옮겼다. 둘 다
-              // 이미 각자 자기 상태를 구독하는 완결된 위젯(SpeedButton/
-              // FriendHudButton)이라 그대로 재사용하고, Opacity로만
-              // "떠 있는" 반투명 느낌을 낸다.
-              const Positioned(
-                left: 12,
-                bottom: 12,
-                child: Opacity(opacity: 0.85, child: SpeedButton()),
-              ),
+              // 문제가 있어, 친구 버튼을 상단바에서 빼고 여기 전투 캔버스
+              // 우측 하단 구석에 반투명 플로팅 버튼으로 옮겼다(배속
+              // 버튼은 이후 우측 상단 버튼 줄로 다시 옮겨졌다 — 위
+              // _MailboxHudButton 옆 Row 참고). 이미 자기 상태를
+              // 구독하는 완결된 위젯([FriendHudButton])이라 그대로
+              // 재사용하고, Opacity로만 "떠 있는" 반투명 느낌을 낸다.
               const Positioned(
                 right: 12,
                 bottom: 12,
                 child: Opacity(opacity: 0.85, child: FriendHudButton()),
+              ),
+              // 자동 발동 스킬(SkillTreeQuickBar)/직접 발동 액티브 스킬
+              // (ActiveSkillQuickBar) — 예전엔 이 둘이 각자 48px 슬롯짜리
+              // 전체 폭 가로 막대로 _BattleView와 _UpgradeView 사이에 별도
+              // Column 자리를 차지했다(HomeScreen.build 참고) — 그 두
+              // 막대가 화면을 너무 많이 가린다는 피드백으로, 하나로 합쳐
+              // 훨씬 작게(58% 크기) 줄이고, 별도 Column 자리 없이 전투
+              // 캔버스 하단의 빈 공간에 떠 있는 얇은 스킬바 하나로
+              // 바꿨다 — 아래 좌/우 하단 코너 버튼(친구 버튼 등)과 겹치지
+              // 않도록 그 위(bottom: 64)에 둔다.
+              const Positioned(
+                left: 0,
+                right: 0,
+                bottom: 64,
+                child: Center(child: _SkillBar()),
               ),
             ],
           );
@@ -1265,72 +1290,8 @@ class _DailyQuestHudButton extends StatelessWidget {
   }
 }
 
-/// 배틀패스 진입 버튼 — [_RankingHudButton] 바로 아래(같은 44px 원
-/// 규격)에 놓인다. 지금 레벨에서 아직 안 받은 보상(무료든 프리미엄이든)이
-/// 하나라도 있으면 [_QuestHudButton]과 같은 빨간 점 배지를 띄운다.
-class _BattlePassHudButton extends StatelessWidget {
-  const _BattlePassHudButton();
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: BattlePassManager.instance,
-      builder: (context, _) {
-        final BattlePassManager manager = BattlePassManager.instance;
-        final bool hasClaimable = manager.rewardTrack.any(
-          (tier) =>
-              manager.canClaim(tier.level, premium: false) ||
-              manager.canClaim(tier.level, premium: true),
-        );
-
-        return GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const BattlePassScreen()),
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xFF6C4FCE),
-                    width: 1.5,
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: const Text('🎫', style: TextStyle(fontSize: 20)),
-              ),
-              if (hasClaimable)
-                Positioned(
-                  top: -2,
-                  right: -2,
-                  child: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF0F0F17),
-                        width: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
 /// 우편함 진입 버튼 — 원래 상단 AppBar([main.dart])에 있던 [MailboxHudButton]을
-/// 인게임 화면 쪽으로 옮기면서, [_BattlePassHudButton]과 같은 44px 원 규격에
+/// 인게임 화면 쪽으로 옮기면서, 다른 HUD 버튼들과 같은 44px 원 규격에
 /// 맞춰 새로 만들었다. 수령 가능한 우편이 있으면 같은 빨간 점 배지를 띄운다.
 class _MailboxHudButton extends StatelessWidget {
   const _MailboxHudButton();
@@ -1432,8 +1393,10 @@ class _OutlinedCountdownText extends StatelessWidget {
   }
 }
 
-/// Horizontal strip of learned skill-tree nodes, shown just above the
-/// upgrade panel.
+/// Horizontal strip of learned skill-tree nodes — 던전/길드던전/길드레이드/
+/// 길드전/균열/월드보스 등 홈 화면이 아닌 다른 전투 화면들이 여전히 이
+/// 단독 막대 형태를 그대로 쓰고 있어([_AutoSkillSlot] 기본 크기 48 그대로)
+/// 공개 위젯으로 남겨 둔다. 홈 화면(메인 전투)만 [_SkillBar]로 교체됐다.
 class SkillTreeQuickBar extends StatelessWidget {
   const SkillTreeQuickBar({super.key});
 
@@ -1474,45 +1437,83 @@ class SkillTreeQuickBar extends StatelessWidget {
   }
 }
 
-/// 장착된 액티브 스킬(DB 기반 광역기/버프기, 최대
-/// [SkillManager.maxEquippedActiveSkills]개)을 탭해서 쓰는 HUD 슬롯 —
-/// 위의 [SkillTreeQuickBar](쿨타임이 돌아오면 배속 중 자동 재발동)와 달리
-/// 매번 유저가 직접 눌러야 발동하고, 쿨타임은 숫자 대신 원형 게이지로
-/// 채워진다([_ActiveSkillSlot] 참고).
-class ActiveSkillQuickBar extends StatelessWidget {
-  const ActiveSkillQuickBar({super.key});
+/// 자동 발동 스킬(스킬트리, [_AutoSkillSlot])과 수동 발동 액티브 스킬
+/// ([_ActiveSkillSlot])을 하나로 합친 얇은 가로 스킬바 — 전투 캔버스
+/// 하단에 떠 있는 오버레이로 쓴다([_BattleView]의 `Positioned` 목록 참고).
+///
+/// [주의] 예전엔 이 둘이 `SkillTreeQuickBar`/`ActiveSkillQuickBar`라는
+/// 별개 위젯으로, 슬롯 48px + 세로 padding 16px = 각 72px짜리 전체 폭
+/// 막대 두 줄을 차지했다(_BattleView와 _UpgradeView 사이의 별도 Column
+/// 자리) — 화면을 너무 많이 가린다는 피드백으로 하나의 작은 바로 합치고,
+/// 슬롯 크기도 48px 대비 약 58%인 [_slotSize](28px)로 줄였다. `Row`를
+/// `SingleChildScrollView`로 감싸 콘텐츠 너비만큼만 차지하게 했다(예전
+/// `ListView`는 주어진 가로 공간을 항상 꽉 채우려 들어서, 아이콘이 몇
+/// 개 없어도 화면 전체 폭으로 늘어나 버렸다) — 그래야 `_BattleView`의
+/// `Center`가 실제로 폭 만큼만 가운데 정렬해 준다. 두 목록 다 비어
+/// 있으면(스킬트리 미학습 + 액티브 스킬 미장착) 아무것도 그리지 않는다.
+class _SkillBar extends StatelessWidget {
+  const _SkillBar();
+
+  /// 예전 슬롯(48px) 대비 약 58% — 요구사항 범위(50~60%) 안. 이 값 하나만
+  /// 바꾸면 [_AutoSkillSlot]/[_ActiveSkillSlot] 내부 아이콘/글자/테두리
+  /// 반경이 전부 비례해서(각자의 `scale = size / 48`) 같이 줄어든다.
+  static const double _slotSize = 28;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: SkillManager.instance,
       builder: (context, _) {
-        final List<ActiveSkill> equipped =
+        final List<SkillNode> learnedSkills = SkillManager.instance.skillTree
+            .where((node) => node.isLearned)
+            .toList();
+        final List<ActiveSkill> equippedActive =
             SkillManager.instance.equippedActiveSkills;
 
-        if (equipped.isEmpty) {
+        if (learnedSkills.isEmpty && equippedActive.isEmpty) {
           return const SizedBox.shrink();
         }
 
         return Container(
-          color: const Color(0xFF1B1B26),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: SizedBox(
-            height: 56,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: equipped.length,
-              itemBuilder: (context, index) {
-                final ActiveSkill skill = equipped[index];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: _ActiveSkillSlot(
-                    key: ValueKey(skill.id),
-                    skillId: skill.id,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B1B26).withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF3A3A4A)),
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final SkillNode node in learnedSkills)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: _AutoSkillSlot(
+                      key: ValueKey('auto_${node.id}'),
+                      node: node,
+                      size: _slotSize,
+                    ),
                   ),
-                );
-              },
+                // 자동 스킬과 액티브 스킬을 한눈에 구분할 수 있도록 둘 다
+                // 있을 때만 얇은 구분선을 하나 끼워 넣는다.
+                if (learnedSkills.isNotEmpty && equippedActive.isNotEmpty)
+                  Container(
+                    width: 1,
+                    height: _slotSize,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    color: const Color(0xFF3A3A4A),
+                  ),
+                for (final ActiveSkill skill in equippedActive)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: _ActiveSkillSlot(
+                      key: ValueKey('active_${skill.id}'),
+                      skillId: skill.id,
+                      size: _slotSize,
+                    ),
+                  ),
+              ],
             ),
           ),
         );
@@ -1525,9 +1526,14 @@ class ActiveSkillQuickBar extends StatelessWidget {
 /// 실시간으로 차오르는 것처럼 보이게 한다([_AutoSkillSlot]과 같은 폴링
 /// 방식이지만, 쿨타임이 끝나도 자동으로 재발동하지 않고 다음 탭을 기다린다).
 class _ActiveSkillSlot extends StatefulWidget {
-  const _ActiveSkillSlot({super.key, required this.skillId});
+  const _ActiveSkillSlot({super.key, required this.skillId, this.size = 48});
 
   final String skillId;
+
+  /// 슬롯 한 변의 길이(px) — 기본값 48은 예전 단독 막대 시절 크기와 같다.
+  /// [_SkillBar]는 더 작은 값([_SkillBar._slotSize])을 넘긴다. 아이콘/
+  /// 글자/테두리 반경은 전부 `size / 48` 비율로 같이 줄어든다.
+  final double size;
 
   @override
   State<_ActiveSkillSlot> createState() => _ActiveSkillSlotState();
@@ -1572,30 +1578,32 @@ class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
     final Color accent = skill.type == ActiveSkillType.buff
         ? Colors.cyanAccent
         : Colors.orangeAccent;
+    final double size = widget.size;
+    final double scale = size / 48;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(10 * scale),
       onTap: isOnCooldown ? null : () => manager.useActiveSkill(widget.skillId),
       child: Container(
-        width: 48,
-        height: 48,
+        width: size,
+        height: size,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: const Color(0xFF20202C),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(10 * scale),
           border: Border.all(color: accent, width: 1.2),
         ),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            Icon(skill.icon, color: accent, size: 22),
+            Icon(skill.icon, color: accent, size: 22 * scale),
             if (isOnCooldown) ...[
               Positioned.fill(
                 child: Padding(
-                  padding: const EdgeInsets.all(3),
+                  padding: EdgeInsets.all(3 * scale),
                   child: CircularProgressIndicator(
                     value: progress,
-                    strokeWidth: 3,
+                    strokeWidth: 3 * scale,
                     backgroundColor: Colors.white24,
                     valueColor: const AlwaysStoppedAnimation(Colors.white70),
                   ),
@@ -1606,10 +1614,10 @@ class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
                 alignment: Alignment.center,
                 child: Text(
                   remaining.ceil().toString(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 16,
+                    fontSize: 16 * scale,
                   ),
                 ),
               ),
@@ -1627,9 +1635,12 @@ class _ActiveSkillSlotState extends State<_ActiveSkillSlot> {
 /// SpeedManager's active speed each tick) and then stops — it does not
 /// restart on its own.
 class _AutoSkillSlot extends StatefulWidget {
-  const _AutoSkillSlot({super.key, required this.node});
+  const _AutoSkillSlot({super.key, required this.node, this.size = 48});
 
   final SkillNode node;
+
+  /// [_ActiveSkillSlot.size] 문서 참고 — 같은 비례 축소 관례를 따른다.
+  final double size;
 
   @override
   State<_AutoSkillSlot> createState() => _AutoSkillSlotState();
@@ -1688,23 +1699,25 @@ class _AutoSkillSlotState extends State<_AutoSkillSlot> {
   Widget build(BuildContext context) {
     final SkillNode node = widget.node;
     final bool isOnCooldown = _remainingSeconds > 0;
+    final double size = widget.size;
+    final double scale = size / 48;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(10 * scale),
       onTap: isOnCooldown ? null : _useSkill,
       child: Container(
-        width: 48,
-        height: 48,
+        width: size,
+        height: size,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: const Color(0xFF20202C),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(10 * scale),
           border: Border.all(color: node.element.color, width: 1.2),
         ),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            Icon(node.element.icon, color: node.element.color, size: 22),
+            Icon(node.element.icon, color: node.element.color, size: 22 * scale),
             if (isOnCooldown)
               IgnorePointer(
                 child: Container(
@@ -1712,10 +1725,10 @@ class _AutoSkillSlotState extends State<_AutoSkillSlot> {
                   alignment: Alignment.center,
                   child: Text(
                     _remainingSeconds.ceil().toString(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 18,
+                      fontSize: 18 * scale,
                     ),
                   ),
                 ),

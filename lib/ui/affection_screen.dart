@@ -82,14 +82,13 @@ class _AffectionScreenState extends State<AffectionScreen> {
 
   // 서약(Oath) 여부와 무관하게 항상 같은 `heart$level` 파일명 규칙을
   // 쓴다([AppImages.affectionIllustration] 참고 — 원격 레포에 `_oath`
-  // 접미사가 붙은 별도 파일은 존재하지 않는다). 정지(.png) → 애니메이션
-  // (.webp) 2단계 fallback은 [IllustrationViewer]가 기본으로 처리해 주므로
-  // 여기서 별도 fallback 경로를 만들 필요가 없다.
+  // 접미사가 붙은 별도 파일은 존재하지 않는다). 정지(.png) 기본 표시와
+  // 재생 버튼을 눌렀을 때의 영상(.mp4) 전환은 [IllustrationViewer]가
+  // 기본으로 처리해 주므로 여기서 별도로 토글할 필요가 없다.
   String _staticImagePath(int level) =>
       AppImages.affectionIllustration(_characterId, level);
 
-  String _animatedImagePath(int level) =>
-      AppImages.affectionIllustrationAnimated(_characterId, level);
+  String _videoPath(int level) => AppImages.affectionIllustrationVideo(_characterId, level);
 
   void _selectLevel(int level) {
     if (!_manager.isLevelUnlocked(_characterId, level)) {
@@ -136,7 +135,11 @@ class _AffectionScreenState extends State<AffectionScreen> {
           reverseTransitionDuration: const Duration(milliseconds: 220),
           pageBuilder: (context, animation, secondaryAnimation) => _AffectionChatPage(
             characterName: widget.character.name,
-            imagePath: _animatedImagePath(_selectedLevel),
+            // 대화창 배경은 항상 정지 일러스트다 — 예전엔 여기 애니메이션
+            // .webp를 우선 시도했지만, R2에는 .webp가 없고 .mp4만 있어
+            // 항상 404였다(영상은 재생 버튼으로만 트는 연출용이라 대화창
+            // 배경으로는 어차피 부적절하다).
+            imagePath: _staticImagePath(_selectedLevel),
             fallbackImagePath: _staticImagePath(_selectedLevel),
             heroTag: _illustrationHeroTag(_selectedLevel),
             line: line,
@@ -381,7 +384,7 @@ class _AffectionScreenState extends State<AffectionScreen> {
                           child: IllustrationViewer(
                             heroTag: _illustrationHeroTag(_selectedLevel),
                             staticImagePath: _staticImagePath(_selectedLevel),
-                            animatedImagePath: _animatedImagePath(_selectedLevel),
+                            videoPath: _videoPath(_selectedLevel),
                             fit: BoxFit.cover,
                             overlays: [
                               Positioned(

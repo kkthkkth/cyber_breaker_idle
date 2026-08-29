@@ -1,34 +1,31 @@
 import '../models/equipment.dart' show ItemGrade;
 import 'asset_paths.dart';
 
-/// Central registry of image paths — 전부 [AssetPaths.baseUrl] 아래의
-/// Supabase Storage 원격 URL을 가리킨다(더 이상 로컬 assets가 아니다).
-/// 참조는 항상 이 클래스를 통해서 하고(원시 문자열 금지), 항상
-/// [CustomSafeImage]로 불러온다 — 네트워크 실패 시 자동으로 placeholder로
-/// 대체된다.
+/// Central registry of image paths — 전부 Cloudflare R2(비공개 버킷)의
+/// objectKey다(더 이상 로컬 assets도, 공개 URL도 아니다). 참조는 항상 이
+/// 클래스를 통해서 하고(원시 문자열 금지), 항상 [CustomSafeImage]로
+/// 불러온다 — [CustomSafeImage]가 내부적으로 [StorageManager]를 통해
+/// 서명 URL을 발급받고, 네트워크 실패 시 자동으로 placeholder로 대체된다.
 class AppImages {
   const AppImages._();
 
   // Equipment icons
-  static const String swordLegendary =
-      '${AssetPaths.baseUrl}assets/icons/sword_legendary.png';
-  static const String shieldRare = '${AssetPaths.baseUrl}assets/icons/shield_rare.png';
-  static const String armorEpic = '${AssetPaths.baseUrl}assets/icons/armor_epic.png';
-  static const String ringMythic = '${AssetPaths.baseUrl}assets/icons/ring_mythic.png';
+  static const String swordLegendary = 'assets/icons/sword_legendary.png';
+  static const String shieldRare = 'assets/icons/shield_rare.png';
+  static const String armorEpic = 'assets/icons/armor_epic.png';
+  static const String ringMythic = 'assets/icons/ring_mythic.png';
 
   // Skill icons
-  static const String skillFire = '${AssetPaths.baseUrl}assets/icons/skill_fire.png';
-  static const String skillWater = '${AssetPaths.baseUrl}assets/icons/skill_water.png';
-  static const String skillLightning =
-      '${AssetPaths.baseUrl}assets/icons/skill_lightning.png';
+  static const String skillFire = 'assets/icons/skill_fire.png';
+  static const String skillWater = 'assets/icons/skill_water.png';
+  static const String skillLightning = 'assets/icons/skill_lightning.png';
 
   // Currency icons
-  static const String iconGold = '${AssetPaths.baseUrl}assets/icons/icon_gold.png';
-  static const String iconGem = '${AssetPaths.baseUrl}assets/icons/icon_gem.png';
+  static const String iconGold = 'assets/icons/icon_gold.png';
+  static const String iconGem = 'assets/icons/icon_gem.png';
 
   // Backgrounds / large art
-  static const String battleBackground =
-      '${AssetPaths.baseUrl}assets/images/battle_background.png';
+  static const String battleBackground = 'assets/images/battle_background.png';
 
   // Player character art — assets/images/player/{GRADE}/{characterId}/ 아래
   // 정면/측면/피격/공격/썸네일/성급 일러스트가 전부 들어간다. [characterId]는
@@ -80,6 +77,17 @@ class AppImages {
   /// 조용히 대체한다 — 호출부에서 존재 여부를 따로 확인할 필요는 없다.
   static String playerActionAnimation(String characterId, String action) => AssetPaths.resolve(
     '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_$action.webp',
+  );
+
+  /// [action]("run"/"attack"/"wait"/"hit") 스프라이트 시트 — 정지 프레임
+  /// 여러 장을 한 이미지 안에 격자로 나열해 둔 파일 하나(`player_{id}_
+  /// {action}_sheet.png`). [CharacterAnimationRegistry]에 그 캐릭터/액션의
+  /// [SpriteSheetSpec](프레임 수·칸 크기)이 등록돼 있을 때만
+  /// [PlayerAnimationComponent]가 이 경로를 시도한다 — 등록되지 않았거나
+  /// 아직 파일이 없는(404) 조합은 조용히 [playerActionAnimation]/
+  /// [playerActionFrame] 경로로 대체된다.
+  static String playerActionSheet(String characterId, String action) => AssetPaths.resolve(
+    '${_playerDir(characterId)}/player_${characterId.toLowerCase()}_${action}_sheet.png',
   );
 
   /// 뼈대 애니메이션(Skeletal Animation)/스킨 교체용으로 부위별로 쪼갠
@@ -135,35 +143,64 @@ class AppImages {
   static String skillEffect(String skillId) =>
       AssetPaths.resolve('assets/images/skill/$skillId/effect.png');
 
-  /// 성급(★0~5) 해금 일러스트 — Live2D풍으로 움직이는 애니메이션(.webp)이
-  /// 우선 시도된다. 아직 애니메이션 작업이 안 된 캐릭터는 이 경로가 404로
-  /// 실패하므로, 호출부는 반드시 [characterStarFallback](같은 파일명의
-  /// 기존 정지 .png)을 [CustomSafeImage.fallbackPath]로 함께 넘겨서 자동
-  /// 대체되게 해야 한다 — 이 함수 하나만으로는 아직 웹툰이 없는 캐릭터가
-  /// 깨져 보인다.
-  static String characterStar(String characterId, int level) =>
-      AssetPaths.resolve('${_playerDir(characterId)}/illustration/star$level.webp');
-
-  /// [characterStar](.webp)가 아직 없어서(404 등) 실패했을 때 자동으로
-  /// 대신 불러오는 기존 정지 일러스트 — 파일명은 같고 확장자만 .png.
-  static String characterStarFallback(String characterId, int level) =>
-      AssetPaths.resolve('${_playerDir(characterId)}/illustration/star$level.png');
-
   /// 호감도 화면 전용 일러스트(레벨 1~10) — 파일명은 `heart1`~`heart10`.
-  /// [characterStar]류(성급 ★0~5, `star$level`)와는 별개 자산이다. 정지
-  /// 프레임은 이 함수(.png), Live2D풍 애니메이션은
+  /// 정지 프레임은 이 함수(.png), Live2D풍 애니메이션은
   /// [affectionIllustrationAnimated](.webp)를 쓴다 — 어느 쪽을 부를지는
   /// 재생/일시정지 상태에 따라 호출부([AffectionScreen])가 고른다. 서약
   /// (Oath) 여부와 무관하게 항상 이 파일명 규칙 그대로다 — 원격 레포 실제
   /// 구조 확인 결과 `_oath` 접미사가 붙은 별도 파일은 존재하지 않는다(예전
   /// 코드가 `heart${level}_oath.png`를 만들어 404를 유발했었다).
+  ///
+  /// [주의: 캐릭터 성급(★0~5) 일러스트 감상창([CharacterIllustrationDialog])
+  /// 도 이 파일명 규칙(`heart{level}`)을 그대로 재사용한다] R2에 실제로
+  /// 업로드된 파일이 `star{level}`이 아니라 `heart{level}` 하나뿐이라,
+  /// 성급 감상창과 호감도 화면이 같은 일러스트 자산을 공유한다 — 두 화면이
+  /// 각자 다른 [level] 값(성급 0~5, 호감도 1~10)으로 이 함수를 부를 뿐,
+  /// 파일 자체는 완전히 같은 규칙으로 찾는다([characterStarFallback]/
+  /// [characterStarVideo] 참고).
   static String affectionIllustration(String characterId, int level) =>
       AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart$level.png');
 
+  /// 성급(★0~5) 감상창에서 정지 이미지로 쓰는 경로 — [affectionIllustration]
+  /// 과 같은 파일명 규칙(`heart{n}.png`)을 재사용하되, 성급 번호를 그대로
+  /// 쓰지 않고 **+1**해서 넘긴다: R2에는 `heart0.png`가 없고 `heart1`부터
+  /// 시작하므로 ★0 → `heart1`, ★1 → `heart2`, ..., ★5 → `heart6`이다.
+  /// (호감도 화면의 `affectionIllustration`은 자기 레벨 값을 그대로 쓴다
+  /// — 그쪽은 애초에 1부터 시작하는 레벨이라 오프셋이 필요 없다. 이
+  /// +1은 오직 "성급(0~5)" 쪽 번호 체계를 "heart 파일 번호(1~)"로
+  /// 바꾸는 변환일 뿐이다.)
+  static String characterStarFallback(String characterId, int level) =>
+      affectionIllustration(characterId, level + 1);
+
+  /// 성급(★0~5)별 6초짜리 연출 영상(.mp4) — [characterStarFallback]과
+  /// 같은 폴더, 같은 파일명 규칙(`heart{level + 1}`, 오프셋 이유는
+  /// [characterStarFallback] 문서 참고)에 확장자만 다르다.
+  /// [CharacterIllustrationVideo]가 [StorageManager]로 이 경로의 프리사인드
+  /// URL을 발급받아 재생한다. 아직 영상이 없는 성급/캐릭터는(404)
+  /// [characterStarFallback] 정지 이미지로 조용히 대체된다 — 호출부에서
+  /// 존재 여부를 따로 확인할 필요는 없다.
+  static String characterStarVideo(String characterId, int level) =>
+      AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart${level + 1}.mp4');
+
   /// [affectionIllustration]의 애니메이션(.webp) 버전 — 재생 상태일 때만
   /// 불러온다.
+  ///
+  /// [주의: R2에 .webp는 없고 .mp4만 있다] 실제로는 이 경로가 항상 404이고,
+  /// 호출부([AffectionScreen])는 이제 [affectionIllustrationVideo](.mp4)를
+  /// 쓴다 — 이 함수는 예전 webp 파이프라인의 흔적으로 더 이상 호출부가
+  /// 없지만, 나중에 실제로 애니메이션 webp를 다시 올릴 경우를 대비해 남겨
+  /// 둔다.
   static String affectionIllustrationAnimated(String characterId, int level) =>
       AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart$level.webp');
+
+  /// [affectionIllustration]과 같은 파일명 규칙(`heart{level}`, 오프셋
+  /// 없음 — 호감도 레벨은 애초에 1부터 시작하므로 [characterStarVideo]와
+  /// 달리 +1 보정이 필요 없다)의 6초짜리 연출 영상(.mp4). 호감도 화면의
+  /// 재생 버튼이 이 경로로 [CharacterIllustrationVideo]를 띄운다. 아직
+  /// 영상이 없는 레벨/캐릭터는(404) [affectionIllustration] 정지 이미지로
+  /// 조용히 대체된다.
+  static String affectionIllustrationVideo(String characterId, int level) =>
+      AssetPaths.resolve('${_playerDir(characterId)}/illustration/heart$level.mp4');
 
   /// 스토리(프롤로그) 대화창 뒤에 까는 배경 맵 이미지 — [sceneId]는
   /// "prologue" 형식. 시즌1 메인 스토리(챕터 1~10)는 실제 원격 레포에
@@ -205,11 +242,11 @@ class AppImages {
   /// 폴더 밑에 `bg_chapter{N}_ground.png` 이름으로 올려야 한다.
   ///
   /// [주의] 이 프로젝트의 인게임 이미지는 로컬 pubspec.yaml assets가 아니라
-  /// **Supabase Storage `${AssetPaths.bucketName}` 버킷**에서
-  /// [RemoteSpriteLoader]가 직접 내려받는다 — 로컬 프로젝트의
+  /// **Cloudflare R2(비공개 버킷)**에서 [RemoteSpriteLoader]가
+  /// [StorageManager]로 서명 URL을 발급받아 내려받는다 — 로컬 프로젝트의
   /// `assets/images/` 폴더에 파일을 넣는 것만으로는 아무 효과가 없고,
-  /// 반드시 그 버킷의 같은 경로에 파일을 올려야 한다. 아직 해당
-  /// 챕터의 전용 바닥 아트가 준비되지 않았다면(404) [RemoteSpriteLoader]가
+  /// 반드시 그 R2 버킷의 같은 경로(objectKey)에 파일을 올려야 한다. 아직
+  /// 해당 챕터의 전용 바닥 아트가 준비되지 않았다면(404) [RemoteSpriteLoader]가
   /// 조용히 이전 타일을 유지하므로([IdleGame._loadGroundTile] 참고) 갑자기
   /// 화면이 깨지지는 않는다 — 다만 시각적으로는 이전 챕터 바닥이 그대로
   /// 남으므로, 실제로 세트를 갖추려면 각 챕터 폴더에 파일을 올려야 한다.

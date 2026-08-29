@@ -31,7 +31,9 @@ import '../models/dungeon_reward_config_model.dart';
 import '../models/equipment.dart';
 import '../models/mission_model.dart';
 import '../models/tower_floor_model.dart';
+import '../managers/character_animation_manager.dart';
 import '../utils/number_formatter.dart';
+import 'character_animation_spec.dart';
 import 'remote_sprite_loader.dart';
 
 enum GameMode {
@@ -1933,12 +1935,16 @@ enum PlayerState { running, attacking, idle, defeat }
 /// 실제 프레임 그림이 있는 캐릭터는 Flame이 직접 애니메이션으로 그린다
 /// (더 이상 코드로 위아래 바운스/회전을 흉내 낼 필요가 없다).
 ///
-/// run/attack/wait 세 액션 전부 애니메이션 WebP 파일 하나
-/// (`player_{id}_{action}.webp`)가 최우선이고, 없으면(404) 번호 매김 정지
-/// 프레임 시퀀스(`player_{id}_{action}1~5.png`)로 대체한다
-/// ([_loadActionPreferringWebP] 참고). 프레임 시퀀스조차 없는(404) 캐릭터는
-/// [loadCharacter]가 기존 단일 포즈 이미지로, 그마저 실패하면 도형으로
-/// 조용히 대체한다.
+/// run/attack/wait 세 액션 모두 Supabase `character_animations` 테이블이
+/// 가리키는 스프라이트 시트 한 장이 최우선이고([CharacterAnimationManager
+/// .fetchSpec], [_loadActionAnimation] 참고), DB에 그 상태가 등록돼
+/// 있지 않거나 등록은 됐지만 실제 R2 파일 로드가 실패하면 애니메이션
+/// WebP 파일 하나(`player_{id}_{action}.webp`)로, 그마저 실패하면 단일
+/// 정지 이미지로 대체한다([_loadActionPreferringWebP] 참고 — 번호 매김
+/// 개별 프레임(`player_{id}_{action}1.png`, `2.png`, ...)을 순서대로
+/// 찾아보던 예전 폴백 단계는 R2에서 그 파일들이 전부 삭제된 뒤로는
+/// 항상 실패만 하는 죽은 경로였기 때문에 완전히 제거했다). 단일 정지
+/// 이미지마저 실패하면 도형으로 조용히 대체한다.
 class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState> {
   PlayerAnimationComponent({required Vector2 position})
       : super(
@@ -2046,21 +2052,6 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   /// 발밑(0)부터 [contentTopHeightRatio](머리 꼭대기)까지 걸쳐 있으므로,
   /// 그 수직 중심은 정확히 절반이다.
   static const double bodyCenterHeightRatio = contentTopHeightRatio / 2;
-
-  /// 프레임 존재 여부를 확인할 때 시도해 볼 상한 — 실제 프레임 수는
-  /// 캐릭터/액션마다 다르고(N1 run=3장, attack=5장, 앞으로 추가될 다른
-  /// 캐릭터는 또 다를 수 있다) 하드코딩된 고정값으로 가정하지 않는다.
-  /// 대신 1번부터 이 개수까지를 병렬로 미리 확인해 본 뒤, 끊기지 않고
-  /// 연속으로 성공한 구간만큼만 실제 프레임으로 채택한다([_loadAction]/
-  /// [countContiguousLoaded] 참고) — 실제 있는 프레임 수보다 넉넉히 크면서도
-  /// 무한정 확인하지는 않도록 적당한 상한을 둔다.
-  static const int _maxProbeFrameCount = 10;
-
-  static const double _frameStepTime = 0.1;
-
-  /// 대기(wait) 모션은 달리기/공격보다 조금 더 느긋하게 재생한다 —
-  /// player_{id}_wait1~5.png, stepTime 0.15초.
-  static const double _idleFrameStepTime = 0.15;
 
   /// 공격 애니메이션 stepTime의 하한/상한 — 실제 데미지 판정 주기
   /// ([IdleGame._attackTimer]/`effectiveAttackSpeed`)와는 완전히 분리된
@@ -2226,19 +2217,38 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
   /// 요청됐던 마지막 상태를 반영한다. 공격 애니메이션은 로드 시점의
   /// [GameManager.effectiveAttackSpeed]로 이미 맞춰서 등록되고, 이후 공속이
   /// 바뀌면 [updateAttackStepTime]이 이어받는다.
+  ///
+  /// [CharacterAnimationManager.fetchSpec]으로 [characterId]의 규격을 매번
+  /// Supabase에서(캐시가 있으면 캐시로 즉시) 새로 조회하므로, 캐릭터 교체
+  /// (무기 교체/장착 캐릭터 변경 — 호출부는 [IdleGame._onEquipmentChanged])가
+  /// 일어나 이 메서드가 새 characterId로 다시 호출될 때마다 그 캐릭터
+  /// 고유의 프레임 수/텍스처 크기가 DB에서 자동으로 반영된다 — 별도의
+  /// 스위칭 처리 코드도, 코드 레벨의 캐릭터별 하드코딩도 필요 없다.
   Future<void> loadCharacter(String characterId) async {
     try {
+      final CharacterAnimationSpec spec = await CharacterAnimationManager.instance
+          .fetchSpec(characterId);
       final List<SpriteAnimation> results = await Future.wait([
-        _loadActionPreferringWebP(characterId, 'run'),
-        _loadActionPreferringWebP(
+        _loadActionAnimation(characterId, 'run', sheetSpec: spec['run']),
+        _loadActionAnimation(
           characterId,
           'attack',
+          sheetSpec: spec['attack'],
           stepTimeForFrameCount: (frameCount) => computeAttackStepTime(
             GameManager.instance.effectiveAttackSpeed,
             frameCount: frameCount,
           ),
         ),
-        _loadActionPreferringWebP(characterId, 'wait', stepTime: _idleFrameStepTime),
+        // DB `state` 컬럼도 이 프로젝트의 다른 모든 코드(AppImages의
+        // playerActionFrame/playerActionAnimation 등)와 동일하게 'wait'를
+        // 쓴다 — 한때 스키마 설명에 등장했던 'idle'을 그대로 조회 키로
+        // 썼다가, 실제 등록된 행/기존 코드 흐름과 어긋나 이 상태만
+        // 항상 레거시 PNG 프레임(player_n1_wait1.png 등)으로 폴백되는
+        // 버그가 있었다(PlayerState.idle은 이 애니메이션을 재생하는 Flame
+        // 쪽 "상태"의 이름일 뿐, DB state 컬럼 값과는 별개다).
+        _loadActionAnimation(characterId, 'wait', sheetSpec: spec['wait']),
+        // 피격(패배) 포즈는 `character_animations` 스키마에 대응하는
+        // state가 없다 — 항상 기존 단일 이미지 경로를 쓴다.
         _loadDefeatPose(characterId),
       ]);
       // 대기(wait) 모션 첫 프레임을 "이 캐릭터의 표준 몸집" 기준으로 삼아
@@ -2268,16 +2278,17 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
     }
   }
 
-  /// 패배(피격) 포즈 — `player_{id}_hit.png` 단일 이미지 한 장을 1프레임짜리
-  /// "애니메이션"으로 감싼다. 다른 액션과 달리 5프레임 시퀀스가 아니라
-  /// 아파하는 정지 표정 한 장이면 충분하다. 실패하면(아직 그림이 없는
-  /// 캐릭터) [_loadAction]의 다른 액션들과 같은 관례로 [AppImages.playerSide]
-  /// 단일 이미지로 대체하고, 그마저 실패하면(네트워크 완전 두절, 그
-  /// 캐릭터의 아트가 전부 깨져 있는 경우 등) [RemoteSpriteLoader
-  /// .placeholderSprite]로 최종 대체한다 — 이 함수는 절대 예외를 던지지
-  /// 않는다([loadCharacter]의 `Future.wait`가 이 캐릭터 하나의 아트 문제
-  /// 때문에 통째로 실패해, 장착을 바꿔도 화면이 이전 캐릭터에 멈춰 있는
-  /// 것처럼 보이는 일을 막기 위함).
+  /// 패배(피격) 포즈 — `character_animations` 테이블에는 이 상태에
+  /// 대응하는 행이 없으므로(스키마: run/attack/wait 세 상태뿐) 항상
+  /// `player_{id}_hit.png` 단일 이미지 한 장을 1프레임짜리 "애니메이션"으로
+  /// 감싼다 — 대부분의 캐릭터는 아파하는 정지 표정 한 장이면 충분하다.
+  /// 실패하면(아직 그림이 없는 캐릭터) [_loadActionPreferringWebP]의 단일
+  /// 이미지 폴백과 같은 관례로 [AppImages.playerSide]로 대체하고, 그마저
+  /// 실패하면(네트워크 완전 두절, 그 캐릭터의 아트가 전부 깨져 있는 경우
+  /// 등) [RemoteSpriteLoader.placeholderSprite]로 최종 대체한다 — 이 함수는
+  /// 절대 예외를 던지지 않는다([loadCharacter]의 `Future.wait`가 이 캐릭터
+  /// 하나의 아트 문제 때문에 통째로 실패해, 장착을 바꿔도 화면이 이전
+  /// 캐릭터에 멈춰 있는 것처럼 보이는 일을 막기 위함).
   static Future<SpriteAnimation> _loadDefeatPose(String characterId) async {
     try {
       final Sprite sprite = await RemoteSpriteLoader.loadSprite(AppImages.playerHit(characterId));
@@ -2288,69 +2299,86 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
     }
   }
 
-  /// [action]("run"/"attack"/"wait") 공용 진입점 — 애니메이션 WebP 파일
-  /// 하나([AppImages.playerActionAnimation], 예: `player_n1_attack.webp`)가
-  /// 있으면 최우선으로 그걸 재생하고, 없거나(404) 디코딩에 실패하면 기존
-  /// 번호 매김 PNG 프레임 시퀀스 경로([_loadAction])로 조용히 대체한다.
-  /// run에서 검증된 패턴을 attack/wait에도 그대로 넓힌 것 — 캐릭터가
-  /// 액션별로 웹피를 하나씩만 올려도, 나머지는 자동으로 기존 PNG 시퀀스가
-  /// 채운다.
-  ///
-  /// [stepTime]/[stepTimeForFrameCount]는 PNG 시퀀스 폴백([_loadAction])에만
-  /// 쓰인다 — WebP 경로가 성공하면 그 파일 자체가 담고 있는 프레임별
-  /// 타이밍을 그대로 쓴다(다만 attack은 [PlayerAnimationComponent
-  /// .updateAttackStepTime]이 공속이 바뀔 때마다 모든 프레임의 stepTime을
-  /// 다시 균등하게 덮어쓰므로, WebP로 로드했더라도 실제 재생 속도는 결국
-  /// 공속에 맞춰진다 — 이건 의도된 동작이다).
-  static Future<SpriteAnimation> _loadActionPreferringWebP(
+  /// [action]("run"/"attack"/"wait") 로드의 최상위 진입점 — [sheetSpec]이
+  /// 있으면(Supabase `character_animations`에 그 캐릭터/상태 행이 있으면,
+  /// [CharacterAnimationManager.fetchSpec] 참고) DB가 알려준 [sheetSpec
+  /// .sheetPath]/[SpriteSheetSpec.amount]/[SpriteSheetSpec.textureSize]로
+  /// 스프라이트 시트([RemoteSpriteLoader.loadSpriteAnimation],
+  /// `SpriteAnimationData.sequenced`로 격자 슬라이싱)를 최우선으로 시도한다.
+  /// 시트가 등록되지 않았거나(sheetSpec == null) 등록은 됐지만 실제 파일이
+  /// 아직 R2에 없어(404) 로드에 실패하면 [_loadActionPreferringWebP]
+  /// (통짜 애니메이션 webp → 단일 정지 이미지)로 넘어간다 — 둘 중 어느
+  /// 경로를 탔는지, 시트가 실패했다면 왜 실패했는지 콘솔에 명시적으로
+  /// 남긴다(디버깅용).
+  static Future<SpriteAnimation> _loadActionAnimation(
     String characterId,
     String action, {
-    double stepTime = _frameStepTime,
+    SpriteSheetSpec? sheetSpec,
     double Function(int frameCount)? stepTimeForFrameCount,
   }) async {
-    try {
-      return await RemoteSpriteLoader.loadAnimatedWebP(
-        AppImages.playerActionAnimation(characterId, action),
+    if (sheetSpec == null) {
+      debugPrint(
+        '[PlayerAnimationComponent] $characterId/$action — DB에 등록된 시트 규격이 '
+        '없습니다(CharacterAnimationManager가 이 상태의 행을 못 찾음). webp/단일 이미지 '
+        '폴백으로 넘어갑니다.',
       );
-    } catch (_) {
-      return _loadAction(
-        characterId,
-        action,
-        stepTime: stepTime,
-        stepTimeForFrameCount: stepTimeForFrameCount,
-      );
+    } else {
+      try {
+        final double resolvedStepTime =
+            stepTimeForFrameCount?.call(sheetSpec.amount) ?? sheetSpec.stepTime;
+        final SpriteAnimation animation = await RemoteSpriteLoader.loadSpriteAnimation(
+          sheetSpec.sheetPath,
+          amount: sheetSpec.amount,
+          textureSize: sheetSpec.textureSize,
+          stepTime: resolvedStepTime,
+        );
+        debugPrint(
+          '[PlayerAnimationComponent] $characterId/$action — 시트 로드 성공'
+          '(${sheetSpec.sheetPath}, ${sheetSpec.amount}프레임).',
+        );
+        return animation;
+      } catch (error) {
+        // 시트가 DB엔 등록돼 있지만 실제 R2 파일이 아직 없거나(404) DB
+        // 규격(frame_width/height/frame_count)이 실제 이미지와 안 맞아
+        // 디코딩에 실패한 경우 — 원인을 그대로 남기고 webp/단일 이미지
+        // 폴백으로 내려간다.
+        debugPrint(
+          '[PlayerAnimationComponent] $characterId/$action — 시트 로드 실패'
+          '(${sheetSpec.sheetPath}): $error. webp/단일 이미지 폴백으로 넘어갑니다.',
+        );
+      }
     }
+    return _loadActionPreferringWebP(characterId, action);
   }
 
-  /// [action]("run"/"attack"/"wait") 프레임을 1번부터 최대
-  /// [_maxProbeFrameCount]장까지 병렬로 존재 여부를 확인한 뒤, 끊기지 않고
-  /// 연속으로 성공한 구간만큼만([countContiguousLoaded]) 실제 프레임으로
-  /// 채택해 무한 반복 애니메이션으로 합친다 — 캐릭터/액션마다 실제
-  /// 업로드된 프레임 개수가 달라도(N1 run=3장, attack=5장 등) 하드코딩
-  /// 없이 정확히 그만큼만 로드된다. 1번 프레임조차 없으면(프레임 시퀀스가
-  /// 아예 없는 캐릭터) 기존 단일 포즈 이미지 한 장을 1프레임짜리
-  /// "애니메이션"으로 감싸 그대로 대체 표시하고, 그 단일 이미지마저
-  /// 실패하면 [_loadSpriteOrPlaceholder]가 도형으로 대체한다 — 이 함수는
-  /// 절대 예외를 던지지 않는다. 호출부에서 캐릭터별로 프레임 존재 여부를
-  /// 따로 확인할 필요가 없다.
+  /// [action]("run"/"attack"/"wait") 폴백 — 애니메이션 WebP 파일 하나
+  /// ([AppImages.playerActionAnimation], 예: `player_n1_attack.webp`)가
+  /// 있으면 재생하고, 없거나(404) 디코딩에 실패하면 단일 정지 이미지
+  /// ([AppImages.playerAttack]/[playerFront]/[playerSide])로 대체한다.
   ///
-  /// [stepTime]은 프레임 개수와 무관하게 고정된 프레임당 시간이 필요할
-  /// 때(run/wait) 쓰고, [stepTimeForFrameCount]는 실제 프레임 개수를 알아야
-  /// 계산할 수 있는 경우(attack — [computeAttackStepTime] 참고)에 쓴다.
-  /// 둘 다 넘기면 [stepTimeForFrameCount]가 우선한다.
-  static Future<SpriteAnimation> _loadAction(
+  /// [주의: 번호 매김 개별 프레임(player_n1_wait1.png 등) 폴백은 완전히
+  /// 제거했다] R2 마이그레이션 이후 캐릭터 애니메이션의 정식 소스는
+  /// DB(`character_animations`)가 가리키는 스프라이트 시트 한 장뿐이다
+  /// ([_loadActionAnimation] 참고) — 개별 프레임 PNG는 더 이상 R2에 존재
+  /// 하지 않으므로(에셋 정리 완료), 예전처럼 1번부터 여러 장을 병렬로
+  /// 확인하던 로직은 확정적으로 실패하는 요청만 늘려 콘솔에 진짜 원인
+  /// (시트/DB 조회 실패)을 가리는 404 노이즈를 추가할 뿐이었다. 이제
+  /// 시트와 webp가 둘 다 실패하면 곧바로 단일 이미지로 건너뛴다.
+  static Future<SpriteAnimation> _loadActionPreferringWebP(
     String characterId,
-    String action, {
-    double stepTime = _frameStepTime,
-    double Function(int frameCount)? stepTimeForFrameCount,
-  }) async {
-    final List<Sprite?> probed = await Future.wait([
-      for (int i = 1; i <= _maxProbeFrameCount; i++)
-        _tryLoadFrame(AppImages.playerActionFrame(characterId, action, i)),
-    ]);
-    final int frameCount = countContiguousLoaded(probed);
-
-    if (frameCount == 0) {
+    String action,
+  ) async {
+    try {
+      final SpriteAnimation animation = await RemoteSpriteLoader.loadAnimatedWebP(
+        AppImages.playerActionAnimation(characterId, action),
+      );
+      debugPrint('[PlayerAnimationComponent] $characterId/$action — webp 폴백 로드 성공.');
+      return animation;
+    } catch (error) {
+      debugPrint(
+        '[PlayerAnimationComponent] $characterId/$action — webp 폴백도 실패: $error. '
+        '단일 정지 이미지로 최종 대체합니다.',
+      );
       final String fallbackUrl = switch (action) {
         'attack' => AppImages.playerAttack(characterId),
         'wait' => AppImages.playerFront(characterId),
@@ -2359,17 +2387,13 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
       final Sprite fallbackSprite = await _loadSpriteOrPlaceholder(fallbackUrl);
       return SpriteAnimation.spriteList([fallbackSprite], stepTime: 1, loop: true);
     }
-
-    final List<Sprite> frames = probed.sublist(0, frameCount).cast<Sprite>();
-    final double resolvedStepTime = stepTimeForFrameCount?.call(frameCount) ?? stepTime;
-    return SpriteAnimation.spriteList(frames, stepTime: resolvedStepTime, loop: true);
   }
 
   /// [url] 로드를 시도하고, 실패하면(네트워크 두절, Git LFS 포인터, 디코딩
   /// 오류 등 [RemoteSpriteLoader]가 이미 안전하게 잡아낸 모든 경우)
   /// [RemoteSpriteLoader.placeholderSprite]로 대체한다 — 이 함수 자체는
-  /// 어떤 경우에도 예외를 던지지 않는다. [_loadAction]/[_loadDefeatPose]의
-  /// "단일 이미지 폴백" 단계가 공유하는 최종 안전망이다.
+  /// 어떤 경우에도 예외를 던지지 않는다. [_loadActionPreferringWebP]/
+  /// [_loadDefeatPose]의 "단일 이미지 폴백" 단계가 공유하는 최종 안전망이다.
   static Future<Sprite> _loadSpriteOrPlaceholder(String url) async {
     try {
       return await RemoteSpriteLoader.loadSprite(url);
@@ -2382,30 +2406,6 @@ class PlayerAnimationComponent extends SpriteAnimationGroupComponent<PlayerState
       }
       return RemoteSpriteLoader.placeholderSprite();
     }
-  }
-
-  /// 프레임 하나를 시도해 보고, 실패(404 등)하면 예외를 던지는 대신
-  /// null로 돌려준다 — [_loadAction]이 이 결과들을 보고 어디까지 연속으로
-  /// 존재하는지([countContiguousLoaded]) 판단할 수 있게 하기 위함이다.
-  static Future<Sprite?> _tryLoadFrame(String url) async {
-    try {
-      return await RemoteSpriteLoader.loadSprite(url);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// [results]의 맨 앞(인덱스 0 = 1번 프레임)부터 null이 아닌 값이 몇 개
-  /// 연속되는지 센다 — 하나라도 null(로드 실패)을 만나면 그 뒤는 보지
-  /// 않는다(업로드는 항상 1번부터 빠짐없이 순서대로 올라온다는 전제).
-  /// 순수 함수라 네트워크 없이 단위 테스트할 수 있다.
-  @visibleForTesting
-  static int countContiguousLoaded(List<Sprite?> results) {
-    int count = 0;
-    while (count < results.length && results[count] != null) {
-      count++;
-    }
-    return count;
   }
 }
 

@@ -1,23 +1,31 @@
-import 'dart:async';
-
+import 'package:flame/components.dart' show Anchor;
+import 'package:flame/sprite.dart' show SpriteAnimation, SpriteAnimationTicker;
+import 'package:flame/widgets.dart' show SpriteAnimationWidget;
 import 'package:flutter/material.dart';
 
 import '../constants/app_images.dart';
-import '../game/idle_game.dart';
+import '../game/character_animation_spec.dart';
+import '../game/remote_sprite_loader.dart';
+import '../managers/character_animation_manager.dart';
 import 'safe_image.dart';
 
 /// 캐릭터 탭 중앙 카드에서 장착 캐릭터를 대기(wait) 모션으로 부드럽게
 /// 반복 재생하는 위젯 — [CharacterFacePortrait]의 정적 정면 이미지 대신
 /// 움직이는 모션을 보여준다.
 ///
-/// [AppImages.playerActionAnimation](`player_{id}_wait.webp`, 예:
-/// N1은 `player_n1_wait.webp`)을 최우선으로 시도한다 — 애니메이션 파일
-/// 하나가 자체적으로 프레임/타이밍을 담고 있어([PlayerAnimationComponent]
-/// 의 인게임 대기 모션이 쓰는 것과 같은 파일), [Image]가 별도 타이머 없이
-/// 알아서 반복 재생한다. 아직 그 캐릭터의 webp가 없는(404) 경우에만 예전
-/// 방식(`player_{id}_wait1~5.png` 5프레임을 [_timer]로 stepTime 0.15초
-/// 간격 순환)으로 조용히 대체된다 — [CustomSafeImage.fallbackPath]가 이
-/// 전환을 처리하므로 호출부는 어느 쪽이 성공했는지 신경 쓸 필요가 없다.
+/// [PlayerAnimationComponent]가 전투 화면에서 쓰는 것과 완전히 같은
+/// 로딩 우선순위를 그대로 재사용한다 — DB 스프라이트 시트
+/// ([CharacterAnimationManager.fetchSpec] → [RemoteSpriteLoader
+/// .loadSpriteAnimation]) → 통짜 애니메이션 webp
+/// ([RemoteSpriteLoader.loadAnimatedWebP]) → 단일 정지 이미지
+/// ([AppImages.playerFront]). 어느 단계든 실패하면 조용히 다음 단계로
+/// 넘어가고, 전부 실패해도(오프라인 등) 예외를 던지지 않고 정지
+/// 이미지/placeholder로 대체된다.
+///
+/// [주의: Flame GameWidget 없이 순수 Flutter 위젯으로 재생한다] Flame이
+/// 제공하는 [SpriteAnimationWidget](이미 로드된 [SpriteAnimation] 하나를
+/// [GameWidget]/[FlameGame] 없이 그려 주는 헬퍼)을 쓴다 — 이 카드 하나
+/// 때문에 별도 미니 게임 루프를 띄울 필요가 없다.
 class CharacterIdlePreview extends StatefulWidget {
   const CharacterIdlePreview({
     super.key,
@@ -38,75 +46,105 @@ class CharacterIdlePreview extends StatefulWidget {
 }
 
 class _CharacterIdlePreviewState extends State<CharacterIdlePreview> {
-  static const int _frameCount = 5;
-  static const Duration _stepTime = Duration(milliseconds: 150);
+  SpriteAnimation? _animation;
+  SpriteAnimationTicker? _ticker;
 
-  int _frameIndex = 1;
-  Timer? _timer;
+  /// [_animation]/[_ticker]가 실제로 어떤 characterId의 결과인지 —
+  /// [_load]가 끝나기 전에 다른 캐릭터로 바뀌면([didUpdateWidget]) 그
+  /// 낡은 응답을 무시하기 위한 가드로도, build()가 지금 [widget
+  /// .characterId]와 다른 캐릭터의 애니메이션을 잘못 그리지 않게 하는
+  /// 이중 방어로도 쓰인다.
+  String? _loadedForCharacterId;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(_stepTime, (_) {
-      setState(() => _frameIndex = _frameIndex % _frameCount + 1);
-    });
+    _load(widget.characterId);
   }
 
   @override
   void didUpdateWidget(covariant CharacterIdlePreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.characterId != widget.characterId) {
-      _frameIndex = 1;
+      setState(() {
+        _animation = null;
+        _ticker = null;
+      });
+      _load(widget.characterId);
     }
   }
 
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
+  Future<void> _load(String characterId) async {
+    SpriteAnimation? animation;
+    try {
+      final SpriteSheetSpec? sheetSpec =
+          (await CharacterAnimationManager.instance.fetchSpec(characterId))['wait'];
+      if (sheetSpec != null) {
+        animation = await RemoteSpriteLoader.loadSpriteAnimation(
+          sheetSpec.sheetPath,
+          amount: sheetSpec.amount,
+          textureSize: sheetSpec.textureSize,
+          stepTime: sheetSpec.stepTime,
+        );
+      }
+    } catch (error) {
+      debugPrint('[CharacterIdlePreview] $characterId 시트 로드 실패: $error — webp 폴백으로 넘어갑니다.');
+    }
+
+    if (animation == null) {
+      try {
+        animation = await RemoteSpriteLoader.loadAnimatedWebP(
+          AppImages.playerActionAnimation(characterId, 'wait'),
+        );
+      } catch (_) {
+        // webp도 없다(404 등) — 아래에서 정지 이미지로 대체된다.
+      }
+    }
+
+    if (!mounted || characterId != widget.characterId) {
+      // 위젯이 이미 사라졌거나 그 사이 다른 캐릭터로 바뀌었으면([didUpdateWidget]
+      // 이 다시 호출해 새 로드를 이미 시작한 뒤이므로) 이 낡은 응답은
+      // 반영하지 않는다.
+      return;
+    }
+    setState(() {
+      _animation = animation;
+      _ticker = animation?.createTicker();
+      _loadedForCharacterId = characterId;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    // 우선 시도: 애니메이션 webp 한 장(자체 반복 재생, [_timer]가 필요
-    // 없다). 실패하면(404 등) [CustomSafeImage.fallbackPath]가 예전 방식인
-    // 번호 매김 PNG 프레임([_frameIndex], 이 위젯의 [_timer]가 150ms마다
-    // 순환)으로 자동 전환한다.
-    final String path = AppImages.playerActionAnimation(widget.characterId, 'wait');
-    final String fallbackPath =
-        AppImages.playerActionFrame(widget.characterId, 'wait', _frameIndex);
+    final double? boxSize = widget.size;
+    final SpriteAnimation? animation = _animation;
+    final SpriteAnimationTicker? ticker = _ticker;
 
-    // 예전엔 FittedBox(contain)로 전체를 담은 뒤 다시 Transform.scale로
-    // 확대(발밑 기준)해 이펙트 여백을 잘라내는 2단계 방식을 썼는데, 그
-    // 배율이 "콘텐츠가 캔버스의 정확히 50%를 차지한다"는 가정에 기반해서
-    // 캐릭터마다 실제 여백 비율이 조금만 달라도 정수리가 다시 잘려 보이는
-    // 문제가 있었다(요구사항: "무조건 박스 안에 다 들어가도록"). 지금은
-    // FittedBox(BoxFit.contain, Alignment.bottomCenter) 한 단계만 쓴다 —
-    // 원본 800x720 캔버스 전체를 잘라내지 않고 레터박스(여백)로만 맞추므로,
-    // 어떤 크기의 상자에 넣어도 캐릭터 전체가 수학적으로 항상 다 보인다.
-    // 대신 이펙트 여백만큼 캐릭터가 상자를 꽉 채우지 않고 살짝 작게 보일
-    // 수 있다 — 잘림 없음을 더 우선한 트레이드오프다.
-    final Widget contained = FittedBox(
-      fit: BoxFit.contain,
-      alignment: Alignment.bottomCenter,
-      child: SizedBox(
-        width: PlayerAnimationComponent.referenceCanvasWidth,
-        height: PlayerAnimationComponent.referenceCanvasHeight,
-        child: CustomSafeImage(
-          path: path,
-          fallbackPath: fallbackPath,
-          fit: BoxFit.fill,
-          filterQuality: FilterQuality.none,
-        ),
-      ),
-    );
+    final Widget content =
+        (animation != null && ticker != null && _loadedForCharacterId == widget.characterId)
+        ? SpriteAnimationWidget(
+            animation: animation,
+            animationTicker: ticker,
+            // PlayerAnimationComponent와 동일하게 발밑(캔버스 하단 중앙)을
+            // 기준으로 정렬한다 — SpritePainter가 상자 안에 원본 비율
+            // 그대로(contain) 맞추고, 이 anchor로 "박스 하단 중앙 =
+            // 스프라이트 하단 중앙"이 되도록 배치해 준다(Flame
+            // Anchor.bottomCenter를 그대로 재사용).
+            anchor: Anchor.bottomCenter,
+            size: boxSize != null ? Size.square(boxSize) : null,
+            paint: RemoteSpriteLoader.pixelArtPaint(),
+          )
+        : CustomSafeImage(
+            path: AppImages.playerFront(widget.characterId),
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.none,
+          );
 
     final Widget clipped = ClipRRect(
       borderRadius: BorderRadius.circular(widget.borderRadius),
-      child: contained,
+      child: content,
     );
 
-    final double? boxSize = widget.size;
     if (boxSize == null) {
       return clipped;
     }

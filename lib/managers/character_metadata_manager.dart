@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/character_metadata_model.dart';
+import '../utils/master_character_id.dart';
 import 'supabase_manager.dart';
 
 /// 캐릭터별 기본 전투 스탯(HP/ATK/DEF/ASPD) + 성장률을 관장하는 싱글턴 —
@@ -71,9 +72,17 @@ class CharacterMetadataManager {
   /// — 테이블에 아직 없는 캐릭터거나(신규 추가 캐릭터, 마이그레이션 전
   /// 등) 로드 전이면 null을 반환한다. 호출부(GameManager/UI)는 null일 때
   /// [CharacterFinalStats.zero]로 안전하게 대체해야 한다.
+  ///
+  /// [_entries]는 DB에서 그대로 파싱한 값이라 `character_id`가
+  /// `characters` 마스터 테이블 형식("char_n1")이고, 이 함수가 받는
+  /// [characterId]는 gradeBadgeLabel 형식("N1")이다 — [masterCharacterId]로
+  /// 변환한 뒤 비교해야 실제로 매칭된다(그 전엔 항상 어긋나서 모든
+  /// 캐릭터의 기본 스탯이 조용히 [CharacterFinalStats.zero]로만
+  /// 계산됐었다).
   CharacterMetadata? byId(String characterId) {
+    final String masterId = masterCharacterId(characterId);
     for (final CharacterMetadata metadata in _entries) {
-      if (metadata.characterId == characterId) {
+      if (metadata.characterId == masterId) {
         return metadata;
       }
     }

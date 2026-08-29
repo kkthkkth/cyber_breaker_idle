@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/character_model.dart';
+import '../utils/master_character_id.dart';
 import 'supabase_manager.dart';
 
 /// 캐릭터별 메타데이터(현재는 근접/원거리 공격 타입 하나뿐)를 관장하는
@@ -62,9 +63,16 @@ class CharacterMetaManager {
   /// [characterId](Equipment.gradeBadgeLabel, 예: 'N1')의 공격 타입 —
   /// 테이블에 아직 없는 캐릭터거나(신규 추가 캐릭터, 마이그레이션 전 등)
   /// 로드 전이면 안전하게 [AttackType.melee]로 취급한다.
+  ///
+  /// [_characters]는 DB에서 그대로 파싱한 값이라 `character_id`가
+  /// `characters` 마스터 테이블 형식("char_n1")이고, 이 함수가 받는
+  /// [characterId]는 gradeBadgeLabel 형식("N1")이다 — [masterCharacterId]로
+  /// 변환한 뒤 비교해야 실제로 매칭된다(그 전엔 항상 어긋나서 모든
+  /// 캐릭터가 조용히 [AttackType.melee]로만 떨어졌었다).
   AttackType attackTypeFor(String characterId) {
+    final String masterId = masterCharacterId(characterId);
     for (final CharacterMeta meta in _characters) {
-      if (meta.characterId == characterId) {
+      if (meta.characterId == masterId) {
         return meta.attackType;
       }
     }

@@ -47,6 +47,7 @@ dependencies:
   timezone: ^0.9.4
   flutter_timezone: ^4.1.1
   in_app_purchase: ^3.2.3
+  video_player: ^2.11.1
 
 dev_dependencies:
   flutter_test:

@@ -1,16 +1,15 @@
 import 'app_images.dart';
-import 'asset_paths.dart';
 
 /// 'N1' 캐릭터의 리소스 경로를 한곳에 모아 상수로 참조하는 클래스 —
 /// 뼈대 애니메이션(Skeletal Animation)/스킨 교체 시스템 도입을 앞두고,
 /// 부위별로 쪼갠 파츠 이미지들을 체계적으로 관리하기 위해 만들었다.
 ///
 /// [주의] 이 프로젝트의 게임 아트는 로컬 `pubspec.yaml` assets가 아니라
-/// 전부 원격 Supabase Storage 버킷([AssetPaths.bucketName])에서
-/// [RemoteSpriteLoader]가 런타임에 직접 내려받는다([AppImages] 상단 문서
-/// 참고). 여기 상수들도 실제 파일이 아니라 그 원격 URL 문자열이다 —
-/// `pubspec.yaml`에 등록하거나 로컬 `assets/` 폴더에 파일을 복사해 둘
-/// 필요가 전혀 없고, 이미 그 버킷에 올려둔 것으로 충분하다.
+/// 전부 Cloudflare R2(비공개 버킷)에서 [RemoteSpriteLoader]가 런타임에
+/// [StorageManager]로 서명 URL을 발급받아 내려받는다([AppImages] 상단
+/// 문서 참고). 여기 상수들도 실제 파일이 아니라 그 R2 objectKey
+/// 문자열이다 — `pubspec.yaml`에 등록하거나 로컬 `assets/` 폴더에 파일을
+/// 복사해 둘 필요가 전혀 없고, 이미 그 버킷에 올려둔 것으로 충분하다.
 class PlayerN1Assets {
   const PlayerN1Assets._();
 
@@ -42,7 +41,7 @@ class PlayerN1Assets {
   // `assets/images/player/N/N1/part/` 아래. 파일명 자체가 나중에 Spine
   // 등에서 쓸 스킨 슬롯 이름과 대응하므로, 상수 이름도 파일명을 그대로
   // 따라간다(무엇을 조립하는지 한눈에 알아보기 위함).
-  static const String _partDir = '${AssetPaths.baseUrl}assets/images/player/N/N1/part/';
+  static const String _partDir = 'assets/images/player/N/N1/part/';
 
   static const String armLFore = '${_partDir}armored_arm_l_fore.png';
   static const String armLUpper = '${_partDir}armored_arm_l_upper.png';

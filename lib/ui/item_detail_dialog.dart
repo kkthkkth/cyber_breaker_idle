@@ -523,29 +523,40 @@ class _ItemDetailDialogState extends State<ItemDetailDialog> {
                     // ── 하단: 장착/해제, (장비 한정) 레벨업 버튼 — 휘장은
                     // 강화/장착 해제가 불가능해야 하므로(요구사항) 이 Row
                     // 자체를 그리지 않는다.
+                    //
+                    // [주의: 캐릭터는 "장착 해제" 액션 자체를 없앴다] 이미
+                    // 장착된 캐릭터는 이 자리에 버튼을 아예 보여주지
+                    // 않는다 — 캐릭터 슬롯은 항상 하나가 채워져 있어야
+                    // 하고, 다른 캐릭터를 장착하면 자동으로 교체되므로
+                    // "해제해서 빈 슬롯으로 만드는" 액션 자체가 의미가
+                    // 없다(요구사항). 캐릭터가 아닌 다른 장비 타입(무기/
+                    // 방어구/펫 등)은 기존처럼 장착/해제 토글을 그대로
+                    // 유지한다.
                     if (equipment.type != EquipType.badge)
                     Row(
                       children: [
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: _toggleEquip,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF3B7DD8),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                        if (!(isEquipped && equipment.type == EquipType.character)) ...[
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _toggleEquip,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF3B7DD8),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
                               ),
-                            ),
-                            child: Text(
-                              isEquipped ? '장착 해제' : '장착',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
+                              child: Text(
+                                isEquipped ? '장착 해제' : '장착',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
+                          const SizedBox(width: 12),
+                        ],
                         Expanded(
                           child: ElevatedButton(
                             onPressed: equipment.isMaxLevel ? null : _levelUp,
@@ -742,13 +753,10 @@ class _StarIllustrationGallery extends StatelessWidget {
           final bool unlocked = level <= currentStarLevel;
           return _StarIllustrationSlot(
             level: level,
-            // 썸네일은 항상 정지 .png만 — 확대해서 크게 볼 때(카드 팝업/
-            // 전체화면)만 .webp 애니메이션을 우선 시도한다
-            // (CharacterIllustrationDialog 쪽). 작은 카드까지 애니메이션이
-            // 돌면 시선이 분산되고, CachedNetworkImage의 디스크 캐싱도
-            // 못 받는다(.webp는 애니메이션 재생을 위해 Image.network로
-            // 직행하도록 CustomSafeImage가 분기해 둔 상태라 — safe_image.dart
-            // 참고).
+            // 썸네일은 항상 정지 .png만 — 6초짜리 연출 영상은 카드 팝업
+            // (CharacterIllustrationDialog)에서 유저가 재생 버튼을 직접
+            // 눌러야만 재생된다. 작은 카드까지 영상이 자동 재생되면 시선이
+            // 분산되고 불필요한 네트워크 트래픽도 발생한다.
             imagePath: AppImages.characterStarFallback(characterId, level),
             heroTag: CharacterIllustrationDialog.heroTag(characterId, level),
             unlocked: unlocked,
@@ -775,13 +783,14 @@ class _StarIllustrationSlot extends StatelessWidget {
 
   final int level;
 
-  /// 항상 정지 .png 경로 — 애니메이션 .webp는 카드 팝업/전체화면에서만
-  /// 시도한다([_StarIllustrationGallery] 참고).
+  /// 항상 정지 .png 경로 — 6초짜리 연출 영상은 카드 팝업에서 유저가
+  /// 재생 버튼을 눌러야만 재생된다([_StarIllustrationGallery] 참고).
   final String imagePath;
 
-  /// [CharacterIllustrationDialog.heroTag]와 정확히 같은 문자열이어야
-  /// 썸네일→카드 팝업 Hero 전환이 매끄럽게 이어진다(확장자가 .png↔.webp로
-  /// 달라도 태그는 characterId+level로만 정해지므로 무관하다).
+  /// [CharacterIllustrationDialog.heroTag]와 같은 규칙으로 만든 문자열 —
+  /// 카드 팝업 쪽 페이지([_StarIllustrationPage])에는 현재 짝이 되는
+  /// Hero가 없어서 실제로 전환 애니메이션이 이어지진 않지만, 나중에 다시
+  /// 붙일 걸 대비해 태그 규칙 자체는 유지해 둔다.
   final Object heroTag;
   final bool unlocked;
   final VoidCallback onTap;
